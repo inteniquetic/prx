@@ -1,0 +1,77 @@
+[server]
+listen = ["0.0.0.0:8080"]
+health_path = "/healthz"
+ready_path = "/readyz"
+threads = 4
+grace_period_seconds = 10
+graceful_shutdown_timeout_seconds = 30
+config_reload_debounce_ms = 250
+
+[observability]
+log_level = "info"
+access_log = true
+# prometheus_listen = "127.0.0.1:9090"
+
+[server.tls]
+listen = "0.0.0.0:8443"
+cert_path = "./certs/tls.crt"
+key_path = "./certs/tls.key"
+enable_h2 = true
+
+[[route]]
+name = "grpc"
+host = "grpc.local"
+path_prefix = "/"
+is_default = false
+lb = "round_robin"
+max_retries = 2
+retry_backoff_ms = 50
+
+[route.circuit_breaker]
+enabled = true
+consecutive_failures = 3
+open_ms = 30000
+
+[[route.upstream]]
+addr = "127.0.0.1:50051"
+tls = false
+weight = 1
+connect_timeout_ms = 1000
+read_timeout_ms = 30000
+write_timeout_ms = 30000
+idle_timeout_ms = 30000
+
+[[route.upstream]]
+addr = "127.0.0.1:50052"
+tls = false
+weight = 1
+connect_timeout_ms = 1000
+read_timeout_ms = 30000
+write_timeout_ms = 30000
+idle_timeout_ms = 30000
+
+[[route]]
+name = "web"
+host = "*.local"
+path_prefix = "/"
+is_default = true
+lb = "hash"
+max_retries = 1
+retry_backoff_ms = 0
+
+[route.circuit_breaker]
+enabled = true
+consecutive_failures = 3
+open_ms = 30000
+
+[[route.upstream]]
+addr = "127.0.0.1:3000"
+tls = false
+weight = 2
+connect_timeout_ms = 1000
+
+[[route.upstream]]
+addr = "127.0.0.1:3001"
+tls = false
+weight = 1
+connect_timeout_ms = 1000

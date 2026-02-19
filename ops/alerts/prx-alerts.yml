@@ -1,0 +1,48 @@
+groups:
+  - name: prx-core-alerts
+    rules:
+      - alert: PrxHigh5xxRatio
+        expr: |
+          (
+            sum(rate(prx_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(prx_requests_total[5m])), 1)
+          ) > 0.01
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "prx high 5xx ratio"
+          description: "5xx ratio > 1% for at least 10 minutes."
+
+      - alert: PrxHighNoRouteRatio
+        expr: |
+          (
+            sum(rate(prx_requests_total{route="no_route",status="404"}[10m]))
+            /
+            clamp_min(sum(rate(prx_requests_total[10m])), 1)
+          ) > 0.005
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "prx high no-route ratio"
+          description: "No-route 404 ratio > 0.5% for at least 15 minutes."
+
+      - alert: PrxCircuitBreakerOpenFlapping
+        expr: sum(increase(prx_circuit_breaker_open_total[10m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "prx circuit breaker frequently opening"
+          description: "Circuit breaker opened more than 10 times in 10 minutes."
+
+      - alert: PrxReadyEndpointFailing
+        expr: sum(rate(prx_requests_total{route="ready",status="503"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "prx readiness degraded"
+          description: "Readiness endpoint is returning 503."

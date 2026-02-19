@@ -1,0 +1,27 @@
+[package]
+name = "prx"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+arc-swap = "1"
+async-trait = "0.1"
+bytes = "1"
+notify = "8"
+once_cell = "1"
+pingora = { version = "0.7", features = ["lb"] }
+prometheus = "0.14"
+rand = "0.9"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+tokio = { version = "1", features = ["time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[patch.crates-io]
+pingora-core = { path = "vendor/pingora-core" }
+pingora-load-balancing = { path = "vendor/pingora-load-balancing" }
