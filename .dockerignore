@@ -1,0 +1,7 @@
+Makefile
+.DS_Store
+.idea/
+target/
+db/
+Dockerfile/
+.gitignore

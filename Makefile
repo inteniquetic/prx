@@ -50,3 +50,10 @@ ci: gate ## Alias for gate
 
 clean: ## Clean build artifacts
 	$(CARGO) clean
+
+build_image:
+	docker build -t inteniquetic/prx:latest .
+
+push_image:
+	docker tag inteniquetic/prx:latest inteniquetic/prx:1.0.0
+	docker image push inteniquetic/prx:1.0.0
