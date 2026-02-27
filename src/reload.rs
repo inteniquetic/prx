@@ -21,10 +21,7 @@ pub fn spawn_config_watcher(
         .file_name()
         .map(|name| name.to_owned())
         .unwrap_or_else(|| OsStr::new("Prx.toml").to_owned());
-    let watched_dir = config_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let watched_dir = resolve_watch_dir(&config_path);
 
     thread::Builder::new()
         .name("prx-config-watcher".to_string())
@@ -104,9 +101,34 @@ pub fn spawn_config_watcher(
     Ok(())
 }
 
+fn resolve_watch_dir(config_path: &Path) -> PathBuf {
+    config_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 fn event_touches_file(event: &Event, file_name: &OsStr) -> bool {
     event
         .paths
         .iter()
         .any(|path| path.file_name().is_some_and(|name| name == file_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_watch_dir_uses_current_dir_for_relative_file() {
+        let dir = resolve_watch_dir(Path::new("Prx.toml"));
+        assert_eq!(dir, PathBuf::from("."));
+    }
+
+    #[test]
+    fn resolve_watch_dir_uses_parent_for_absolute_file() {
+        let dir = resolve_watch_dir(Path::new("/tmp/prx/Prx.toml"));
+        assert_eq!(dir, PathBuf::from("/tmp/prx"));
+    }
 }

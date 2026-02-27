@@ -1,3 +1,4 @@
+mod admin;
 mod config;
 mod metrics;
 mod proxy;
@@ -13,7 +14,11 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    config::PrxConfig, proxy::PrxProxy, reload::spawn_config_watcher, runtime::RuntimeConfig,
+    admin::{AdminAxumService, DEFAULT_ADMIN_LISTEN, bind_admin_listener},
+    config::PrxConfig,
+    proxy::PrxProxy,
+    reload::spawn_config_watcher,
+    runtime::RuntimeConfig,
 };
 
 fn main() {
@@ -24,7 +29,11 @@ fn main() {
 }
 
 fn run() -> anyhow::Result<()> {
-    let config_path = env::var("PRX_CONFIG").unwrap_or_else(|_| "Prx.toml".to_string());
+    let config_path = env::var("PRX_CONFIG")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Prx.toml".to_string());
     let config_path = PathBuf::from(config_path);
     let app_config = PrxConfig::from_file(&config_path)?;
     init_tracing(&app_config.observability.log_level);
@@ -66,8 +75,32 @@ fn run() -> anyhow::Result<()> {
         proxy_service.add_tls_with_settings(&tls.listen, None, tls_settings);
     }
 
+    let proxy_listen = app_config.server.listen.join(", ");
+    let tls_listen = app_config
+        .server
+        .tls
+        .as_ref()
+        .map(|tls| tls.listen.as_str())
+        .unwrap_or("-");
     server.add_service(proxy_service);
+    info!(
+        listen = proxy_listen.as_str(),
+        tls_listen, "proxy server listeners are enabled"
+    );
 
+    let admin_listen = env::var("PRX_ADMIN_LISTEN")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_ADMIN_LISTEN.to_string());
+    let admin_listener = bind_admin_listener(&admin_listen)
+        .with_context(|| format!("failed to start admin server on {admin_listen}"))?;
+    server.add_service(AdminAxumService::new(
+        admin_listen.clone(),
+        admin_listener,
+        config_path.clone(),
+        runtime_config.clone(),
+    ));
     spawn_config_watcher(
         config_path.clone(),
         Duration::from_millis(app_config.server.config_reload_debounce_ms.max(50)),

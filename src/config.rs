@@ -17,12 +17,16 @@ impl PrxConfig {
     pub fn from_file(path: &Path) -> anyhow::Result<Self> {
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read config file at {}", path.to_string_lossy()))?;
-        let config: Self = toml::from_str(&content).with_context(|| {
+        Self::from_toml_str(&content).with_context(|| {
             format!(
                 "failed to parse TOML config from {}",
                 path.to_string_lossy()
             )
-        })?;
+        })
+    }
+
+    pub fn from_toml_str(content: &str) -> anyhow::Result<Self> {
+        let config: Self = toml::from_str(content).context("invalid TOML config")?;
         config.validate()?;
         Ok(config)
     }

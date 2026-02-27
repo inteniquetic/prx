@@ -7,16 +7,16 @@ grace_period_seconds = 10
 graceful_shutdown_timeout_seconds = 30
 config_reload_debounce_ms = 250
 
-[observability]
-log_level = "info"
-access_log = true
-# prometheus_listen = "127.0.0.1:9090"
-
 [server.tls]
 listen = "0.0.0.0:8443"
 cert_path = "./certs/tls.crt"
 key_path = "./certs/tls.key"
 enable_h2 = true
+
+[observability]
+log_level = "info"
+access_log = true
+prometheus_listen = "127.0.0.1:9090"
 
 [[route]]
 name = "grpc"
@@ -31,7 +31,6 @@ retry_backoff_ms = 50
 enabled = true
 consecutive_failures = 3
 open_ms = 30000
-
 [[route.upstream]]
 addr = "127.0.0.1:50051"
 tls = false
@@ -63,10 +62,10 @@ retry_backoff_ms = 0
 enabled = true
 consecutive_failures = 3
 open_ms = 30000
-
 [[route.upstream]]
-addr = "127.0.0.1:3000"
-tls = false
+addr = "jsonplaceholder.typicode.com:443"
+tls = true
+sni = "jsonplaceholder.typicode.com"
 weight = 2
 connect_timeout_ms = 1000
 

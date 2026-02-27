@@ -28,6 +28,28 @@ Optional:
 PRX_CONFIG=./Prx.toml cargo run
 ```
 
+Admin API is enabled by default on a dedicated listener (separate from proxy traffic):
+
+```bash
+cargo run
+```
+
+Endpoints:
+- `GET /` embedded WebUI (SPA)
+- `GET /web/config` read current `Prx.toml` (TOML text)
+- `GET /web/config?format=json` read normalized config payload for WebUI
+- `GET /web/health/routes` check route upstream TCP health status
+- `POST /web/health/routes` check health from provided TOML payload (used by WebUI draft)
+- `PUT /web/config` write new `Prx.toml` (validated before apply)
+
+Note: `webui/dist` is embedded at compile time. Rebuild `prx` after `webui` changes.
+
+Optional override:
+
+```bash
+PRX_ADMIN_LISTEN=127.0.0.1:9091 cargo run
+```
+
 ## Config
 
 The proxy reads `Prx.toml` on startup and watches it for changes.
