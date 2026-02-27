@@ -290,7 +290,7 @@
     });
 </script>
 
-<main class="min-h-screen w-full px-3 py-3 text-ink md:px-5">
+<main class="min-h-screen w-full px-3 py-3 text-slate-100 md:px-5">
   <AppToolbar
     saveDisabled={isSavingToServer || isLoadingFromServer || $validationIssues.length > 0}
     reloadDisabled={isSavingToServer || isLoadingFromServer}

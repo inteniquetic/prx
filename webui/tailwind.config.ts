@@ -12,7 +12,7 @@ const config: Config = {
         mint: '#2ec4b6'
       },
       boxShadow: {
-        panel: '0 16px 40px -20px rgba(13, 27, 42, 0.75)'
+        panel: 'none'
       }
     }
   },

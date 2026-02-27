@@ -12,7 +12,6 @@ export interface UpstreamConfig {
   tls: boolean;
   sni: string;
   weight: number;
-  healthy: boolean;
   verify_cert: boolean | null;
   verify_hostname: boolean | null;
   connect_timeout_ms: number | null;
@@ -30,7 +29,6 @@ export interface CircuitBreakerConfig {
 
 export interface RouteConfig {
   name: string;
-  route_index: number;
   host: string;
   path_prefix: string;
   is_default: boolean;

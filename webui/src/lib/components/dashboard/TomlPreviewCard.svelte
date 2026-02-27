@@ -9,7 +9,7 @@
   $: isValid = issues.length === 0;
 </script>
 
-<article class="rounded-2xl border border-white/60 bg-[#0f172a] p-4 text-slate-100 shadow-panel">
+<article class="rounded-2xl border border-slate-700/80 bg-[#0f172a] p-4 text-slate-100">
   <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
     <h2 class="text-base font-bold">TOML Preview</h2>
     <button class="rounded-lg border border-cyan-300/40 bg-cyan-300/10 px-3 py-1.5 text-sm font-semibold text-cyan-100 hover:bg-cyan-300/20" on:click={() => dispatch('copy')}>
