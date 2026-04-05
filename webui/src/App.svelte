@@ -1,17 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-
-  import AppToolbar from './lib/components/dashboard/AppToolbar.svelte';
-  import ObservabilityCard from './lib/components/dashboard/ObservabilityCard.svelte';
-  import RouteDetailCard from './lib/components/dashboard/RouteDetailCard.svelte';
-  import RouteTableCard from './lib/components/dashboard/RouteTableCard.svelte';
-  import ServerCard from './lib/components/dashboard/ServerCard.svelte';
-  import TomlPreviewCard from './lib/components/dashboard/TomlPreviewCard.svelte';
+  import Sidebar from './lib/components/layout/Sidebar.svelte';
+  import AppLayout from './lib/components/layout/AppLayout.svelte';
+  import DashboardPage from './lib/components/pages/DashboardPage.svelte';
+  import RoutesPage from './lib/components/pages/RoutesPage.svelte';
+  import SettingsPage from './lib/components/pages/SettingsPage.svelte';
   import {
     loadConfigFromAdmin,
     loadRouteHealthFromAdmin,
     saveTomlToAdmin,
-    type RouteHealthItem
+    type RouteHealthItem,
+    type RouteHealthResponse
   } from './lib/api/admin';
   import { normalizePrxConfig } from './lib/configNormalize';
   import {
@@ -21,23 +20,24 @@
     tomlPreview,
     validationIssues
   } from './lib/stores/config';
+  import { currentPage, navigate } from './lib/stores/navigation';
   import type { PrxConfig } from './lib/types/config';
 
-  let copied = false;
-  let routePanelMode: 'view' | 'edit' = 'view';
-  let selectedRouteIndex: number | null = null;
-  let routeQuery = '';
+  // Health state
   let routeHealthByIndex: Record<number, RouteHealthItem> = {};
+  let routeHealthResponse: RouteHealthResponse | null = null;
   let routeHealthTomlSnapshot = '';
   let isCheckingRouteHealth = false;
   let routeHealthError = '';
 
+  // Server interaction state
   let isLoadingFromServer = false;
   let isSavingToServer = false;
   let adminStatusMessage = 'Ready';
   let adminStatusTone: 'neutral' | 'ok' | 'error' = 'neutral';
   let lastSyncedAt = '';
 
+  // Helpers
   const currentTimestamp = (): string =>
     new Intl.DateTimeFormat(undefined, {
       year: 'numeric',
@@ -58,10 +58,12 @@
 
   const clearRouteHealthState = () => {
     routeHealthByIndex = {};
+    routeHealthResponse = null;
     routeHealthTomlSnapshot = '';
     routeHealthError = '';
   };
 
+  // API actions
   const reloadFromServer = async () => {
     if (isLoadingFromServer || isSavingToServer) {
       return;
@@ -75,11 +77,8 @@
       const config = await loadConfigFromAdmin();
       configStore.set(config);
       clearRouteHealthState();
-      if (selectedRouteIndex !== null && selectedRouteIndex >= config.routes.length) {
-        selectedRouteIndex = null;
-      }
       lastSyncedAt = currentTimestamp();
-      setAdminStatus('Loaded config from admin API.', 'ok');
+      setAdminStatus('Config loaded successfully.', 'ok');
       loadedSuccessfully = true;
     } catch (error) {
       setAdminStatus(`Load failed: ${toErrorMessage(error)}`, 'error');
@@ -102,14 +101,15 @@
     try {
       const payload = await loadRouteHealthFromAdmin(1200, tomlSnapshot);
       const map: Record<number, RouteHealthItem> = {};
-      payload.routes.forEach((routeHealth) => {
-        map[routeHealth.route_index] = routeHealth;
+      payload.routes.forEach((rh) => {
+        map[rh.route_index] = rh;
       });
       routeHealthByIndex = map;
+      routeHealthResponse = payload;
       routeHealthTomlSnapshot = tomlSnapshot;
     } catch (error) {
       routeHealthError = toErrorMessage(error);
-      setAdminStatus(`Route health check failed: ${routeHealthError}`, 'error');
+      setAdminStatus(`Health check failed: ${routeHealthError}`, 'error');
     } finally {
       isCheckingRouteHealth = false;
     }
@@ -122,42 +122,25 @@
 
     if ($validationIssues.length > 0) {
       setAdminStatus(
-        `Save blocked: validation failed (${$validationIssues.length} issue(s)).`,
+        `Save blocked: ${$validationIssues.length} validation issue(s).`,
         'error'
       );
       return;
     }
 
     isSavingToServer = true;
-    setAdminStatus('Saving config to admin API...');
+    setAdminStatus('Saving config...');
 
     try {
       const result = await saveTomlToAdmin($tomlPreview);
       lastSyncedAt = currentTimestamp();
-      setAdminStatus(`Save successful: ${result}`, 'ok');
+      setAdminStatus(`Saved: ${result}`, 'ok');
       void refreshRouteHealth();
     } catch (error) {
       setAdminStatus(`Save failed: ${toErrorMessage(error)}`, 'error');
     } finally {
       isSavingToServer = false;
     }
-  };
-
-  const updateServer = (server: PrxConfig['server']) => {
-    configStore.update((config) => {
-      config.server = server;
-      return config;
-    });
-  };
-
-  const updateObservability = <K extends keyof PrxConfig['observability']>(
-    key: K,
-    value: PrxConfig['observability'][K]
-  ) => {
-    configStore.update((config) => {
-      config.observability[key] = value;
-      return config;
-    });
   };
 
   const exportAsJson = () => {
@@ -183,7 +166,7 @@
       const parsed = JSON.parse(content) as Partial<PrxConfig>;
       configStore.set(normalizePrxConfig(parsed));
       clearRouteHealthState();
-      setAdminStatus('Imported JSON locally. Click Save to Server to apply.', 'neutral');
+      setAdminStatus('JSON imported locally. Click Save to apply.', 'neutral');
     } catch (error) {
       setAdminStatus(`Import failed: ${toErrorMessage(error)}`, 'error');
     } finally {
@@ -191,50 +174,11 @@
     }
   };
 
-  const onImportJson = (event: CustomEvent<Event>) => {
-    importFromJson(event.detail);
-  };
-
-  const onServerSave = (event: CustomEvent<PrxConfig['server']>) => {
-    updateServer(event.detail);
-  };
-
-  const onObservabilityChange = (
-    event: CustomEvent<{
-      key: keyof PrxConfig['observability'];
-      value: string | boolean;
-    }>
-  ) => {
-    const { key, value } = event.detail;
-    if (key === 'access_log') {
-      updateObservability('access_log', Boolean(value));
-      return;
-    }
-    if (key === 'log_level') {
-      updateObservability('log_level', String(value));
-      return;
-    }
-    updateObservability('prometheus_listen', String(value));
-  };
-
-  const copyToml = async () => {
-    await navigator.clipboard.writeText($tomlPreview);
-    copied = true;
-    setTimeout(() => {
-      copied = false;
-    }, 1800);
-  };
-
-  const openRoutePanel = (index: number, mode: 'view' | 'edit') => {
-    selectedRouteIndex = index;
-    routePanelMode = mode;
-  };
-
+  // Route actions
   const addRouteAndEdit = () => {
     addRoute();
     clearRouteHealthState();
-    selectedRouteIndex = $configStore.routes.length - 1;
-    routePanelMode = 'edit';
+    navigate('routes');
   };
 
   const deleteRoute = (index: number) => {
@@ -243,30 +187,74 @@
     }
     removeRoute(index);
     clearRouteHealthState();
-    if ($configStore.routes.length === 0) {
-      selectedRouteIndex = null;
-      return;
-    }
-    if (selectedRouteIndex === index) {
-      selectedRouteIndex = null;
-      return;
-    }
-    if (selectedRouteIndex !== null && selectedRouteIndex > index) {
-      selectedRouteIndex -= 1;
-    }
   };
 
-  const closeRoutePanel = () => {
-    selectedRouteIndex = null;
+  const duplicateRoute = (index: number) => {
+    const source = $configStore.routes[index];
+    if (!source) return;
+    const clone = JSON.parse(JSON.stringify(source)) as PrxConfig['routes'][0];
+    clone.name = `${clone.name}-copy`;
+    configStore.update((config) => {
+      config.routes.splice(index + 1, 0, clone);
+      return config;
+    });
+    clearRouteHealthState();
   };
 
-  onMount(() => {
+  // Page event handlers
+  const onDashboardNavigate = (e: CustomEvent) => {
+    navigate(e.detail);
+  };
+
+  const onDashboardAddRoute = () => {
+    addRouteAndEdit();
+  };
+
+  const onDashboardRefreshHealth = () => {
+    void refreshRouteHealth();
+  };
+
+  const onDashboardExportJson = () => {
+    exportAsJson();
+  };
+
+  const onRoutesAddRoute = () => {
+    addRouteAndEdit();
+  };
+
+  const onRoutesDeleteRoute = (e: CustomEvent<number>) => {
+    deleteRoute(e.detail);
+  };
+
+  const onRoutesDuplicateRoute = (e: CustomEvent<number>) => {
+    duplicateRoute(e.detail);
+  };
+
+  const onRoutesRefreshHealth = () => {
+    void refreshRouteHealth();
+  };
+
+  const onRoutesNavigate = (e: CustomEvent) => {
+    navigate(e.detail);
+  };
+
+  const onSettingsSave = () => {
+    void saveToServer();
+  };
+
+  const onSettingsReload = () => {
     void reloadFromServer();
-  });
+  };
 
-  $: selectedRoute =
-    selectedRouteIndex === null ? null : $configStore.routes[selectedRouteIndex] ?? null;
-  $: selectedRouteIndexValue = selectedRouteIndex ?? 0;
+  const onSettingsExportJson = () => {
+    exportAsJson();
+  };
+
+  const onSettingsImportJson = (e: CustomEvent<Event>) => {
+    importFromJson(e.detail);
+  };
+
+  // Reactive: clear health state when config changes
   $: if (
     routeHealthTomlSnapshot &&
     !isCheckingRouteHealth &&
@@ -274,72 +262,54 @@
   ) {
     clearRouteHealthState();
   }
-  $: filteredRoutes = $configStore.routes
-    .map((route, routeIndex) => ({ route, routeIndex }))
-    .filter(({ route }) => {
-      const query = routeQuery.trim().toLowerCase();
-      if (!query) {
-        return true;
-      }
-      return (
-        route.name.toLowerCase().includes(query) ||
-        route.host.toLowerCase().includes(query) ||
-        route.path_prefix.toLowerCase().includes(query) ||
-        route.lb.toLowerCase().includes(query)
-      );
-    });
+
+  onMount(() => {
+    void reloadFromServer();
+  });
 </script>
 
-<main class="min-h-screen w-full px-3 py-3 text-slate-100 md:px-5">
-  <AppToolbar
-    saveDisabled={isSavingToServer || isLoadingFromServer || $validationIssues.length > 0}
-    reloadDisabled={isSavingToServer || isLoadingFromServer}
-    saving={isSavingToServer}
-    loading={isLoadingFromServer}
-    statusMessage={adminStatusMessage}
-    statusTone={adminStatusTone}
-    lastSynced={lastSyncedAt}
-    on:saveToServer={saveToServer}
-    on:reloadFromServer={reloadFromServer}
-    on:exportJson={exportAsJson}
-    on:importJson={onImportJson}
-  />
+<div class="flex h-screen w-screen overflow-hidden text-slate-100">
+  <Sidebar />
 
-  <div class="mt-4 space-y-4">
-    <div class="grid gap-4 lg:grid-cols-2">
-      <ServerCard
-        server={$configStore.server}
-        on:save={onServerSave}
+  <main class="flex-1 overflow-hidden bg-slate-950">
+    {#if $currentPage === 'dashboard'}
+      <DashboardPage
+        config={$configStore}
+        routeHealth={routeHealthResponse}
+        healthLoading={isCheckingRouteHealth}
+        healthError={routeHealthError}
+        on:navigate={onDashboardNavigate}
+        on:addRoute={onDashboardAddRoute}
+        on:refreshHealth={onDashboardRefreshHealth}
+        on:exportJson={onDashboardExportJson}
       />
-      <ObservabilityCard
-        observability={$configStore.observability}
-        on:change={onObservabilityChange}
-      />
-    </div>
-
-    <div class="grid gap-4 xl:grid-cols-2">
-      <RouteTableCard
-        routeQuery={routeQuery}
-        rows={filteredRoutes}
-        {selectedRouteIndex}
+    {:else if $currentPage === 'routes'}
+      <RoutesPage
+        config={$configStore}
         {routeHealthByIndex}
         healthLoading={isCheckingRouteHealth}
         healthError={routeHealthError}
-        on:addRoute={addRouteAndEdit}
-        on:refreshHealth={() => void refreshRouteHealth()}
-        on:search={(e) => (routeQuery = e.detail)}
-        on:view={(e) => openRoutePanel(e.detail, 'view')}
-        on:edit={(e) => openRoutePanel(e.detail, 'edit')}
-        on:delete={(e) => deleteRoute(e.detail)}
+        on:addRoute={onRoutesAddRoute}
+        on:deleteRoute={onRoutesDeleteRoute}
+        on:duplicateRoute={onRoutesDuplicateRoute}
+        on:refreshHealth={onRoutesRefreshHealth}
+        on:navigate={onRoutesNavigate}
       />
-      <RouteDetailCard
-        route={selectedRoute}
-        routeIndex={selectedRouteIndexValue}
-        mode={routePanelMode}
-        on:close={closeRoutePanel}
+    {:else if $currentPage === 'settings'}
+      <SettingsPage
+        config={$configStore}
+        tomlPreview={$tomlPreview}
+        validationIssues={$validationIssues}
+        isSaving={isSavingToServer}
+        isLoading={isLoadingFromServer}
+        statusMessage={adminStatusMessage}
+        statusTone={adminStatusTone}
+        lastSynced={lastSyncedAt}
+        on:save={onSettingsSave}
+        on:reload={onSettingsReload}
+        on:exportJson={onSettingsExportJson}
+        on:importJson={onSettingsImportJson}
       />
-    </div>
-
-    <TomlPreviewCard toml={$tomlPreview} issues={$validationIssues} {copied} on:copy={copyToml} />
-  </div>
-</main>
+    {/if}
+  </main>
+</div>
