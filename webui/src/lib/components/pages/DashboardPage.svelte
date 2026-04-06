@@ -2,7 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import AppLayout from '../layout/AppLayout.svelte';
   import StatsCard from '../dashboard/StatsCard.svelte';
-  import type { PrxConfig, RouteConfig } from '../../types/config';
+  import type { PrxConfig, RouteConfig, ServiceConfig } from '../../types/config';
   import type { RouteHealthResponse, RouteHealthItem } from '../../api/admin';
   import type { NavPage } from '../../stores/navigation';
 
@@ -22,24 +22,37 @@
   // Computed values
   // ---------------------------------------------------------------------------
 
+  $: services = config.services ?? [];
+
   $: routes = config.routes ?? [];
+
+  $: totalServices = services.length;
 
   $: totalRoutes = routes.length;
 
-  $: totalUpstreams = routes.reduce(
-    (sum, route) => sum + (route.upstreams?.length ?? 0),
+  $: totalUpstreams = services.reduce(
+    (sum, service) => sum + (service.upstreams?.length ?? 0),
     0
   );
 
-  $: tlsEnabledCount = routes.reduce(
-    (sum, route) =>
-      sum + (route.upstreams?.filter((u) => u.tls === true).length ?? 0),
+  $: tlsEnabledCount = services.reduce(
+    (sum, service) =>
+      sum + (service.upstreams?.filter((u) => u.tls === true).length ?? 0),
     0
   );
 
-  $: circuitBreakerCount = routes.filter(
-    (route) => route.circuit_breaker?.enabled === true
+  $: circuitBreakerCount = services.filter(
+    (service) => service.circuit_breaker?.enabled === true
   ).length;
+
+  // Service lookup by name
+  $: serviceByName = (() => {
+    const map: Record<string, ServiceConfig> = {};
+    for (const service of services) {
+      map[service.name] = service;
+    }
+    return map;
+  })();
 
   // Health summary
   $: healthRoutes = routeHealth?.routes ?? [];
@@ -58,16 +71,41 @@
 
   $: unknownCount = Math.max(0, totalRoutes - healthRoutes.length);
 
+  // Unique services that have been health-checked
+  $: healthCheckedServices = (() => {
+    const serviceSet = new Set<string>();
+    for (const item of healthRoutes) {
+      serviceSet.add(item.service);
+    }
+    return serviceSet.size;
+  })();
+
   // Recent routes (first 5)
   $: recentRoutes = routes.slice(0, 5);
 
   $: hasMoreRoutes = routes.length > 5;
 
-  // Health data by index for quick lookup
+  // Recent services (first 3)
+  $: recentServices = services.slice(0, 3);
+
+  $: hasMoreServices = services.length > 3;
+
+  // Health data by route index for quick lookup
   $: healthByIndex = (() => {
     const map: Record<number, RouteHealthItem> = {};
     for (const item of healthRoutes) {
       map[item.route_index] = item;
+    }
+    return map;
+  })();
+
+  // Health data by service name for service preview
+  $: healthByService = (() => {
+    const map: Record<string, RouteHealthItem> = {};
+    for (const item of healthRoutes) {
+      if (!map[item.service]) {
+        map[item.service] = item;
+      }
     }
     return map;
   })();
@@ -79,8 +117,19 @@
   const getRouteHealth = (routeIndex: number): RouteHealthItem | null =>
     healthByIndex[routeIndex] ?? null;
 
+  const getServiceHealth = (serviceName: string): RouteHealthItem | null =>
+    healthByService[serviceName] ?? null;
+
   const routeHealthStatus = (routeIndex: number): 'healthy' | 'degraded' | 'down' | 'unknown' => {
     const health = getRouteHealth(routeIndex);
+    if (!health) return 'unknown';
+    if (health.reachable_upstreams === 0) return 'down';
+    if (health.reachable_upstreams < health.total_upstreams) return 'degraded';
+    return health.healthy ? 'healthy' : 'degraded';
+  };
+
+  const serviceHealthStatus = (serviceName: string): 'healthy' | 'degraded' | 'down' | 'unknown' => {
+    const health = getServiceHealth(serviceName);
     if (!health) return 'unknown';
     if (health.reachable_upstreams === 0) return 'down';
     if (health.reachable_upstreams < health.total_upstreams) return 'degraded';
@@ -126,10 +175,44 @@
     }
   };
 
+  const formatMethods = (methods: string[]): string => {
+    if (!methods || methods.length === 0) return 'All';
+    return methods.map((m) => m.toUpperCase()).join(', ');
+  };
+
+  const healthStatusText = (status: string): string => {
+    switch (status) {
+      case 'healthy':
+        return 'UP';
+      case 'degraded':
+        return 'DEGRADED';
+      case 'down':
+        return 'DOWN';
+      default:
+        return 'UNKNOWN';
+    }
+  };
+
   const healthCheckedAt = (): string => {
     if (!routeHealth?.checked_at_epoch_ms) return '';
     const date = new Date(routeHealth.checked_at_epoch_ms);
     return date.toLocaleTimeString();
+  };
+
+  const getServiceForRoute = (route: RouteConfig): ServiceConfig | null =>
+    serviceByName[route.service] ?? null;
+
+  const healthTooltipDetail = (status: string): string => {
+    switch (status) {
+      case 'healthy':
+        return 'All upstreams reachable';
+      case 'degraded':
+        return 'Partial upstream failure';
+      case 'down':
+        return 'No upstreams reachable';
+      default:
+        return 'Not yet checked';
+    }
   };
 </script>
 
@@ -155,12 +238,18 @@
       <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-400">
         Overview
       </h2>
-      <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <StatsCard
+          icon="◆"
+          label="Services"
+          value={totalServices}
+          color="cyan"
+        />
         <StatsCard
           icon="⇌"
-          label="Total Routes"
+          label="Routes"
           value={totalRoutes}
-          color="cyan"
+          color="violet"
         />
         <StatsCard
           icon="◉"
@@ -172,13 +261,13 @@
           icon="🔒"
           label="TLS Enabled"
           value={tlsEnabledCount}
-          color="violet"
+          color="amber"
         />
         <StatsCard
           icon="⚡"
           label="Circuit Breakers"
           value={circuitBreakerCount}
-          color="amber"
+          color="rose"
         />
       </div>
     </section>
@@ -197,6 +286,9 @@
 
         <!-- Summary Stats -->
         <div class="mb-4 flex flex-wrap items-center gap-6">
+          <div class="text-xs text-slate-500">
+            {healthCheckedServices} of {totalServices} services checked
+          </div>
           <div class="flex items-center gap-2">
             <span class="h-2.5 w-2.5 rounded-full bg-emerald-400" />
             <span class="text-sm font-medium text-slate-200">
@@ -225,7 +317,7 @@
           {/if}
         </div>
 
-        <!-- Route Health Dots -->
+        <!-- Route Health Dots (grouped by service health) -->
         <div class="flex flex-wrap items-center gap-2">
           {#each routes as route, idx}
             <div
@@ -235,17 +327,12 @@
               <span class="h-3 w-3 rounded-full {statusDotClass(routeHealthStatus(idx))} transition-transform hover:scale-125" />
               <!-- Tooltip on hover -->
               <div class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
-                {route.name}
+                <div class="font-medium">{route.name}</div>
                 <div class="mt-0.5 text-slate-400">
-                  {#if routeHealthStatus(idx) === 'healthy'}
-                    All upstreams reachable
-                  {:else if routeHealthStatus(idx) === 'degraded'}
-                    Partial upstream failure
-                  {:else if routeHealthStatus(idx) === 'down'}
-                    No upstreams reachable
-                  {:else}
-                    Not yet checked
-                  {/if}
+                  Service: {route.service}
+                </div>
+                <div class="mt-0.5 text-slate-400">
+                  {healthTooltipDetail(routeHealthStatus(idx))}
                 </div>
               </div>
             </div>
@@ -268,6 +355,13 @@
       <div class="flex flex-wrap gap-3">
         <button
           class="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-500/10 px-4 py-2.5 text-sm font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20"
+          on:click={() => dispatch('navigate', 'services')}
+        >
+          <span class="text-base">◆</span>
+          New Service
+        </button>
+        <button
+          class="inline-flex items-center gap-2 rounded-xl border border-violet-400/40 bg-violet-500/10 px-4 py-2.5 text-sm font-semibold text-violet-200 transition-colors hover:bg-violet-500/20"
           on:click={() => dispatch('addRoute')}
         >
           <span class="text-base">+</span>
@@ -287,6 +381,69 @@
           <span class="text-base">⟨/⟩</span>
           View TOML
         </button>
+      </div>
+    </section>
+
+    <!-- Recent Services Preview -->
+    <section>
+      <div class="mb-3 flex items-center justify-between">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">
+          Recent Services
+        </h2>
+        {#if hasMoreServices}
+          <button
+            class="text-sm font-medium text-cyan-400 transition-colors hover:text-cyan-300"
+            on:click={() => dispatch('navigate', 'services')}
+          >
+            View All Services →
+          </button>
+        {/if}
+      </div>
+
+      <div class="rounded-2xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
+        <div class="grid grid-cols-1 divide-y divide-slate-800 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+          {#if recentServices.length === 0}
+            <div class="px-4 py-8 text-center text-slate-400 sm:col-span-3">
+              No services configured yet.
+              <button
+                class="ml-2 text-cyan-400 hover:text-cyan-300"
+                on:click={() => dispatch('navigate', 'services')}
+              >
+                Add your first service →
+              </button>
+            </div>
+          {:else}
+            {#each recentServices as service}
+              <div class="flex flex-col gap-2 px-4 py-4">
+                <div class="flex items-center justify-between">
+                  <span class="font-medium text-slate-100">{service.name}</span>
+                  <span class="h-2 w-2 rounded-full {statusDotClass(serviceHealthStatus(service.name))}" />
+                </div>
+                <div class="flex items-center gap-3 text-xs text-slate-400">
+                  <span>{formatLbStrategy(service.lb)}</span>
+                  <span>·</span>
+                  <span>{service.upstreams.length} upstream{service.upstreams.length !== 1 ? 's' : ''}</span>
+                </div>
+                {#if serviceHealthStatus(service.name) !== 'unknown'}
+                  <span class={statusBadgeClass(serviceHealthStatus(service.name))}>
+                    {healthStatusText(serviceHealthStatus(service.name))}
+                  </span>
+                {/if}
+              </div>
+            {/each}
+          {/if}
+        </div>
+
+        {#if hasMoreServices}
+          <div class="border-t border-slate-700/80 px-4 py-3">
+            <button
+              class="w-full text-center text-sm font-medium text-slate-400 transition-colors hover:text-cyan-400"
+              on:click={() => dispatch('navigate', 'services')}
+            >
+              Showing {recentServices.length} of {services.length} services — View All →
+            </button>
+          </div>
+        {/if}
       </div>
     </section>
 
@@ -312,10 +469,10 @@
             <thead class="bg-slate-900 text-slate-300">
               <tr>
                 <th class="px-4 py-3 text-left font-semibold">Name</th>
+                <th class="px-4 py-3 text-left font-semibold">Service</th>
                 <th class="px-4 py-3 text-left font-semibold">Host</th>
                 <th class="px-4 py-3 text-left font-semibold">Path</th>
-                <th class="px-4 py-3 text-left font-semibold">LB Strategy</th>
-                <th class="px-4 py-3 text-left font-semibold">Upstreams</th>
+                <th class="px-4 py-3 text-left font-semibold">Methods</th>
                 <th class="px-4 py-3 text-left font-semibold">Health</th>
               </tr>
             </thead>
@@ -343,6 +500,11 @@
                         </span>
                       {/if}
                     </td>
+                    <td class="px-4 py-3">
+                      <span class="rounded bg-cyan-500/10 px-1.5 py-0.5 text-xs font-medium text-cyan-300">
+                        {route.service}
+                      </span>
+                    </td>
                     <td class="px-4 py-3 text-slate-300">
                       {#if route.host}
                         {route.host}
@@ -353,18 +515,22 @@
                     <td class="px-4 py-3 text-slate-300">
                       <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs">{route.path_prefix}</code>
                     </td>
-                    <td class="px-4 py-3 text-slate-300">
-                      {formatLbStrategy(route.lb)}
-                    </td>
-                    <td class="px-4 py-3 text-slate-300">
-                      {route.upstreams?.length ?? 0}
+                    <td class="px-4 py-3">
+                      {#if route.methods.length === 0}
+                        <span class="text-xs text-slate-500">All</span>
+                      {:else}
+                        <div class="flex flex-wrap gap-1">
+                          {#each route.methods as method}
+                            <span class="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-400">
+                              {method.toUpperCase()}
+                            </span>
+                          {/each}
+                        </div>
+                      {/if}
                     </td>
                     <td class="px-4 py-3">
                       <span class={statusBadgeClass(routeHealthStatus(idx))}>
-                        {routeHealthStatus(idx) === 'healthy' ? 'UP' : ''}
-                        {routeHealthStatus(idx) === 'degraded' ? 'DEGRADED' : ''}
-                        {routeHealthStatus(idx) === 'down' ? 'DOWN' : ''}
-                        {routeHealthStatus(idx) === 'unknown' ? 'UNKNOWN' : ''}
+                        {healthStatusText(routeHealthStatus(idx))}
                       </span>
                     </td>
                   </tr>

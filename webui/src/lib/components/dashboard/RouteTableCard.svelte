@@ -128,7 +128,7 @@
             <th class="px-4 py-3 text-left font-semibold">Route</th>
             <th class="px-4 py-3 text-left font-semibold">Host</th>
             <th class="px-4 py-3 text-left font-semibold">Path</th>
-            <th class="px-4 py-3 text-left font-semibold">LB</th>
+            <th class="px-4 py-3 text-left font-semibold">Service</th>
             <th class="px-4 py-3 text-left font-semibold">Health</th>
             <th class="px-4 py-3 text-left font-semibold">Upstreams</th>
             <th class="px-4 py-3 text-left font-semibold">Actions</th>
@@ -150,7 +150,7 @@
                 </td>
                 <td class="px-4 py-3 text-slate-300">{row.route.host || '-'}</td>
                 <td class="px-4 py-3 text-slate-300">{row.route.path_prefix}</td>
-                <td class="px-4 py-3 text-slate-300">{row.route.lb}</td>
+                <td class="px-4 py-3 text-slate-300">{row.route.service || '-'}</td>
                 <td class="px-4 py-3">
                   <span class={routeHealthLabelClass(row)} title={routeHealthTooltip(row)}>{routeHealthLabel(row)}</span>
                 </td>

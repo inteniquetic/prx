@@ -1,4 +1,4 @@
-import type { PrxConfig, RouteConfig, UpstreamConfig } from './types/config';
+import type { PrxConfig, RouteConfig, ServiceConfig, UpstreamConfig } from './types/config';
 
 const esc = (value: string): string => value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
 
@@ -12,8 +12,8 @@ const pushOptionalNumber = (lines: string[], key: string, value: number | null) 
   }
 };
 
-const renderUpstream = (upstream: UpstreamConfig): string => {
-  const lines = ['[[route.upstream]]'];
+const renderUpstream = (upstream: UpstreamConfig, prefix: 'service' | 'route' = 'service'): string => {
+  const lines = [`[[${prefix}.upstream]]`];
   lines.push(`addr = "${esc(upstream.addr)}"`);
   lines.push(`tls = ${toTomlBool(upstream.tls)}`);
   if (upstream.sni.trim()) {
@@ -38,28 +38,37 @@ const renderUpstream = (upstream: UpstreamConfig): string => {
   return lines.join('\n');
 };
 
+const renderService = (service: ServiceConfig): string => {
+  const lines = ['[[service]]'];
+  lines.push(`name = "${esc(service.name)}"`);
+  lines.push(`lb = "${service.lb}"`);
+  lines.push(`max_retries = ${Math.max(0, service.max_retries)}`);
+  lines.push(`retry_backoff_ms = ${Math.max(0, service.retry_backoff_ms)}`);
+  lines.push('');
+  lines.push('[service.circuit_breaker]');
+  lines.push(`enabled = ${toTomlBool(service.circuit_breaker.enabled)}`);
+  lines.push(
+    `consecutive_failures = ${Math.max(1, service.circuit_breaker.consecutive_failures)}`
+  );
+  lines.push(`open_ms = ${Math.max(1, service.circuit_breaker.open_ms)}`);
+  lines.push('');
+  const upstreams = service.upstreams.map((u) => renderUpstream(u, 'service')).join('\n\n');
+  return `${lines.join('\n')}${upstreams}`;
+};
+
 const renderRoute = (route: RouteConfig): string => {
   const lines = ['[[route]]'];
   lines.push(`name = "${esc(route.name)}"`);
+  lines.push(`service = "${esc(route.service)}"`);
   if (route.host.trim()) {
     lines.push(`host = "${esc(route.host)}"`);
   }
   lines.push(`path_prefix = "${esc(route.path_prefix || '/')}"`);
   lines.push(`is_default = ${toTomlBool(route.is_default)}`);
-  lines.push(`lb = "${route.lb}"`);
-  lines.push(`max_retries = ${Math.max(0, route.max_retries)}`);
-  lines.push(`retry_backoff_ms = ${Math.max(0, route.retry_backoff_ms)}`);
-  lines.push('');
-  lines.push('[route.circuit_breaker]');
-  lines.push(`enabled = ${toTomlBool(route.circuit_breaker.enabled)}`);
-  lines.push(
-    `consecutive_failures = ${Math.max(1, route.circuit_breaker.consecutive_failures)}`
-  );
-  lines.push(`open_ms = ${Math.max(1, route.circuit_breaker.open_ms)}`);
-  lines.push('');
-
-  const upstreams = route.upstreams.map(renderUpstream).join('\n\n');
-  return `${lines.join('\n')}${upstreams}`;
+  if (route.methods.length > 0) {
+    lines.push(`methods = ${formatArray(route.methods)}`);
+  }
+  return lines.join('\n');
 };
 
 export const encodeToml = (config: PrxConfig): string => {
@@ -94,6 +103,12 @@ export const encodeToml = (config: PrxConfig): string => {
   lines.push(`access_log = ${toTomlBool(config.observability.access_log)}`);
   if (config.observability.prometheus_listen.trim()) {
     lines.push(`prometheus_listen = "${esc(config.observability.prometheus_listen)}"`);
+  }
+
+  const serviceBlocks = config.services.map(renderService);
+  if (serviceBlocks.length > 0) {
+    lines.push('');
+    lines.push(serviceBlocks.join('\n\n'));
   }
 
   const routeBlocks = config.routes.map(renderRoute);

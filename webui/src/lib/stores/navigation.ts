@@ -4,7 +4,7 @@ import { writable, derived, get } from 'svelte/store';
 // Types
 // ---------------------------------------------------------------------------
 
-export type NavPage = 'dashboard' | 'routes' | 'settings';
+export type NavPage = 'dashboard' | 'services' | 'routes' | 'settings';
 
 export interface NavItem {
   id: NavPage;
@@ -23,6 +23,7 @@ export interface NavigationState {
 
 export const navItems: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '◉' },
+  { id: 'services', label: 'Services', icon: '◆' },
   { id: 'routes', label: 'Routes', icon: '⇌' },
   { id: 'settings', label: 'Settings', icon: '⚙' },
 ];

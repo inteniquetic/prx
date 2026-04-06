@@ -16,22 +16,41 @@ use crate::config::{LbStrategy, PrxConfig};
 #[derive(Debug)]
 pub struct RuntimeConfig {
     routes: Vec<RouteRuntime>,
+    services: Vec<ServiceRuntime>,
 }
 
 impl RuntimeConfig {
     pub fn from_config(config: PrxConfig) -> Self {
+        // Build services first with their upstreams
+        let services = config
+            .services
+            .into_iter()
+            .map(ServiceRuntime::from_config)
+            .collect::<Vec<_>>();
+
+        // Build a name-to-index map for service resolution
+        let service_index: std::collections::HashMap<String, usize> = services
+            .iter()
+            .enumerate()
+            .map(|(idx, svc)| (svc.name.clone(), idx))
+            .collect();
+
+        // Build routes, resolving service names to indices
         let mut routes = config
             .routes
             .into_iter()
-            .map(RouteRuntime::from_config)
+            .map(|route| RouteRuntime::from_config(route, &service_index))
             .collect::<Vec<_>>();
+
+        // Sort routes by path_prefix length (longest first) for matching
         routes.sort_by(|a, b| {
             b.path_prefix
                 .len()
                 .cmp(&a.path_prefix.len())
                 .then_with(|| a.name.cmp(&b.name))
         });
-        Self { routes }
+
+        Self { routes, services }
     }
 
     pub fn select_route(&self, host: &str, path: &str) -> Option<usize> {
@@ -59,8 +78,14 @@ impl RuntimeConfig {
         self.routes.get(idx)
     }
 
+    pub fn service(&self, idx: usize) -> Option<&ServiceRuntime> {
+        self.services.get(idx)
+    }
+
     pub fn is_ready(&self) -> bool {
-        self.routes.iter().all(RouteRuntime::has_available_upstream)
+        self.services
+            .iter()
+            .all(ServiceRuntime::has_available_upstream)
     }
 }
 
@@ -87,38 +112,26 @@ pub struct RouteRuntime {
     pub host: Option<String>,
     pub path_prefix: String,
     pub is_default: bool,
-    pub lb: LbStrategy,
-    pub max_retries: usize,
-    pub retry_backoff_ms: u64,
-    pub circuit_breaker: CircuitBreakerRuntime,
-    pub upstreams: Vec<UpstreamRuntime>,
-    ring: Vec<usize>,
-    rr_cursor: Arc<AtomicUsize>,
+    pub service_idx: usize,
 }
 
 impl RouteRuntime {
-    fn from_config(config: crate::config::RouteConfig) -> Self {
+    fn from_config(
+        config: crate::config::RouteConfig,
+        service_index: &std::collections::HashMap<String, usize>,
+    ) -> Self {
         let host = config.host.as_deref().map(normalize_host);
-        let circuit_breaker = CircuitBreakerRuntime::from_config(&config.circuit_breaker);
-        let upstreams = config
-            .upstreams
-            .into_iter()
-            .map(UpstreamRuntime::from_config)
-            .collect::<Vec<_>>();
-        let ring = build_selection_ring(&upstreams);
+        let service_idx = service_index
+            .get(&config.service)
+            .copied()
+            .expect("route references a service that was not found in service_index");
 
         Self {
             name: config.name,
             host,
             path_prefix: config.path_prefix,
             is_default: config.is_default,
-            lb: config.lb,
-            max_retries: config.max_retries,
-            retry_backoff_ms: config.retry_backoff_ms,
-            circuit_breaker,
-            upstreams,
-            ring,
-            rr_cursor: Arc::new(AtomicUsize::new(0)),
+            service_idx,
         }
     }
 
@@ -131,6 +144,41 @@ impl RouteRuntime {
             request_host == suffix || request_host.ends_with(&format!(".{suffix}"))
         } else {
             pattern == request_host
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ServiceRuntime {
+    pub name: String,
+    pub lb: LbStrategy,
+    pub max_retries: usize,
+    pub retry_backoff_ms: u64,
+    pub circuit_breaker: CircuitBreakerRuntime,
+    pub upstreams: Vec<UpstreamRuntime>,
+    ring: Vec<usize>,
+    rr_cursor: Arc<AtomicUsize>,
+}
+
+impl ServiceRuntime {
+    fn from_config(config: crate::config::ServiceConfig) -> Self {
+        let circuit_breaker = CircuitBreakerRuntime::from_config(&config.circuit_breaker);
+        let upstreams = config
+            .upstreams
+            .into_iter()
+            .map(UpstreamRuntime::from_config)
+            .collect::<Vec<_>>();
+        let ring = build_selection_ring(&upstreams);
+
+        Self {
+            name: config.name,
+            lb: config.lb,
+            max_retries: config.max_retries,
+            retry_backoff_ms: config.retry_backoff_ms,
+            circuit_breaker,
+            upstreams,
+            ring,
+            rr_cursor: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -346,7 +394,8 @@ fn now_epoch_ms() -> u64 {
 mod tests {
     use super::*;
     use crate::config::{
-        CircuitBreakerConfig, ObservabilityConfig, RouteConfig, ServerConfig, UpstreamConfig,
+        CircuitBreakerConfig, ObservabilityConfig, RouteConfig, ServerConfig, ServiceConfig,
+        UpstreamConfig,
     };
 
     fn upstream(addr: &str) -> UpstreamConfig {
@@ -365,23 +414,30 @@ mod tests {
         }
     }
 
-    fn route(
+    fn service(
         name: &str,
-        host: Option<&str>,
-        path_prefix: &str,
-        is_default: bool,
+        lb: LbStrategy,
+        max_retries: usize,
         upstreams: Vec<UpstreamConfig>,
-    ) -> RouteConfig {
-        RouteConfig {
+    ) -> ServiceConfig {
+        ServiceConfig {
             name: name.to_string(),
-            host: host.map(ToString::to_string),
-            path_prefix: path_prefix.to_string(),
-            is_default,
-            lb: LbStrategy::RoundRobin,
-            max_retries: 0,
+            lb,
+            max_retries,
             retry_backoff_ms: 0,
             circuit_breaker: no_breaker(),
             upstreams,
+        }
+    }
+
+    fn route(name: &str, service: &str, host: Option<&str>, path_prefix: &str, is_default: bool) -> RouteConfig {
+        RouteConfig {
+            name: name.to_string(),
+            service: service.to_string(),
+            host: host.map(ToString::to_string),
+            path_prefix: path_prefix.to_string(),
+            methods: Vec::new(),
+            is_default,
         }
     }
 
@@ -389,39 +445,37 @@ mod tests {
         CircuitBreakerConfig::default()
     }
 
-    fn runtime_from_routes(routes: Vec<RouteConfig>) -> RuntimeConfig {
+    fn runtime_from_parts(services: Vec<ServiceConfig>, routes: Vec<RouteConfig>) -> RuntimeConfig {
         RuntimeConfig::from_config(PrxConfig {
             server: ServerConfig::default(),
             observability: ObservabilityConfig::default(),
+            services,
             routes,
         })
     }
 
     #[test]
     fn select_route_returns_none_when_no_route_matches_and_no_default() {
-        let runtime = runtime_from_routes(vec![route(
-            "api",
-            Some("api.local"),
-            "/api",
-            false,
-            vec![upstream("127.0.0.1:9000")],
-        )]);
+        let runtime = runtime_from_parts(
+            vec![service("api", LbStrategy::RoundRobin, 0, vec![upstream("127.0.0.1:9000")])],
+            vec![route("api", "api", Some("api.local"), "/api", false)],
+        );
 
         assert_eq!(runtime.select_route("www.local", "/"), None);
     }
 
     #[test]
     fn select_route_uses_default_route_when_present() {
-        let runtime = runtime_from_routes(vec![
-            route(
-                "api",
-                Some("api.local"),
-                "/api",
-                false,
-                vec![upstream("127.0.0.1:9000")],
-            ),
-            route("default", None, "/", true, vec![upstream("127.0.0.1:9001")]),
-        ]);
+        let runtime = runtime_from_parts(
+            vec![
+                service("api", LbStrategy::RoundRobin, 0, vec![upstream("127.0.0.1:9000")]),
+                service("default", LbStrategy::RoundRobin, 0, vec![upstream("127.0.0.1:9001")]),
+            ],
+            vec![
+                route("api", "api", Some("api.local"), "/api", false),
+                route("default", "default", None, "/", true),
+            ],
+        );
 
         let idx = runtime
             .select_route("no-match.local", "/anything")
@@ -431,24 +485,22 @@ mod tests {
 
     #[test]
     fn next_upstream_skips_attempted_candidate_for_failover() {
-        let mut hash_route = route(
-            "default",
-            None,
-            "/",
-            true,
-            vec![upstream("127.0.0.1:9100"), upstream("127.0.0.1:9101")],
+        let runtime = runtime_from_parts(
+            vec![service("default", LbStrategy::Hash, 1, vec![
+                upstream("127.0.0.1:9100"),
+                upstream("127.0.0.1:9101"),
+            ])],
+            vec![route("default", "default", None, "/", true)],
         );
-        hash_route.lb = LbStrategy::Hash;
-        hash_route.max_retries = 1;
-        let runtime = runtime_from_routes(vec![hash_route]);
 
-        let idx = runtime
+        let route_idx = runtime
             .select_route("example.local", "/")
             .expect("route selected");
-        let route = runtime.route(idx).expect("route exists");
+        let route = runtime.route(route_idx).expect("route exists");
+        let svc = runtime.service(route.service_idx).expect("service exists");
 
-        let (first_idx, _) = route.next_upstream(0, &[]).expect("initial upstream");
-        let (second_idx, _) = route
+        let (first_idx, _) = svc.next_upstream(0, &[]).expect("initial upstream");
+        let (second_idx, _) = svc
             .next_upstream(0, &[first_idx])
             .expect("failover upstream");
 
@@ -467,27 +519,24 @@ mod tests {
             consecutive_failures: 1,
             open_ms: 60_000,
         };
-        let mut cb_route = route(
-            "default",
-            None,
-            "/",
-            true,
-            vec![upstream("127.0.0.1:9200"), upstream("127.0.0.1:9201")],
-        );
-        cb_route.max_retries = 1;
-        cb_route.circuit_breaker = breaker;
-        let runtime = runtime_from_routes(vec![cb_route]);
+        let svc = ServiceConfig {
+            name: "default".to_string(),
+            lb: LbStrategy::RoundRobin,
+            max_retries: 1,
+            retry_backoff_ms: 0,
+            circuit_breaker: breaker,
+            upstreams: vec![upstream("127.0.0.1:9200"), upstream("127.0.0.1:9201")],
+        };
+        let runtime = runtime_from_parts(vec![svc], vec![route("default", "default", None, "/", true)]);
 
-        let route_idx = runtime
-            .select_route("example.local", "/")
-            .expect("route selected");
-        let route = runtime.route(route_idx).expect("route exists");
+        let route = runtime.route(0).expect("route exists");
+        let service = runtime.service(route.service_idx).expect("service exists");
 
-        let opened = route.mark_upstream_failure(0);
+        let opened = service.mark_upstream_failure(0);
         assert!(opened);
-        assert!(route.upstreams[0].is_circuit_open());
+        assert!(service.upstreams[0].is_circuit_open());
 
-        let (next_idx, _) = route.next_upstream(0, &[]).expect("next upstream");
+        let (next_idx, _) = service.next_upstream(0, &[]).expect("next upstream");
         assert_eq!(next_idx, 1);
     }
 
@@ -498,14 +547,48 @@ mod tests {
             consecutive_failures: 1,
             open_ms: 60_000,
         };
-        let mut cb_route = route("default", None, "/", true, vec![upstream("127.0.0.1:9300")]);
-        cb_route.max_retries = 1;
-        cb_route.circuit_breaker = breaker;
-        let runtime = runtime_from_routes(vec![cb_route]);
+        let svc = ServiceConfig {
+            name: "default".to_string(),
+            lb: LbStrategy::RoundRobin,
+            max_retries: 1,
+            retry_backoff_ms: 0,
+            circuit_breaker: breaker,
+            upstreams: vec![upstream("127.0.0.1:9300")],
+        };
+        let runtime = runtime_from_parts(vec![svc], vec![route("default", "default", None, "/", true)]);
 
         let route = runtime.route(0).expect("route exists");
+        let service = runtime.service(route.service_idx).expect("service exists");
         assert!(runtime.is_ready());
-        route.mark_upstream_failure(0);
+        service.mark_upstream_failure(0);
         assert!(!runtime.is_ready());
+    }
+
+    #[test]
+    fn route_resolves_correct_service_index() {
+        let runtime = runtime_from_parts(
+            vec![
+                service("first", LbStrategy::RoundRobin, 0, vec![upstream("127.0.0.1:8001")]),
+                service("second", LbStrategy::RoundRobin, 0, vec![upstream("127.0.0.1:8002")]),
+            ],
+            vec![
+                route("r1", "second", None, "/a", false),
+                route("r2", "first", None, "/b", false),
+            ],
+        );
+
+        let r1 = runtime.route(0).expect("r1 exists");
+        assert_eq!(r1.service_idx, 1); // "second" is at index 1
+        assert_eq!(
+            runtime.service(r1.service_idx).unwrap().name,
+            "second"
+        );
+
+        let r2 = runtime.route(1).expect("r2 exists");
+        assert_eq!(r2.service_idx, 0); // "first" is at index 0
+        assert_eq!(
+            runtime.service(r2.service_idx).unwrap().name,
+            "first"
+        );
     }
 }

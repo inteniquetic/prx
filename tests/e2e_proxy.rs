@@ -82,9 +82,10 @@ struct PrxProcess {
 }
 
 impl PrxProcess {
-    fn spawn(config_path: &Path) -> Self {
+    fn spawn(config_path: &Path, admin_port: u16) -> Self {
         let child = Command::new(resolve_prx_binary())
             .env("PRX_CONFIG", config_path)
+            .env("PRX_ADMIN_LISTEN", format!("127.0.0.1:{admin_port}"))
             .env("RUST_LOG", "error")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -185,21 +186,25 @@ ready_path = "/readyz"
 log_level = "error"
 access_log = false
 
-[[route]]
+[[service]]
 name = "app"
-host = "app.local"
-path_prefix = "/"
-is_default = false
 lb = "round_robin"
 max_retries = 0
 
-[[route.upstream]]
+[[service.upstream]]
 addr = "127.0.0.1:{upstream_port}"
+
+[[route]]
+name = "app"
+service = "app"
+host = "app.local"
+path_prefix = "/"
 "#
     );
     let cfg_path = write_config(&tmp, &cfg);
+    let admin_port = reserve_port();
 
-    let prx = PrxProcess::spawn(&cfg_path);
+    let prx = PrxProcess::spawn(&cfg_path, admin_port);
     prx.wait_until_listening(proxy_port);
     let response = send_get(proxy_port, "app.local", "/");
 
@@ -224,21 +229,25 @@ listen = ["127.0.0.1:{proxy_port}"]
 log_level = "error"
 access_log = false
 
-[[route]]
+[[service]]
 name = "only"
-host = "only.local"
-path_prefix = "/"
-is_default = false
 lb = "round_robin"
 max_retries = 0
 
-[[route.upstream]]
+[[service.upstream]]
 addr = "127.0.0.1:{upstream_port}"
+
+[[route]]
+name = "only"
+service = "only"
+host = "only.local"
+path_prefix = "/"
 "#
     );
     let cfg_path = write_config(&tmp, &cfg);
+    let admin_port = reserve_port();
 
-    let prx = PrxProcess::spawn(&cfg_path);
+    let prx = PrxProcess::spawn(&cfg_path, admin_port);
     prx.wait_until_listening(proxy_port);
     let response = send_get(proxy_port, "other.local", "/");
 
@@ -260,25 +269,29 @@ listen = ["127.0.0.1:{proxy_port}"]
 log_level = "error"
 access_log = false
 
-[[route]]
+[[service]]
 name = "app"
-host = "app.local"
-path_prefix = "/"
-is_default = false
 lb = "round_robin"
 max_retries = 1
 retry_backoff_ms = 0
 
-[[route.upstream]]
+[[service.upstream]]
 addr = "127.0.0.1:{unreachable_port}"
 
-[[route.upstream]]
+[[service.upstream]]
 addr = "127.0.0.1:{healthy_port}"
+
+[[route]]
+name = "app"
+service = "app"
+host = "app.local"
+path_prefix = "/"
 "#
     );
     let cfg_path = write_config(&tmp, &cfg);
+    let admin_port = reserve_port();
 
-    let prx = PrxProcess::spawn(&cfg_path);
+    let prx = PrxProcess::spawn(&cfg_path, admin_port);
     prx.wait_until_listening(proxy_port);
     let response = send_get(proxy_port, "app.local", "/");
 
@@ -305,21 +318,25 @@ ready_path = "/readyz"
 log_level = "error"
 access_log = false
 
-[[route]]
+[[service]]
 name = "app"
-host = "app.local"
-path_prefix = "/"
-is_default = false
 lb = "round_robin"
 max_retries = 0
 
-[[route.upstream]]
+[[service.upstream]]
 addr = "127.0.0.1:{upstream_port}"
+
+[[route]]
+name = "app"
+service = "app"
+host = "app.local"
+path_prefix = "/"
 "#
     );
     let cfg_path = write_config(&tmp, &cfg);
+    let admin_port = reserve_port();
 
-    let prx = PrxProcess::spawn(&cfg_path);
+    let prx = PrxProcess::spawn(&cfg_path, admin_port);
     prx.wait_until_listening(proxy_port);
 
     let health = send_get(proxy_port, "any.local", "/healthz");

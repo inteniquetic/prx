@@ -27,16 +27,22 @@ export interface CircuitBreakerConfig {
   open_ms: number;
 }
 
-export interface RouteConfig {
+export interface ServiceConfig {
   name: string;
-  host: string;
-  path_prefix: string;
-  is_default: boolean;
   lb: LbStrategy;
   max_retries: number;
   retry_backoff_ms: number;
   circuit_breaker: CircuitBreakerConfig;
   upstreams: UpstreamConfig[];
+}
+
+export interface RouteConfig {
+  name: string;
+  service: string;
+  host: string;
+  path_prefix: string;
+  methods: string[];
+  is_default: boolean;
 }
 
 export interface PrxConfig {
@@ -55,6 +61,7 @@ export interface PrxConfig {
     access_log: boolean;
     prometheus_listen: string;
   };
+  services: ServiceConfig[];
   routes: RouteConfig[];
 }
 
@@ -78,16 +85,22 @@ export const createDefaultCircuitBreaker = (): CircuitBreakerConfig => ({
   open_ms: 30000
 });
 
-export const createDefaultRoute = (idx: number): RouteConfig => ({
-  name: `route-${idx}`,
-  host: '',
-  path_prefix: '/',
-  is_default: idx === 1,
+export const createDefaultService = (idx: number): ServiceConfig => ({
+  name: `service-${idx}`,
   lb: 'round_robin',
   max_retries: 0,
   retry_backoff_ms: 0,
   circuit_breaker: createDefaultCircuitBreaker(),
   upstreams: [createDefaultUpstream()]
+});
+
+export const createDefaultRoute = (idx: number, serviceName?: string): RouteConfig => ({
+  name: `route-${idx}`,
+  service: serviceName ?? 'service-1',
+  host: '',
+  path_prefix: '/',
+  methods: [],
+  is_default: idx === 1
 });
 
 export const createDefaultConfig = (): PrxConfig => ({
@@ -106,5 +119,6 @@ export const createDefaultConfig = (): PrxConfig => ({
     access_log: true,
     prometheus_listen: ''
   },
+  services: [createDefaultService(1)],
   routes: [createDefaultRoute(1)]
 });

@@ -1,14 +1,16 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PrxConfig {
     #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
     pub observability: ObservabilityConfig,
+    #[serde(rename = "service", default)]
+    pub services: Vec<ServiceConfig>,
     #[serde(rename = "route", default)]
     pub routes: Vec<RouteConfig>,
 }
@@ -46,16 +48,51 @@ impl PrxConfig {
             bail!("server.health_path and server.ready_path must be different");
         }
 
+        // Validate services
+        let mut service_names = std::collections::HashSet::new();
+        for service in &self.services {
+            if service_names.contains(&service.name) {
+                bail!("duplicate service name '{}'", service.name);
+            }
+            service_names.insert(service.name.clone());
+
+            if service.upstreams.is_empty() {
+                bail!(
+                    "service '{}' must include at least one [[service.upstream]]",
+                    service.name
+                );
+            }
+
+            for upstream in &service.upstreams {
+                if upstream.addr.trim().is_empty() {
+                    bail!(
+                        "service '{}' includes upstream with empty addr",
+                        service.name
+                    );
+                }
+            }
+
+            if service.circuit_breaker.enabled {
+                if service.circuit_breaker.consecutive_failures == 0 {
+                    bail!(
+                        "service '{}' circuit_breaker.consecutive_failures must be > 0",
+                        service.name
+                    );
+                }
+                if service.circuit_breaker.open_ms == 0 {
+                    bail!(
+                        "service '{}' circuit_breaker.open_ms must be > 0",
+                        service.name
+                    );
+                }
+            }
+        }
+
+        // Validate routes
         let mut defaults = 0usize;
         for route in &self.routes {
             if route.is_default {
                 defaults += 1;
-            }
-            if route.upstreams.is_empty() {
-                bail!(
-                    "route '{}' must include at least one [[route.upstream]]",
-                    route.name
-                );
             }
 
             if route.path_prefix.is_empty() {
@@ -65,22 +102,12 @@ impl PrxConfig {
                 bail!("route '{}' path_prefix must start with '/'", route.name);
             }
 
-            for upstream in &route.upstreams {
-                if upstream.addr.trim().is_empty() {
-                    bail!("route '{}' includes upstream with empty addr", route.name);
-                }
-            }
-
-            if route.circuit_breaker.enabled {
-                if route.circuit_breaker.consecutive_failures == 0 {
-                    bail!(
-                        "route '{}' circuit_breaker.consecutive_failures must be > 0",
-                        route.name
-                    );
-                }
-                if route.circuit_breaker.open_ms == 0 {
-                    bail!("route '{}' circuit_breaker.open_ms must be > 0", route.name);
-                }
+            if !service_names.contains(&route.service) {
+                bail!(
+                    "route '{}' references unknown service '{}'",
+                    route.name,
+                    route.service
+                );
             }
         }
 
@@ -92,7 +119,7 @@ impl PrxConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServerConfig {
     #[serde(default = "default_listen")]
     pub listen: Vec<String>,
@@ -143,7 +170,7 @@ fn default_ready_path() -> String {
     "/readyz".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TlsConfig {
     pub listen: String,
     pub cert_path: String,
@@ -152,7 +179,7 @@ pub struct TlsConfig {
     pub enable_h2: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ObservabilityConfig {
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -180,16 +207,10 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct RouteConfig {
-    #[serde(default = "default_route_name")]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ServiceConfig {
+    #[serde(default = "default_service_name")]
     pub name: String,
-    #[serde(default)]
-    pub host: Option<String>,
-    #[serde(default = "default_path_prefix")]
-    pub path_prefix: String,
-    #[serde(default)]
-    pub is_default: bool,
     #[serde(default)]
     pub lb: LbStrategy,
     #[serde(default)]
@@ -202,6 +223,25 @@ pub struct RouteConfig {
     pub upstreams: Vec<UpstreamConfig>,
 }
 
+fn default_service_name() -> String {
+    "default".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RouteConfig {
+    #[serde(default = "default_route_name")]
+    pub name: String,
+    pub service: String,
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default = "default_path_prefix")]
+    pub path_prefix: String,
+    #[serde(default)]
+    pub methods: Vec<String>,
+    #[serde(default)]
+    pub is_default: bool,
+}
+
 fn default_route_name() -> String {
     "default".to_string()
 }
@@ -210,7 +250,7 @@ fn default_path_prefix() -> String {
     "/".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LbStrategy {
     #[default]
@@ -219,7 +259,7 @@ pub enum LbStrategy {
     Hash,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CircuitBreakerConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -239,6 +279,19 @@ impl Default for CircuitBreakerConfig {
     }
 }
 
+impl std::str::FromStr for LbStrategy {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "round_robin" => Ok(LbStrategy::RoundRobin),
+            "random" => Ok(LbStrategy::Random),
+            "hash" => Ok(LbStrategy::Hash),
+            _ => Err(format!("invalid load balancing strategy: {}", s)),
+        }
+    }
+}
+
 fn default_cb_failures() -> usize {
     3
 }
@@ -247,7 +300,7 @@ fn default_cb_open_ms() -> u64 {
     30_000
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UpstreamConfig {
     pub addr: String,
     #[serde(default)]
@@ -280,39 +333,56 @@ fn default_weight() -> u16 {
 mod tests {
     use super::*;
 
-    fn valid_route() -> RouteConfig {
-        RouteConfig {
-            name: "default".to_string(),
-            host: None,
-            path_prefix: "/".to_string(),
-            is_default: true,
+    fn valid_upstream(addr: &str) -> UpstreamConfig {
+        UpstreamConfig {
+            addr: addr.to_string(),
+            tls: false,
+            sni: None,
+            weight: 1,
+            verify_cert: None,
+            verify_hostname: None,
+            connect_timeout_ms: None,
+            total_connect_timeout_ms: None,
+            read_timeout_ms: None,
+            write_timeout_ms: None,
+            idle_timeout_ms: None,
+        }
+    }
+
+    fn valid_service(name: &str) -> ServiceConfig {
+        ServiceConfig {
+            name: name.to_string(),
             lb: LbStrategy::RoundRobin,
             max_retries: 0,
             retry_backoff_ms: 0,
             circuit_breaker: CircuitBreakerConfig::default(),
-            upstreams: vec![UpstreamConfig {
-                addr: "127.0.0.1:8081".to_string(),
-                tls: false,
-                sni: None,
-                weight: 1,
-                verify_cert: None,
-                verify_hostname: None,
-                connect_timeout_ms: None,
-                total_connect_timeout_ms: None,
-                read_timeout_ms: None,
-                write_timeout_ms: None,
-                idle_timeout_ms: None,
-            }],
+            upstreams: vec![valid_upstream("127.0.0.1:8081")],
+        }
+    }
+
+    fn valid_route(name: &str, service: &str) -> RouteConfig {
+        RouteConfig {
+            name: name.to_string(),
+            service: service.to_string(),
+            host: None,
+            path_prefix: "/".to_string(),
+            methods: Vec::new(),
+            is_default: true,
+        }
+    }
+
+    fn valid_config() -> PrxConfig {
+        PrxConfig {
+            server: ServerConfig::default(),
+            observability: ObservabilityConfig::default(),
+            services: vec![valid_service("default")],
+            routes: vec![valid_route("default", "default")],
         }
     }
 
     #[test]
     fn validate_rejects_invalid_health_path() {
-        let mut cfg = PrxConfig {
-            server: ServerConfig::default(),
-            observability: ObservabilityConfig::default(),
-            routes: vec![valid_route()],
-        };
+        let mut cfg = valid_config();
         cfg.server.health_path = "healthz".to_string();
 
         let err = cfg.validate().expect_err("invalid health_path should fail");
@@ -321,17 +391,52 @@ mod tests {
 
     #[test]
     fn validate_rejects_invalid_circuit_breaker_config() {
-        let mut cfg = PrxConfig {
-            server: ServerConfig::default(),
-            observability: ObservabilityConfig::default(),
-            routes: vec![valid_route()],
-        };
-        cfg.routes[0].circuit_breaker.enabled = true;
-        cfg.routes[0].circuit_breaker.consecutive_failures = 0;
+        let mut cfg = valid_config();
+        cfg.services[0].circuit_breaker.enabled = true;
+        cfg.services[0].circuit_breaker.consecutive_failures = 0;
 
         let err = cfg
             .validate()
             .expect_err("invalid circuit breaker threshold should fail");
         assert!(err.to_string().contains("consecutive_failures"));
+    }
+
+    #[test]
+    fn validate_rejects_route_with_unknown_service() {
+        let mut cfg = valid_config();
+        cfg.routes[0].service = "nonexistent".to_string();
+
+        let err = cfg
+            .validate()
+            .expect_err("route with unknown service should fail");
+        assert!(err.to_string().contains("unknown service"));
+    }
+
+    #[test]
+    fn validate_rejects_service_with_no_upstreams() {
+        let mut cfg = valid_config();
+        cfg.services[0].upstreams.clear();
+
+        let err = cfg
+            .validate()
+            .expect_err("service with no upstreams should fail");
+        assert!(err.to_string().contains("at least one"));
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_service_names() {
+        let mut cfg = valid_config();
+        cfg.services.push(valid_service("default"));
+
+        let err = cfg
+            .validate()
+            .expect_err("duplicate service names should fail");
+        assert!(err.to_string().contains("duplicate service name"));
+    }
+
+    #[test]
+    fn validate_accepts_valid_config() {
+        let cfg = valid_config();
+        cfg.validate().expect("valid config should pass");
     }
 }

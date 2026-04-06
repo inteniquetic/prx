@@ -18,59 +18,71 @@ log_level = "info"
 access_log = true
 prometheus_listen = "127.0.0.1:9090"
 
-[[route]]
-name = "grpc"
-host = "grpc.local"
-path_prefix = "/"
-is_default = false
+# ── Service: api-v1 (2 backends, round-robin) ──
+
+[[service]]
+name = "api-v1"
 lb = "round_robin"
 max_retries = 2
 retry_backoff_ms = 50
 
-[route.circuit_breaker]
+[service.circuit_breaker]
 enabled = true
 consecutive_failures = 3
 open_ms = 30000
-[[route.upstream]]
-addr = "127.0.0.1:50051"
-tls = false
-weight = 1
-connect_timeout_ms = 1000
-read_timeout_ms = 30000
-write_timeout_ms = 30000
-idle_timeout_ms = 30000
 
-[[route.upstream]]
-addr = "127.0.0.1:50052"
-tls = false
-weight = 1
-connect_timeout_ms = 1000
-read_timeout_ms = 30000
-write_timeout_ms = 30000
-idle_timeout_ms = 30000
-
-[[route]]
-name = "web"
-host = "*.local"
-path_prefix = "/"
-is_default = true
-lb = "hash"
-max_retries = 1
-retry_backoff_ms = 0
-
-[route.circuit_breaker]
-enabled = true
-consecutive_failures = 3
-open_ms = 30000
-[[route.upstream]]
-addr = "jsonplaceholder.typicode.com:443"
-tls = true
-sni = "jsonplaceholder.typicode.com"
-weight = 2
-connect_timeout_ms = 1000
-
-[[route.upstream]]
+[[service.upstream]]
 addr = "127.0.0.1:3001"
 tls = false
 weight = 1
 connect_timeout_ms = 1000
+read_timeout_ms = 5000
+write_timeout_ms = 5000
+
+[[service.upstream]]
+addr = "127.0.0.1:3002"
+tls = false
+weight = 1
+connect_timeout_ms = 1000
+read_timeout_ms = 5000
+write_timeout_ms = 5000
+
+# ── Service: api-v2 (single backend) ──
+
+[[service]]
+name = "api-v2"
+lb = "round_robin"
+max_retries = 0
+retry_backoff_ms = 0
+
+[service.circuit_breaker]
+enabled = false
+
+[[service.upstream]]
+addr = "127.0.0.1:3001"
+tls = false
+weight = 1
+connect_timeout_ms = 1000
+read_timeout_ms = 5000
+write_timeout_ms = 5000
+
+# ── Routes ──
+
+[[route]]
+name = "api-v1-route"
+service = "api-v1"
+host = "api.local"
+path_prefix = "/v1"
+
+[[route]]
+name = "api-v2-route"
+service = "api-v2"
+host = "api.local"
+path_prefix = "/v2"
+
+[[route]]
+name = "default-route"
+service = "api-v1"
+host = ""
+path_prefix = "/"
+is_default = true

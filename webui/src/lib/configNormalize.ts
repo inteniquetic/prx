@@ -2,19 +2,26 @@ import {
   createDefaultCircuitBreaker,
   createDefaultConfig,
   createDefaultRoute,
+  createDefaultService,
   createDefaultUpstream,
   type LbStrategy,
   type PrxConfig,
   type RouteConfig,
+  type ServiceConfig,
   type UpstreamConfig
 } from './types/config';
 
 type PartialUpstream = Partial<UpstreamConfig>;
 
-type PartialRoute = Partial<RouteConfig> & {
+type PartialService = Partial<ServiceConfig> & {
   upstream?: PartialUpstream[];
   upstreams?: PartialUpstream[];
+  circuit_breaker?: Partial<ServiceConfig['circuit_breaker']>;
+};
+
+type PartialRoute = Partial<RouteConfig> & {
   host?: string | null;
+  methods?: string[] | null;
 };
 
 type PartialObservability = Partial<PrxConfig['observability']> & {
@@ -22,6 +29,8 @@ type PartialObservability = Partial<PrxConfig['observability']> & {
 };
 
 type ConfigInput = Partial<PrxConfig> & {
+  service?: PartialService[];
+  services?: PartialService[];
   route?: PartialRoute[];
   routes?: PartialRoute[];
   observability?: PartialObservability;
@@ -72,35 +81,57 @@ const normalizeUpstream = (upstream: PartialUpstream): UpstreamConfig => {
   };
 };
 
-const normalizeRoute = (route: PartialRoute, routeIndex: number): RouteConfig => {
-  const defaults = createDefaultRoute(routeIndex + 1);
+const normalizeService = (service: PartialService, serviceIndex: number): ServiceConfig => {
+  const defaults = createDefaultService(serviceIndex + 1);
   const upstreamSource =
-    Array.isArray(route.upstreams) && route.upstreams.length > 0
-      ? route.upstreams
-      : Array.isArray(route.upstream) && route.upstream.length > 0
-        ? route.upstream
+    Array.isArray(service.upstreams) && service.upstreams.length > 0
+      ? service.upstreams
+      : Array.isArray(service.upstream) && service.upstream.length > 0
+        ? service.upstream
         : [createDefaultUpstream()];
 
   return {
     ...defaults,
-    ...route,
-    name: String(route.name ?? defaults.name),
-    host: route.host == null ? '' : String(route.host),
-    path_prefix: String(route.path_prefix ?? defaults.path_prefix),
-    is_default: route.is_default ?? defaults.is_default,
-    lb: normalizeLb(route.lb),
-    max_retries: parseNullableNumber(route.max_retries) ?? defaults.max_retries,
-    retry_backoff_ms: parseNullableNumber(route.retry_backoff_ms) ?? defaults.retry_backoff_ms,
+    ...service,
+    name: String(service.name ?? defaults.name),
+    lb: normalizeLb(service.lb),
+    max_retries: parseNullableNumber(service.max_retries) ?? defaults.max_retries,
+    retry_backoff_ms: parseNullableNumber(service.retry_backoff_ms) ?? defaults.retry_backoff_ms,
     circuit_breaker: {
       ...createDefaultCircuitBreaker(),
-      ...(route.circuit_breaker ?? {})
+      ...(service.circuit_breaker ?? {})
     },
     upstreams: upstreamSource.map(normalizeUpstream)
   };
 };
 
+const normalizeRoute = (route: PartialRoute, routeIndex: number): RouteConfig => {
+  const defaults = createDefaultRoute(routeIndex + 1);
+  const methods = Array.isArray(route.methods)
+    ? route.methods.filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+    : [];
+
+  return {
+    ...defaults,
+    ...route,
+    name: String(route.name ?? defaults.name),
+    service: route.service == null ? defaults.service : String(route.service),
+    host: route.host == null ? '' : String(route.host),
+    path_prefix: String(route.path_prefix ?? defaults.path_prefix),
+    methods,
+    is_default: route.is_default ?? defaults.is_default
+  };
+};
+
 export const normalizePrxConfig = (input: ConfigInput): PrxConfig => {
   const defaults = createDefaultConfig();
+  const serviceSource =
+    Array.isArray(input.services) && input.services.length > 0
+      ? input.services
+      : Array.isArray(input.service) && input.service.length > 0
+        ? input.service
+        : defaults.services;
+
   const routeSource =
     Array.isArray(input.routes) && input.routes.length > 0
       ? input.routes
@@ -148,6 +179,7 @@ export const normalizePrxConfig = (input: ConfigInput): PrxConfig => {
           ? ''
           : String(input.observability.prometheus_listen)
     },
+    services: serviceSource.map(normalizeService),
     routes: routeSource.map(normalizeRoute)
   };
 };

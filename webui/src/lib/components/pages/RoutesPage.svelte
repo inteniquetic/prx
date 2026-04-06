@@ -2,7 +2,10 @@
   import { createEventDispatcher } from 'svelte';
   import AppLayout from '../layout/AppLayout.svelte';
   import RouteDetailPanel from '../routes/RouteDetailPanel.svelte';
-  import type { PrxConfig, RouteConfig } from '../../types/config';
+  import RouteFormModal from '../routes/RouteFormModal.svelte';
+  import { createRoute, updateRoute, deleteRoute, loadConfigFromAdmin } from '../../api/admin';
+  import { configStore } from '../../stores/config';
+  import type { PrxConfig, RouteConfig, ServiceConfig } from '../../types/config';
   import type { RouteHealthItem } from '../../api/admin';
   import type { NavPage } from '../../stores/navigation';
 
@@ -20,11 +23,6 @@
   // ---------------------------------------------------------------------------
 
   const dispatch = createEventDispatcher<{
-    addRoute: void;
-    viewRoute: number;
-    editRoute: number;
-    deleteRoute: number;
-    duplicateRoute: number;
     refreshHealth: void;
     navigate: NavPage;
   }>();
@@ -38,12 +36,17 @@
   let detailMode: 'view' | 'edit' = 'edit';
   let currentPage = 1;
   const pageSize = 10;
+  let isSaving = false;
+  let errorMessage = '';
+  let showCreateModal = false;
+  let isRefreshing = false;
 
   // ---------------------------------------------------------------------------
   // Computed Values
   // ---------------------------------------------------------------------------
 
   $: routes = config.routes ?? [];
+  $: services = config.services ?? [];
 
   interface FilteredRoute {
     route: RouteConfig;
@@ -59,7 +62,8 @@
         route.name.toLowerCase().includes(query) ||
         route.host.toLowerCase().includes(query) ||
         route.path_prefix.toLowerCase().includes(query) ||
-        route.lb.toLowerCase().includes(query)
+        route.service.toLowerCase().includes(query) ||
+        route.methods.some((m) => m.toLowerCase().includes(query))
       );
     });
 
@@ -85,7 +89,30 @@
   // ---------------------------------------------------------------------------
 
   $: isDetailView = selectedRouteIndex !== null;
-  $: selectedRoute = selectedRouteIndex !== null ? routes[selectedRouteIndex] ?? null : null;
+  $: selectedRoute = selectedRouteIndex !== null
+    ? routes[selectedRouteIndex] ?? null
+    : null;
+
+  // ---------------------------------------------------------------------------
+  // API Operations
+  // ---------------------------------------------------------------------------
+
+  async function refreshConfig(): Promise<void> {
+    isRefreshing = true;
+    errorMessage = '';
+    try {
+      const newConfig = await loadConfigFromAdmin();
+      configStore.set(newConfig);
+    } catch (err) {
+      errorMessage = (err as Error).message || 'Failed to refresh configuration';
+    } finally {
+      isRefreshing = false;
+    }
+  }
+
+  function clearError(): void {
+    errorMessage = '';
+  }
 
   // ---------------------------------------------------------------------------
   // Health Helpers
@@ -94,7 +121,9 @@
   const getRouteHealth = (index: number): RouteHealthItem | null =>
     routeHealthByIndex[index] ?? null;
 
-  const routeHealthStatus = (index: number): 'up' | 'degraded' | 'down' | 'unknown' => {
+  const routeHealthStatus = (
+    index: number
+  ): 'up' | 'degraded' | 'down' | 'unknown' => {
     const health = getRouteHealth(index);
     if (!health) return 'unknown';
     if (health.reachable_upstreams === 0) return 'down';
@@ -102,62 +131,58 @@
     return health.healthy ? 'up' : 'degraded';
   };
 
-  const healthStatusLabel = (status: string): string => {
-    switch (status) {
-      case 'up': return 'UP';
-      case 'degraded': return 'DEGRADED';
-      case 'down': return 'DOWN';
-      default: return 'UNKNOWN';
-    }
-  };
-
-  const healthBadgeClass = (status: string): string => {
+  const healthDotClass = (status: string): string => {
     switch (status) {
       case 'up':
-        return 'rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-200';
+        return 'h-2 w-2 rounded-full bg-emerald-400';
       case 'degraded':
-        return 'rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-200';
+        return 'h-2 w-2 rounded-full bg-amber-400';
       case 'down':
-        return 'rounded-full border border-rose-400/40 bg-rose-500/10 px-2 py-0.5 text-xs font-semibold text-rose-200';
+        return 'h-2 w-2 rounded-full bg-rose-400';
       default:
-        return 'rounded-full border border-slate-500 bg-slate-800 px-2 py-0.5 text-xs font-semibold text-slate-300';
+        return 'h-2 w-2 rounded-full bg-slate-600';
     }
   };
-
-  const healthDotClass = (healthy: boolean): string =>
-    healthy
-      ? 'h-2 w-2 rounded-full bg-emerald-400'
-      : 'h-2 w-2 rounded-full bg-rose-400';
 
   const healthTooltip = (index: number): string => {
     const health = getRouteHealth(index);
-    if (!health) return 'Not yet checked';
-    return health.upstreams
-      .map((upstream) =>
-        upstream.healthy
-          ? `${upstream.addr}: UP (${upstream.latency_ms ?? 0}ms)`
-          : `${upstream.addr}: DOWN (${upstream.error ?? 'unreachable'})`
-      )
-      .join('\n');
+    if (!health) return 'Health not checked';
+    const reachable = health.reachable_upstreams;
+    const total = health.total_upstreams;
+    if (total === 0) return 'No upstreams';
+    return `${reachable}/${total} upstreams reachable`;
   };
 
   // ---------------------------------------------------------------------------
   // Formatting Helpers
   // ---------------------------------------------------------------------------
 
-  const formatLbStrategy = (lb: string): string => {
-    switch (lb) {
-      case 'round_robin': return 'Round Robin';
-      case 'random': return 'Random';
-      case 'hash': return 'Hash';
-      default: return lb;
-    }
+  const methodBadgeColor = (method: string): string => {
+    const upper = method.toUpperCase();
+    if (upper === 'GET') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
+    if (upper === 'POST') return 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200';
+    if (upper === 'PUT') return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
+    if (upper === 'DELETE') return 'border-rose-500/40 bg-rose-500/10 text-rose-200';
+    if (upper === 'PATCH') return 'border-violet-500/40 bg-violet-500/10 text-violet-200';
+    return 'border-slate-500/40 bg-slate-500/10 text-slate-300';
   };
 
-  const cbBadgeClass = (enabled: boolean): string =>
-    enabled
-      ? 'rounded-full border border-amber-400/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200'
-      : 'rounded-full border border-slate-600 bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500';
+  const serviceExists = (serviceName: string): boolean =>
+    services.some((s) => s.name === serviceName);
+
+  // ---------------------------------------------------------------------------
+  // Class Helpers (avoid class: with /)
+  // ---------------------------------------------------------------------------
+
+  const rowClass = (index: number): string =>
+    selectedRouteIndex === index
+      ? 'cursor-pointer transition-colors bg-cyan-500/10'
+      : 'cursor-pointer transition-colors hover:bg-slate-900/70';
+
+  const pageBtnClass = (page: number): string =>
+    page === currentPage
+      ? 'rounded-md border px-2 py-1 text-xs font-medium transition-colors border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
+      : 'rounded-md border px-2 py-1 text-xs font-medium transition-colors border-slate-600 bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200';
 
   // ---------------------------------------------------------------------------
   // Actions
@@ -168,6 +193,7 @@
   };
 
   const handleRowClick = (index: number) => {
+    detailMode = 'edit';
     selectedRouteIndex = index;
   };
 
@@ -181,24 +207,105 @@
     selectedRouteIndex = index;
   };
 
-  const handleDeleteRoute = (index: number) => {
-    dispatch('deleteRoute', index);
-    if (selectedRouteIndex === index) {
+  const handleDeleteRoute = async (index: number) => {
+    if (isSaving) return;
+    const route = routes[index];
+    if (!route) return;
+
+    isSaving = true;
+    errorMessage = '';
+    try {
+      await deleteRoute(route.name);
       selectedRouteIndex = null;
+      await refreshConfig();
+    } catch (err) {
+      errorMessage = (err as Error).message || 'Failed to delete route';
+    } finally {
+      isSaving = false;
     }
   };
 
-  const handleDuplicateRoute = (index: number) => {
-    dispatch('duplicateRoute', index);
+  const handleDuplicateRoute = async (index: number) => {
+    if (isSaving) return;
+    const originalRoute = routes[index];
+    if (!originalRoute) return;
+
+    const newRoute: RouteConfig = {
+      ...originalRoute,
+      name: `${originalRoute.name}-copy`,
+      is_default: false,
+    };
+
+    isSaving = true;
+    errorMessage = '';
+    try {
+      await createRoute(newRoute);
+      await refreshConfig();
+    } catch (err) {
+      errorMessage = (err as Error).message || 'Failed to duplicate route';
+    } finally {
+      isSaving = false;
+    }
   };
 
   const handleCloseDetail = () => {
     selectedRouteIndex = null;
+    clearError();
   };
 
-  const handleDetailDelete = (e: CustomEvent<number>) => {
-    dispatch('deleteRoute', e.detail);
-    selectedRouteIndex = null;
+  const handleDetailDelete = async (e: CustomEvent<number>) => {
+    await handleDeleteRoute(e.detail);
+  };
+
+  const handleDetailSave = async (e: CustomEvent<RouteConfig>) => {
+    if (isSaving) return;
+    const route = e.detail;
+    const originalName = routes[selectedRouteIndex ?? 0]?.name;
+    if (!originalName) return;
+
+    isSaving = true;
+    errorMessage = '';
+    try {
+      await updateRoute(originalName, route);
+      selectedRouteIndex = null;
+      await refreshConfig();
+    } catch (err) {
+      errorMessage = (err as Error).message || 'Failed to update route';
+    } finally {
+      isSaving = false;
+    }
+  };
+
+  const handleNavigateServices = () => {
+    dispatch('navigate', 'services');
+  };
+
+  // ---------------------------------------------------------------------------
+  // Create Modal Handlers
+  // ---------------------------------------------------------------------------
+
+  const handleOpenCreateModal = () => {
+    clearError();
+    showCreateModal = true;
+  };
+
+  const handleModalSave = async (e: CustomEvent<RouteConfig>) => {
+    showCreateModal = false;
+    const route = e.detail;
+    isSaving = true;
+    errorMessage = '';
+    try {
+      await createRoute(route);
+      await refreshConfig();
+    } catch (err) {
+      errorMessage = (err as Error).message || 'Failed to create route';
+    } finally {
+      isSaving = false;
+    }
+  };
+
+  const handleModalCancel = () => {
+    showCreateModal = false;
   };
 
   const goToPage = (page: number) => {
@@ -224,17 +331,26 @@
   };
 </script>
 
-<AppLayout title="Routes" subtitle="Manage your proxy routes and upstreams">
+<AppLayout title="Routes" subtitle="Manage routing rules that match requests to services">
   <svelte:fragment slot="header-actions">
     <button
-      class="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20"
-      on:click={() => dispatch('addRoute')}
+      class="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-700 hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+      disabled={isRefreshing || isSaving}
+      on:click={refreshConfig}
+      title="Refresh from server"
+    >
+      {isRefreshing ? '⟳' : '↻'} Refresh
+    </button>
+    <button
+      class="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+      disabled={isSaving}
+      on:click={handleOpenCreateModal}
     >
       + Add Route
     </button>
     <button
       class="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-      disabled={healthLoading}
+      disabled={healthLoading || isSaving}
       on:click={() => dispatch('refreshHealth')}
     >
       {healthLoading ? 'Checking...' : '↻ Check Health'}
@@ -249,8 +365,12 @@
           route={selectedRoute}
           routeIndex={selectedRouteIndex ?? 0}
           mode={detailMode}
+          services={services}
+          saving={isSaving}
+          errorMessage={errorMessage}
           on:close={handleCloseDetail}
           on:deleteRoute={handleDetailDelete}
+          on:save={handleDetailSave}
         />
       </div>
     {:else}
@@ -263,7 +383,7 @@
             <input
               type="text"
               class="w-full rounded-lg border border-slate-600 bg-slate-900 py-2.5 pl-9 pr-4 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
-              placeholder="Search by name, host, path, or LB strategy..."
+              placeholder="Search by name, host, path, service, or method..."
               value={searchQuery}
               on:input={handleSearch}
             />
@@ -283,6 +403,19 @@
           </div>
         {/if}
 
+        {#if errorMessage}
+          <div class="rounded-lg border border-rose-400/40 bg-rose-500/10 px-4 py-3 text-sm font-medium text-rose-200">
+            <span class="mr-2">⚠</span>
+            {errorMessage}
+            <button
+              class="ml-2 rounded border border-rose-400/30 bg-rose-500/10 px-2 py-0.5 text-xs text-rose-300 transition-colors hover:bg-rose-500/20"
+              on:click={clearError}
+            >
+              Dismiss
+            </button>
+          </div>
+        {/if}
+
         <!-- Routes Table -->
         <div class="overflow-hidden rounded-xl border border-slate-700 bg-slate-950/70">
           {#if filteredRoutes.length === 0}
@@ -297,7 +430,7 @@
                   Try adjusting your search terms or
                   <button
                     class="ml-1 text-cyan-400 transition-colors hover:text-cyan-300"
-                    on:click={() => searchQuery = ''}
+                    on:click={() => (searchQuery = '')}
                   >
                     clear the filter
                   </button>
@@ -308,8 +441,9 @@
                   Get started by adding your first route.
                 </p>
                 <button
-                  class="mt-4 inline-flex items-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20"
-                  on:click={() => dispatch('addRoute')}
+                  class="mt-4 inline-flex items-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isSaving}
+                  on:click={handleOpenCreateModal}
                 >
                   <span>+</span>
                   Add Route
@@ -322,29 +456,29 @@
                 <thead class="bg-slate-900 text-slate-300">
                   <tr>
                     <th class="px-4 py-3 text-left font-semibold">Name</th>
+                    <th class="px-4 py-3 text-left font-semibold">Service</th>
                     <th class="px-4 py-3 text-left font-semibold">Host</th>
                     <th class="px-4 py-3 text-left font-semibold">Path</th>
-                    <th class="px-4 py-3 text-left font-semibold">LB Strategy</th>
-                    <th class="px-4 py-3 text-left font-semibold">Upstreams</th>
-                    <th class="px-4 py-3 text-left font-semibold">Circuit Breaker</th>
-                    <th class="px-4 py-3 text-left font-semibold">Health</th>
+                    <th class="px-4 py-3 text-left font-semibold">Methods</th>
                     <th class="px-4 py-3 text-right font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-800">
                   {#each paginatedRoutes as { route, index } (index)}
-                    {@const healthStatus = routeHealthStatus(index)}
-                    {@const health = getRouteHealth(index)}
                     <tr
-                      class="cursor-pointer transition-colors {selectedRouteIndex === index ? 'bg-cyan-500/10' : 'hover:bg-slate-900/70'}"
+                      class={rowClass(index)}
                       on:click={() => handleRowClick(index)}
                       on:keydown={(e) => e.key === 'Enter' && handleRowClick(index)}
                       role="button"
                       tabindex="0"
                     >
-                      <!-- Name -->
+                      <!-- Name with health dot and default badge -->
                       <td class="px-4 py-3">
                         <div class="flex items-center gap-2">
+                          <span
+                            class={healthDotClass(routeHealthStatus(index))}
+                            title={healthTooltip(index)}
+                          />
                           <span class="font-medium text-slate-100">{route.name}</span>
                           {#if route.is_default}
                             <span class="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-200">
@@ -352,6 +486,26 @@
                             </span>
                           {/if}
                         </div>
+                      </td>
+
+                      <!-- Service -->
+                      <td class="px-4 py-3">
+                        {#if serviceExists(route.service)}
+                          <button
+                            class="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-2 py-0.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20"
+                            on:click|stopPropagation={handleNavigateServices}
+                            title="View in Services"
+                          >
+                            {route.service}
+                          </button>
+                        {:else}
+                          <span
+                            class="rounded-lg border border-rose-400/40 bg-rose-500/10 px-2 py-0.5 text-xs font-semibold text-rose-200"
+                            title="Service not found"
+                          >
+                            {route.service || '—'}
+                          </span>
+                        {/if}
                       </td>
 
                       <!-- Host -->
@@ -370,67 +524,51 @@
                         </code>
                       </td>
 
-                      <!-- LB Strategy -->
-                      <td class="px-4 py-3 text-slate-300">
-                        {formatLbStrategy(route.lb)}
-                      </td>
-
-                      <!-- Upstreams -->
+                      <!-- Methods -->
                       <td class="px-4 py-3">
-                        <div class="flex items-center gap-2">
-                          <span class="text-slate-400">{route.upstreams.length}</span>
-                          <div class="flex items-center gap-1" title={healthTooltip(index)}>
-                            {#if health}
-                              {#each health.upstreams as upstream}
-                                <span class={healthDotClass(upstream.healthy)} />
-                              {/each}
-                            {:else}
-                              <span class="text-xs text-slate-600">n/a</span>
-                            {/if}
+                        {#if route.methods.length === 0}
+                          <span class="text-xs text-slate-500">All</span>
+                        {:else}
+                          <div class="flex flex-wrap gap-1">
+                            {#each route.methods as method}
+                              <span class="rounded border px-1.5 py-0.5 text-[10px] font-semibold {methodBadgeColor(method)}">
+                                {method}
+                              </span>
+                            {/each}
                           </div>
-                        </div>
-                      </td>
-
-                      <!-- Circuit Breaker -->
-                      <td class="px-4 py-3">
-                        <span class={cbBadgeClass(route.circuit_breaker.enabled)}>
-                          {route.circuit_breaker.enabled ? 'ON' : 'OFF'}
-                        </span>
-                      </td>
-
-                      <!-- Health Status -->
-                      <td class="px-4 py-3">
-                        <span class={healthBadgeClass(healthStatus)} title={healthTooltip(index)}>
-                          {healthStatusLabel(healthStatus)}
-                        </span>
+                        {/if}
                       </td>
 
                       <!-- Actions -->
                       <td class="px-4 py-3">
                         <div class="flex items-center justify-end gap-1.5">
                           <button
-                            class="rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-slate-100"
+                            class="rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={isSaving}
                             on:click|stopPropagation={() => handleViewRoute(index)}
                             title="View route"
                           >
                             View
                           </button>
                           <button
-                            class="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-xs font-medium text-cyan-200 transition-colors hover:bg-cyan-500/20"
+                            class="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-xs font-medium text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={isSaving}
                             on:click|stopPropagation={() => handleEditRoute(index)}
                             title="Edit route"
                           >
                             Edit
                           </button>
                           <button
-                            class="rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-slate-100"
+                            class="rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={isSaving}
                             on:click|stopPropagation={() => handleDuplicateRoute(index)}
                             title="Duplicate route"
                           >
                             Dup
                           </button>
                           <button
-                            class="rounded-md border border-rose-400/40 bg-rose-500/10 px-2 py-1 text-xs font-medium text-rose-200 transition-colors hover:bg-rose-500/20"
+                            class="rounded-md border border-rose-400/40 bg-rose-500/10 px-2 py-1 text-xs font-medium text-rose-200 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={isSaving}
                             on:click|stopPropagation={() => handleDeleteRoute(index)}
                             title="Delete route"
                           >
@@ -463,7 +601,7 @@
                       <span class="px-1 text-xs text-slate-500">…</span>
                     {:else}
                       <button
-                        class="rounded-md border px-2 py-1 text-xs font-medium transition-colors {page === currentPage ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200' : 'border-slate-600 bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'}"
+                        class={pageBtnClass(page)}
                         on:click={() => goToPage(page)}
                       >
                         {page}
@@ -493,3 +631,13 @@
     {/if}
   </div>
 </AppLayout>
+
+{#if showCreateModal}
+  <RouteFormModal
+    route={null}
+    existingNames={routes.map((r) => r.name)}
+    services={services}
+    on:save={handleModalSave}
+    on:cancel={handleModalCancel}
+  />
+{/if}

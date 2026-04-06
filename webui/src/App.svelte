@@ -4,6 +4,7 @@
   import AppLayout from './lib/components/layout/AppLayout.svelte';
   import DashboardPage from './lib/components/pages/DashboardPage.svelte';
   import RoutesPage from './lib/components/pages/RoutesPage.svelte';
+  import ServicesPage from './lib/components/pages/ServicesPage.svelte';
   import SettingsPage from './lib/components/pages/SettingsPage.svelte';
   import {
     loadConfigFromAdmin,
@@ -238,6 +239,10 @@
     navigate(e.detail);
   };
 
+  const onServicesNavigate = (e: CustomEvent) => {
+    navigate(e.detail);
+  };
+
   const onSettingsSave = () => {
     void saveToServer();
   };
@@ -271,7 +276,7 @@
 <div class="flex h-screen w-screen overflow-hidden text-slate-100">
   <Sidebar />
 
-  <main class="flex-1 overflow-hidden bg-slate-950">
+  <main class="flex-1 flex flex-col overflow-hidden bg-slate-950">
     {#if $currentPage === 'dashboard'}
       <DashboardPage
         config={$configStore}
@@ -282,6 +287,11 @@
         on:addRoute={onDashboardAddRoute}
         on:refreshHealth={onDashboardRefreshHealth}
         on:exportJson={onDashboardExportJson}
+      />
+    {:else if $currentPage === 'services'}
+      <ServicesPage
+        config={$configStore}
+        on:navigate={onServicesNavigate}
       />
     {:else if $currentPage === 'routes'}
       <RoutesPage

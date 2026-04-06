@@ -44,11 +44,14 @@ impl PrxProxy {
         let Some(route) = snapshot.route(route_idx) else {
             return false;
         };
+        let Some(service) = snapshot.service(route.service_idx) else {
+            return false;
+        };
 
-        if ctx.retries >= route.max_retries {
+        if ctx.retries >= service.max_retries {
             return false;
         }
-        if ctx.attempted_upstreams.len() >= route.upstreams.len() {
+        if ctx.attempted_upstreams.len() >= service.upstreams.len() {
             return false;
         }
 
@@ -73,21 +76,25 @@ impl PrxProxy {
         let Some(route) = snapshot.route(route_idx) else {
             return;
         };
+        let Some(service) = snapshot.service(route.service_idx) else {
+            return;
+        };
         let Some(upstream_idx) = ctx.attempted_upstreams.last().copied() else {
             return;
         };
-        let Some(upstream) = route.upstreams.get(upstream_idx) else {
+        let Some(upstream) = service.upstreams.get(upstream_idx) else {
             return;
         };
 
         metrics::inc_upstream_error(route.name.as_str(), upstream.addr.as_str(), stage);
-        let opened = route.mark_upstream_failure(upstream_idx);
+        let opened = service.mark_upstream_failure(upstream_idx);
         let is_open = upstream.is_circuit_open();
         metrics::set_circuit_state(route.name.as_str(), upstream.addr.as_str(), is_open);
         if opened {
             metrics::mark_circuit_open(route.name.as_str(), upstream.addr.as_str());
             warn!(
                 route = route.name.as_str(),
+                service = service.name.as_str(),
                 upstream = upstream.addr.as_str(),
                 "opened circuit breaker for upstream"
             );
@@ -104,14 +111,17 @@ impl PrxProxy {
         let Some(route) = snapshot.route(route_idx) else {
             return;
         };
+        let Some(service) = snapshot.service(route.service_idx) else {
+            return;
+        };
         let Some(upstream_idx) = ctx.attempted_upstreams.last().copied() else {
             return;
         };
-        let Some(upstream) = route.upstreams.get(upstream_idx) else {
+        let Some(upstream) = service.upstreams.get(upstream_idx) else {
             return;
         };
 
-        route.mark_upstream_success(upstream_idx);
+        service.mark_upstream_success(upstream_idx);
         metrics::set_circuit_state(route.name.as_str(), upstream.addr.as_str(), false);
     }
 }
@@ -120,6 +130,7 @@ pub struct RequestCtx {
     started_at: Instant,
     snapshot: Option<Arc<RuntimeConfig>>,
     route_idx: Option<usize>,
+    service_idx: Option<usize>,
     attempted_upstreams: Vec<usize>,
     retries: usize,
     hash_seed: Option<u64>,
@@ -135,6 +146,7 @@ impl Default for RequestCtx {
             started_at: Instant::now(),
             snapshot: None,
             route_idx: None,
+            service_idx: None,
             attempted_upstreams: Vec::new(),
             retries: 0,
             hash_seed: None,
@@ -188,6 +200,7 @@ impl ProxyHttp for PrxProxy {
 
         if let Some(route_idx) = ctx.route_idx {
             if let Some(route) = snapshot.route(route_idx) {
+                ctx.service_idx = Some(route.service_idx);
                 ctx.route_name = Some(route.name.clone());
                 debug!(
                     route = %route.name,
@@ -237,24 +250,37 @@ impl ProxyHttp for PrxProxy {
             );
         };
 
-        if ctx.retries > 0 && route.retry_backoff_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(route.retry_backoff_ms)).await;
+        let Some(service) = snapshot.service(route.service_idx) else {
+            return Error::e_explain(
+                InternalError,
+                format!(
+                    "route '{}' references service index {} which is out of bounds",
+                    route.name, route.service_idx
+                ),
+            );
+        };
+
+        if ctx.retries > 0 && service.retry_backoff_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(service.retry_backoff_ms)).await;
         }
 
         let hash_seed = ctx
             .hash_seed
             .unwrap_or_else(|| hash_key(&[ctx.host.as_str(), ctx.path.as_str()]));
         let (upstream_idx, upstream) =
-            if let Some(selected) = route.next_upstream(hash_seed, &ctx.attempted_upstreams) {
+            if let Some(selected) = service.next_upstream(hash_seed, &ctx.attempted_upstreams) {
                 selected
             } else {
                 ctx.attempted_upstreams.clear();
-                if let Some(selected) = route.next_upstream(hash_seed, &ctx.attempted_upstreams) {
+                if let Some(selected) = service.next_upstream(hash_seed, &ctx.attempted_upstreams) {
                     selected
                 } else {
                     return Error::e_explain(
                         InternalError,
-                        format!("route '{}' has no selectable upstreams", route.name),
+                        format!(
+                            "service '{}' (via route '{}') has no selectable upstreams",
+                            service.name, route.name
+                        ),
                     );
                 }
             };
@@ -298,10 +324,13 @@ impl ProxyHttp for PrxProxy {
         let Some(route) = snapshot.route(route_idx) else {
             return Ok(());
         };
+        let Some(service) = snapshot.service(route.service_idx) else {
+            return Ok(());
+        };
         let Some(upstream_idx) = ctx.attempted_upstreams.last().copied() else {
             return Ok(());
         };
-        let Some(upstream) = route.upstreams.get(upstream_idx) else {
+        let Some(upstream) = service.upstreams.get(upstream_idx) else {
             return Ok(());
         };
 
@@ -319,9 +348,7 @@ impl ProxyHttp for PrxProxy {
         mut e: Box<Error>,
     ) -> Box<Error> {
         self.record_upstream_failure(ctx, "connect");
-        if self.should_retry(ctx) {
-            e.set_retry(true);
-        }
+        e.set_retry(self.should_retry(ctx));
         e
     }
 
@@ -339,9 +366,7 @@ impl ProxyHttp for PrxProxy {
             "proxying error"
         );
         self.record_upstream_failure(ctx, "proxy");
-        if self.should_retry(ctx) {
-            e.set_retry(true);
-        }
+        e.set_retry(self.should_retry(ctx));
         e
     }
 
@@ -394,7 +419,7 @@ mod tests {
     use super::*;
     use crate::config::{
         CircuitBreakerConfig, LbStrategy, ObservabilityConfig, PrxConfig, RouteConfig,
-        ServerConfig, UpstreamConfig,
+        ServerConfig, ServiceConfig, UpstreamConfig,
     };
 
     fn upstream(addr: &str) -> UpstreamConfig {
@@ -413,25 +438,38 @@ mod tests {
         }
     }
 
-    fn build_runtime(max_retries: usize, upstream_count: usize) -> Arc<RuntimeConfig> {
+    fn service(name: &str, max_retries: usize, upstream_count: usize) -> ServiceConfig {
         let upstreams = (0..upstream_count)
             .map(|idx| upstream(&format!("127.0.0.1:{}", 9000 + idx)))
             .collect::<Vec<_>>();
 
+        ServiceConfig {
+            name: name.to_string(),
+            lb: LbStrategy::RoundRobin,
+            max_retries,
+            retry_backoff_ms: 0,
+            circuit_breaker: CircuitBreakerConfig::default(),
+            upstreams,
+        }
+    }
+
+    fn route(name: &str, service: &str) -> RouteConfig {
+        RouteConfig {
+            name: name.to_string(),
+            service: service.to_string(),
+            host: None,
+            path_prefix: "/".to_string(),
+            methods: Vec::new(),
+            is_default: true,
+        }
+    }
+
+    fn build_runtime(max_retries: usize, upstream_count: usize) -> Arc<RuntimeConfig> {
         Arc::new(RuntimeConfig::from_config(PrxConfig {
             server: ServerConfig::default(),
             observability: ObservabilityConfig::default(),
-            routes: vec![RouteConfig {
-                name: "default".to_string(),
-                host: None,
-                path_prefix: "/".to_string(),
-                is_default: true,
-                lb: LbStrategy::RoundRobin,
-                max_retries,
-                retry_backoff_ms: 0,
-                circuit_breaker: CircuitBreakerConfig::default(),
-                upstreams,
-            }],
+            services: vec![service("default", max_retries, upstream_count)],
+            routes: vec![route("default", "default")],
         }))
     }
 
@@ -452,6 +490,7 @@ mod tests {
         let mut ctx = RequestCtx {
             snapshot: Some(runtime),
             route_idx: Some(0),
+            service_idx: Some(0),
             ..RequestCtx::default()
         };
 
@@ -468,6 +507,7 @@ mod tests {
         let mut ctx = RequestCtx {
             snapshot: Some(runtime),
             route_idx: Some(0),
+            service_idx: Some(0),
             attempted_upstreams: vec![0, 1],
             ..RequestCtx::default()
         };
