@@ -118,6 +118,13 @@ p99 ดีกว่า ≥ 20% ตอน connection reuse สูง, peak RSS �
 - ปิด access log ทั้งหมดเพื่อความเป็นธรรม — เปิดแล้วทุกตัวจะช้าลงคนละแบบ (ดู [T403](tasks/T403-access-log-async-json.md))
 - ยังไม่มีตัวเลขจากเครื่อง bare-metal
 
-## 5. วิธี reproduce
+## 5. สิ่งที่เจอระหว่างทำ Phase 0 (ไม่ใช่เรื่อง performance แต่ต้องรู้)
+
+- `vendor/pingora-core` คอมไพล์ไม่ผ่านกับ libc ที่ lock ไว้ (`initgroups` รับ `gid_t` บน Linux
+  แต่โค้ดส่ง `c_int`) — แก้แล้ว ไม่งั้นวัดอะไรไม่ได้เลย
+- `cargo audit` แดงอยู่ก่อนแล้ว: `pingora-cache` 0.7.0 (cache poisoning, 8.4 high) และ `h2` 0.4.13
+  → ดู [T005](tasks/T005-dependency-security-upgrade.md)
+
+## 6. วิธี reproduce
 
 อ่าน [`bench/README.md`](../bench/README.md) — มีข้อกำหนดเครื่อง, วิธีรัน, และเหตุผลว่าทำไมผลบนแล็ปท็อปเชื่อไม่ได้

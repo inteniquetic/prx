@@ -30,7 +30,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 
 | Phase | ชื่อ | เป้าหมาย | จำนวน task |
 |---|---|---|---|
-| 0 | Measurement | วัดได้ก่อน ค่อยปรับ | 4 |
+| 0 | Measurement | วัดได้ก่อน ค่อยปรับ | 5 |
 | 1 | Data plane | ทำให้ hot path เร็วและกินแรมน้อย + ฟีเจอร์ที่ proxy ระดับ prod ต้องมี | 15 |
 | 2 | Control plane | Admin API ปลอดภัย, config มีประวัติ/rollback, มี schema ให้ UI ใช้ | 7 |
 | 3 | Web UI | Svelte 5 + shadcn-svelte, modern, ใช้ง่าย | 10 |
@@ -46,6 +46,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T002](T002-baseline-report.md) | Baseline report + `docs/BENCHMARKS.md` | S | T001 | 🟡 micro-bench วัดแล้ว / proxy-vs-proxy รอเครื่องที่มี Docker |
 | [T003](T003-profiling-and-microbench.md) | Flamegraph + criterion micro-bench | M | T001 | ✅ done |
 | [T004](T004-perf-ci-gate.md) | Perf regression gate ใน CI | M | T002, T003 | ✅ done |
+| [T005](T005-dependency-security-upgrade.md) | แก้ช่องโหว่ dependency ให้ `cargo audit` เขียว | L | — | 🔴 ขวาง release gate |
 
 ### Phase 1 — Data plane
 
@@ -116,6 +117,12 @@ micro-benchmark รันแล้ว ผลเต็มอยู่ใน [`doc
 | reload ไม่ใช่ปัญหา | `RuntimeConfig::from_config` ที่ 1000 routes = 1.32 ms (งบ 5 ms) | — |
 
 ลำดับความสำคัญจึงชัดแล้ว: **T101 + T102 คืองานถัดไป** ไม่ใช่ฟีเจอร์ใหม่
+
+และ Phase 0 ยังเจออีกสองเรื่องที่ไม่ได้อยู่ในแผนเดิม:
+
+- **build พังอยู่ก่อนแล้ว** — `vendor/pingora-core` คอมไพล์ไม่ผ่านกับ libc ที่ lock ไว้ (แก้แล้วใน T001)
+- **`cargo audit` แดง** — pingora 0.7 ลาก `pingora-cache` 0.7.0 (cache poisoning, 8.4 high) และ `h2` 0.4.13 มาด้วย
+  → [T005](T005-dependency-security-upgrade.md)
 
 ## Milestones ที่แนะนำ
 
