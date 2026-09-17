@@ -7,9 +7,10 @@ use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora::prelude::*;
+use pingora::upstreams::peer::ALPN;
 use tracing::{debug, error, info, warn};
 
-use crate::config::LbStrategy;
+use crate::config::{LbStrategy, UpstreamH2};
 use crate::metrics;
 use crate::router::RouteMatch;
 use crate::runtime::{RuntimeConfig, hash_key, normalize_host};
@@ -169,6 +170,8 @@ pub struct RequestCtx {
     retries: usize,
     /// Refcount bump instead of a `String` clone per request (T101).
     route_name: Option<Arc<str>>,
+    /// The client asked to upgrade the connection (websocket and friends).
+    is_upgrade: bool,
     upstream_addr: Option<String>,
 }
 
@@ -182,6 +185,7 @@ impl Default for RequestCtx {
             attempted_upstreams: Vec::new(),
             retries: 0,
             route_name: None,
+            is_upgrade: false,
             upstream_addr: None,
         }
     }
@@ -196,8 +200,11 @@ impl ProxyHttp for PrxProxy {
     }
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
-        let snapshot = self.active_config.load_full();
-        ctx.snapshot = Some(snapshot.clone());
+        // `load()` hands out a guard without touching the Arc refcount, which
+        // matters because every worker thread reads this same cacheline on
+        // every request. The refcount is only paid for requests that go on to
+        // an upstream: health checks, 404s and 405s never clone it (T103).
+        let snapshot = self.active_config.load();
 
         // Everything that borrows the request header is resolved here, so the
         // borrow ends before the session is used mutably below. Nothing in this
@@ -206,6 +213,7 @@ impl ProxyHttp for PrxProxy {
         let decision = {
             let req_header = session.req_header();
             let path = req_header.uri.path();
+            ctx.is_upgrade = req_header.headers.contains_key("upgrade");
 
             if path == self.health_path {
                 Decision::Health
@@ -236,6 +244,11 @@ impl ProxyHttp for PrxProxy {
                 }
             }
             Decision::Route(RouteMatch::Matched(route_idx)) => {
+                // One snapshot for the whole request: every later phase reads
+                // this Arc rather than loading again, so a reload mid-request
+                // can never pair a route from one config with a service from
+                // another (T103).
+                ctx.snapshot = Some(Arc::clone(&snapshot));
                 ctx.route_idx = Some(route_idx);
                 if let Some(route) = snapshot.route(route_idx) {
                     ctx.service_idx = Some(route.service_idx);
@@ -266,12 +279,17 @@ impl ProxyHttp for PrxProxy {
         session: &mut Session,
         ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        let snapshot = if let Some(snapshot) = &ctx.snapshot {
-            snapshot.clone()
-        } else {
-            let snapshot = self.active_config.load_full();
-            ctx.snapshot = Some(snapshot.clone());
-            snapshot
+        // request_filter stored the snapshot this request is pinned to. Loading
+        // a fresh one here would risk pairing a route with a service from a
+        // different config version, so this only happens if the request somehow
+        // reached the upstream phase without going through request_filter.
+        let snapshot = match &ctx.snapshot {
+            Some(snapshot) => Arc::clone(snapshot),
+            None => {
+                let snapshot = self.active_config.load_full();
+                ctx.snapshot = Some(Arc::clone(&snapshot));
+                snapshot
+            }
         };
 
         let route_idx = match ctx.route_idx {
@@ -340,6 +358,13 @@ impl ProxyHttp for PrxProxy {
         ctx.upstream_addr = Some(upstream.addr.clone());
 
         let mut peer = HttpPeer::new(upstream.addr.clone(), upstream.tls, upstream.sni.clone());
+        // Without this the peer defaults to HTTP/1.1, which makes gRPC
+        // impossible: it needs end-to-end HTTP/2 to carry trailers (T115).
+        peer.options.alpn = match service.upstream_h2 {
+            UpstreamH2::Never => ALPN::H1,
+            UpstreamH2::Always => ALPN::H2,
+            UpstreamH2::Auto => ALPN::H2H1,
+        };
         peer.options.verify_cert = upstream.verify_cert;
         peer.options.verify_hostname = upstream.verify_hostname;
         if let Some(ms) = upstream.connect_timeout_ms {
@@ -348,14 +373,20 @@ impl ProxyHttp for PrxProxy {
         if let Some(ms) = upstream.total_connect_timeout_ms {
             peer.options.total_connection_timeout = Some(Duration::from_millis(ms));
         }
-        if let Some(ms) = upstream.read_timeout_ms {
-            peer.options.read_timeout = Some(Duration::from_millis(ms));
-        }
-        if let Some(ms) = upstream.write_timeout_ms {
-            peer.options.write_timeout = Some(Duration::from_millis(ms));
-        }
-        if let Some(ms) = upstream.idle_timeout_ms {
-            peer.options.idle_timeout = Some(Duration::from_millis(ms));
+        // read/write timeouts describe request/response traffic. An upgraded
+        // connection (websocket, and anything else that takes over the socket)
+        // is expected to sit idle for long stretches, so applying them there
+        // would kill healthy connections (T115).
+        if !ctx.is_upgrade {
+            if let Some(ms) = upstream.read_timeout_ms {
+                peer.options.read_timeout = Some(Duration::from_millis(ms));
+            }
+            if let Some(ms) = upstream.write_timeout_ms {
+                peer.options.write_timeout = Some(Duration::from_millis(ms));
+            }
+            if let Some(ms) = upstream.idle_timeout_ms {
+                peer.options.idle_timeout = Some(Duration::from_millis(ms));
+            }
         }
 
         Ok(Box::new(peer))
@@ -498,6 +529,7 @@ mod tests {
         ServiceConfig {
             name: name.to_string(),
             lb: LbStrategy::RoundRobin,
+            upstream_h2: Default::default(),
             max_retries,
             retry_backoff_ms: 0,
             circuit_breaker: CircuitBreakerConfig::default(),
@@ -532,6 +564,45 @@ mod tests {
             "/healthz".to_string(),
             "/readyz".to_string(),
         )
+    }
+
+    /// T103: a request is pinned to the snapshot it started with, so a reload
+    /// mid-request cannot pair a route from one config with a service from the
+    /// next one.
+    #[test]
+    fn request_keeps_its_snapshot_across_a_reload() {
+        let first = build_runtime(0, 2);
+        let active = Arc::new(ArcSwap::new(first.clone()));
+
+        // A request that has already matched a route holds its own snapshot.
+        let ctx = RequestCtx {
+            snapshot: Some(Arc::clone(&active.load())),
+            route_idx: Some(0),
+            service_idx: Some(0),
+            ..RequestCtx::default()
+        };
+
+        // Config is replaced while that request is still in flight.
+        let second = build_runtime(0, 1);
+        active.store(second.clone());
+
+        let pinned = ctx.snapshot.as_ref().expect("snapshot is pinned");
+        assert!(
+            Arc::ptr_eq(pinned, &first),
+            "the in-flight request must keep the snapshot it started with"
+        );
+        let route = pinned.route(0).expect("route 0 exists in the old snapshot");
+        let service = pinned
+            .service(route.service_idx)
+            .expect("service still resolves inside the pinned snapshot");
+        assert_eq!(
+            service.upstreams.len(),
+            2,
+            "the pinned snapshot must still describe the old upstream set"
+        );
+
+        // New requests do see the new config.
+        assert!(Arc::ptr_eq(&active.load_full(), &second));
     }
 
     #[test]
