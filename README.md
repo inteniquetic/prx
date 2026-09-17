@@ -6,7 +6,8 @@
 
 - Async Rust runtime
 - HTTP/1.1 + HTTP/2 proxy path
-- gRPC and websocket proxying
+- gRPC proxying (HTTP/2 end to end, trailers preserved)
+- WebSocket proxying, including long-idle connections
 - Route-level load balancing (`round_robin`, `random`, `hash`)
 - Route-level failover retry
 - Passive per-route circuit breaker for unhealthy upstreams
@@ -49,6 +50,27 @@ Optional override:
 ```bash
 PRX_ADMIN_LISTEN=127.0.0.1:9091 cargo run
 ```
+
+## gRPC and WebSocket
+
+gRPC needs HTTP/2 from the client all the way to the upstream, because it
+carries its status in trailers:
+
+```toml
+[server]
+h2c = true                 # accept cleartext HTTP/2 (default: true)
+
+[[service]]
+name = "grpc-api"
+upstream_h2 = "always"     # speak HTTP/2 to the upstream (default: "never")
+```
+
+WebSocket upgrades work with no extra configuration. The upstream
+read/write/idle timeouts are not applied to an upgraded connection, so an idle
+websocket is not dropped.
+
+Both paths are covered by end-to-end tests: `tests/e2e_grpc.rs` and
+`tests/e2e_websocket.rs`.
 
 ## Config
 
@@ -93,12 +115,15 @@ Key config knobs:
 cargo test --all-targets
 ```
 
-This includes end-to-end proxy tests in `tests/e2e_proxy.rs` that exercise:
+This includes end-to-end tests that run the real binary:
 
-- route matching to upstream
-- `404` on no matching route
-- retry + upstream failover
-- health and readiness handlers
+- `tests/e2e_proxy.rs`: route matching, host and path precedence, method
+  filtering (`405`), `404` on no matching route, retry + upstream failover,
+  health and readiness handlers
+- `tests/e2e_websocket.rs`: upgrade handshake, text/binary frames, large
+  frames, close handshake, idle connections
+- `tests/e2e_grpc.rs`: unary calls with trailers, non-zero `grpc-status`,
+  server streaming
 
 ## Release Gate
 

@@ -39,6 +39,7 @@ Minimum requirements:
 | `threads` | `number` | `null` | No | Number of Pingora worker threads |
 | `grace_period_seconds` | `number` | `null` | No | Grace period before shutdown |
 | `graceful_shutdown_timeout_seconds` | `number` | `null` | No | Timeout for graceful shutdown |
+| `h2c` | `bool` | `true` | No | Accept HTTP/2 over cleartext (needed for gRPC without TLS) |
 | `config_reload_debounce_ms` | `number` | `250` | No | Debounce for auto-reload |
 | `tls` | `table` | `null` | No | Enable HTTPS listener |
 
@@ -121,6 +122,35 @@ host does not fall through to a broader one.
 - a method prx does not know (for example `PROPFIND`) only matches routes that
   list no methods at all.
 
+### 3.4b `[[service]]` — HTTP version to the upstream
+
+| Field | Type | Default | Required | Description |
+|---|---|---|---|---|
+| `upstream_h2` | enum | `"never"` | No | `never`, `always`, `auto` |
+
+- `never`: HTTP/1.1 to the upstream (the historical behavior).
+- `always`: HTTP/2 only. Over TLS it is negotiated with ALPN; over cleartext prx
+  trusts that the upstream speaks h2c.
+- `auto`: prefer HTTP/2, fall back to HTTP/1.1. Over cleartext there is no ALPN
+  to negotiate with, so this behaves like `never`.
+
+**gRPC needs `always`**: gRPC carries its status in HTTP/2 trailers, which
+HTTP/1.1 cannot express, so it must be HTTP/2 from client to upstream. Pair it
+with `[server] h2c = true` for cleartext clients, or a TLS listener with
+`enable_h2 = true`.
+
+```toml
+[server]
+h2c = true
+
+[[service]]
+name = "grpc-api"
+upstream_h2 = "always"
+
+[[service.upstream]]
+addr = "127.0.0.1:50051"
+```
+
 ### 3.5 `[route.circuit_breaker]`
 
 | Field | Type | Default | Required | Description |
@@ -172,7 +202,15 @@ If no route matches `(host, path)`:
   - `200 ready` when every route has at least one available upstream.
   - `503 not_ready` when any route has no available upstream.
 
-### 4.3 Retry + Circuit breaker
+### 4.3 Upgraded connections (WebSocket)
+
+When a request carries an `Upgrade` header, prx does not apply the upstream
+`read_timeout_ms`, `write_timeout_ms` or `idle_timeout_ms` to that connection.
+Those timeouts describe request/response traffic, and an upgraded connection is
+expected to sit idle; applying them would drop healthy websockets.
+`connect_timeout_ms` still applies.
+
+### 4.4 Retry + Circuit breaker
 
 - Retry follows `max_retries` and does not select an upstream already tried within the same request.
 - On connect/proxy failure, failures are counted to trigger the route circuit breaker policy.

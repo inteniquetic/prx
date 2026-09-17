@@ -1,7 +1,7 @@
 # T103 — เลิก `load_full()` ต่อ request
 
 **Phase:** 1 · Data plane
-**Status:** todo
+**Status:** done
 **Size:** S (~0.5d)
 **Depends on:** T101
 **Files:** `src/proxy.rs`, `src/runtime.rs`
@@ -36,3 +36,15 @@
 ## Out of scope
 
 - เปลี่ยนกลไก reload (ดู T204)
+
+## ผลลัพธ์ที่ส่งมอบ
+
+- `request_filter` ใช้ `active_config.load()` (guard) แทน `load_full()` → ไม่แตะ refcount ตอนหา route
+- clone `Arc` เฉพาะ request ที่จะไป upstream จริง — health check, 404, 405 ไม่ clone เลย
+  (สำคัญเพราะ k8s liveness/readiness ยิงถี่มาก)
+- `upstream_peer` ใช้ snapshot ที่ pin ไว้แล้วเท่านั้น พร้อม comment อธิบายว่าทำไมห้ามโหลดใหม่กลาง request
+- เทสต์ `request_keeps_its_snapshot_across_a_reload` ยืนยันว่า reload ระหว่าง request ไม่ทำให้
+  route กับ service มาจากคนละเวอร์ชัน
+
+**หมายเหตุ:** ผลของงานนี้วัดด้วย micro-benchmark ไม่ได้ (เป็นเรื่อง contention ข้าม core)
+ต้องวัดด้วย harness ของ T001 บนเครื่องที่มี core เยอะ

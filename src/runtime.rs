@@ -13,7 +13,7 @@ use std::{
 use rand::Rng;
 
 use crate::{
-    config::{LbStrategy, PrxConfig},
+    config::{LbStrategy, PrxConfig, UpstreamH2},
     router::{IndexedRoute, RouteIndex, RouteMatch, method_mask},
 };
 
@@ -154,6 +154,7 @@ impl RouteRuntime {
 pub struct ServiceRuntime {
     pub name: String,
     pub lb: LbStrategy,
+    pub upstream_h2: UpstreamH2,
     pub max_retries: usize,
     pub retry_backoff_ms: u64,
     pub circuit_breaker: CircuitBreakerRuntime,
@@ -175,6 +176,7 @@ impl ServiceRuntime {
         Self {
             name: config.name,
             lb: config.lb,
+            upstream_h2: config.upstream_h2,
             max_retries: config.max_retries,
             retry_backoff_ms: config.retry_backoff_ms,
             circuit_breaker,
@@ -452,6 +454,7 @@ mod tests {
         ServiceConfig {
             name: name.to_string(),
             lb,
+            upstream_h2: UpstreamH2::default(),
             max_retries,
             retry_backoff_ms: 0,
             circuit_breaker: no_breaker(),
@@ -574,6 +577,7 @@ mod tests {
         let svc = ServiceConfig {
             name: "default".to_string(),
             lb: LbStrategy::RoundRobin,
+            upstream_h2: UpstreamH2::default(),
             max_retries: 1,
             retry_backoff_ms: 0,
             circuit_breaker: breaker,
@@ -605,6 +609,7 @@ mod tests {
         let svc = ServiceConfig {
             name: "default".to_string(),
             lb: LbStrategy::RoundRobin,
+            upstream_h2: UpstreamH2::default(),
             max_retries: 1,
             retry_backoff_ms: 0,
             circuit_breaker: breaker,

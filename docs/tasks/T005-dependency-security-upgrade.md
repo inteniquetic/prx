@@ -13,7 +13,8 @@
 
 ## สถานะปัจจุบัน (วัดแล้ว 2026-09-17)
 
-`cargo audit` คืน `error: 2 vulnerabilities found!` และ `5 allowed warnings`
+`cargo audit` คืน `error: 1 vulnerability found!` และ `5 allowed warnings`
+(เดิม 2 รายการ — `h2` ถูกแก้ไปแล้วระหว่างทำ T115)
 ทั้งหมดมาจาก dependency ของ pingora 0.7 ไม่ได้มาจากโค้ดของ prx เอง
 (ยืนยันแล้วว่าเกิดกับ `Cargo.lock` ก่อนเพิ่ม criterion เช่นกัน)
 
@@ -22,7 +23,7 @@
 | Crate | Version | Advisory | ความรุนแรง | ทางแก้ที่ advisory ระบุ |
 |---|---|---|---|---|
 | `pingora-cache` | 0.7.0 | [RUSTSEC-2026-0035](https://rustsec.org/advisories/RUSTSEC-2026-0035) — cache poisoning จาก cache key ที่ไม่ปลอดภัยโดย default | **8.4 (high)** | อัปเป็น >= 0.8.0 |
-| `h2` | 0.4.13 | [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258) — unbounded empty DATA frames | — | อัปเป็น >= 0.4.16 |
+| ~~`h2`~~ | ~~0.4.13~~ | ~~[RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258)~~ | — | **แก้แล้ว** — lockfile ขยับเป็น 0.4.19 ตอนเพิ่ม dev-dependency ของ T115 |
 
 ### Warnings (unmaintained / unsound)
 
@@ -34,7 +35,7 @@
 - **`pingora-cache`**: prx ไม่ได้เรียกใช้ cache module เลย (`grep pingora_cache src/` ว่าง)
   มันถูกดึงเข้ามาเพราะ `pingora-proxy` depend ไว้ → ความเสี่ยงจริงตอนนี้ใกล้ศูนย์
   **แต่** [T109](T109-micro-cache.md) จะทำ cache — ห้ามสร้างบนเวอร์ชันที่มีช่องโหว่นี้
-- **`h2`**: อยู่ในเส้นทาง HTTP/2 ที่ prx เปิดใช้จริง → เสี่ยงจริง ควรแก้ก่อน
+- **`h2`**: แก้แล้ว (0.4.19) — และตอนนี้ HTTP/2 ถูกใช้งานจริงมากขึ้นหลัง T115 เปิด h2c และ upstream h2
 - warnings ที่เหลือเป็น unsound/unmaintained ยังไม่ใช่ช่องโหว่ที่ถูก exploit ได้โดยตรง
 
 ## ขอบเขตงาน
@@ -44,8 +45,7 @@
 2. **สำคัญ:** `Cargo.toml` patch `pingora-core` และ `pingora-load-balancing` ไปยัง `vendor/`
    ต้อง re-vendor ใหม่จากเวอร์ชันใหม่ พร้อมย้าย patch ที่ทำไว้ (รวมถึง fix `initgroups`
    ที่ใส่ไว้ตอน T001 ถ้า upstream ยังไม่แก้) และบันทึกว่าแต่ละ patch มีไว้ทำไม
-3. ถ้าอัป pingora ไม่ได้ในตอนนี้ ให้บังคับเวอร์ชัน `h2` ผ่าน `[patch]`/`cargo update -p h2`
-   แล้วยืนยันว่า build + test ผ่าน
+3. ~~บังคับเวอร์ชัน `h2`~~ — ทำไปแล้ว เหลือแค่ `pingora-cache`
 4. รัน `make gate` ให้ผ่านครบ และรัน harness ของ [T001](T001-bench-harness.md) เทียบ
    before/after เพราะการอัป pingora อาจเปลี่ยน performance อย่างมีนัย
 5. ปรับ `ops/ZERO-EXCEPTION-POLICY.md` ให้ตรงความจริง: ถ้ายังมีข้อยกเว้นเหลือ ต้องระบุเป็นรายการ

@@ -148,6 +148,11 @@ pub struct ServerConfig {
     pub graceful_shutdown_timeout_seconds: Option<u64>,
     #[serde(default = "default_reload_debounce_ms")]
     pub config_reload_debounce_ms: u64,
+    /// Accept HTTP/2 over cleartext on the plain listeners. prx peeks for the
+    /// h2 preface and falls back to HTTP/1.1, so leaving this on is safe and
+    /// is what gRPC clients that do not use TLS need.
+    #[serde(default = "default_true")]
+    pub h2c: bool,
     #[serde(default)]
     pub tls: Option<TlsConfig>,
 }
@@ -162,6 +167,7 @@ impl Default for ServerConfig {
             grace_period_seconds: None,
             graceful_shutdown_timeout_seconds: None,
             config_reload_debounce_ms: default_reload_debounce_ms(),
+            h2c: true,
             tls: None,
         }
     }
@@ -232,8 +238,29 @@ pub struct ServiceConfig {
     pub retry_backoff_ms: u64,
     #[serde(default)]
     pub circuit_breaker: CircuitBreakerConfig,
+    /// Which HTTP version to speak to the upstreams of this service.
+    #[serde(default)]
+    pub upstream_h2: UpstreamH2,
     #[serde(rename = "upstream", default)]
     pub upstreams: Vec<UpstreamConfig>,
+}
+
+/// How prx talks to a service's upstreams.
+///
+/// gRPC needs `always`: it requires end-to-end HTTP/2 because it carries its
+/// status in trailers, which HTTP/1.1 cannot express.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UpstreamH2 {
+    /// HTTP/1.1 only.
+    #[default]
+    Never,
+    /// HTTP/2 only. Over TLS this is negotiated with ALPN; over cleartext prx
+    /// trusts that the upstream speaks h2c.
+    Always,
+    /// Prefer HTTP/2, fall back to HTTP/1.1. Over cleartext there is no ALPN to
+    /// negotiate with, so this behaves like `never`.
+    Auto,
 }
 
 fn default_service_name() -> String {
@@ -366,6 +393,7 @@ mod tests {
         ServiceConfig {
             name: name.to_string(),
             lb: LbStrategy::RoundRobin,
+            upstream_h2: UpstreamH2::default(),
             max_retries: 0,
             retry_backoff_ms: 0,
             circuit_breaker: CircuitBreakerConfig::default(),

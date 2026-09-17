@@ -46,7 +46,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T002](T002-baseline-report.md) | Baseline report + `docs/BENCHMARKS.md` | S | T001 | 🟡 micro-bench วัดแล้ว / proxy-vs-proxy รอเครื่องที่มี Docker |
 | [T003](T003-profiling-and-microbench.md) | Flamegraph + criterion micro-bench | M | T001 | ✅ done |
 | [T004](T004-perf-ci-gate.md) | Perf regression gate ใน CI | M | T002, T003 | ✅ done |
-| [T005](T005-dependency-security-upgrade.md) | แก้ช่องโหว่ dependency ให้ `cargo audit` เขียว | L | — | 🔴 ขวาง release gate |
+| [T005](T005-dependency-security-upgrade.md) | แก้ช่องโหว่ dependency ให้ `cargo audit` เขียว | L | — | 🟠 เหลือ `pingora-cache` ตัวเดียว (h2 แก้แล้ว) |
 
 ### Phase 1 — Data plane
 
@@ -54,9 +54,9 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 |---|---|---|---|---|
 | [T101](T101-zero-alloc-request-path.md) | ตัด allocation ต่อ request ใน `request_filter` | M | T003 | ✅ done |
 | [T102](T102-route-matcher-index.md) | เปลี่ยน route matching จาก linear scan เป็น host map + path trie | L | T003 | ✅ done |
-| [T103](T103-config-snapshot-access.md) | เลิก `load_full()` ต่อ request | S | T101 |
+| [T103](T103-config-snapshot-access.md) | เลิก `load_full()` ต่อ request | S | T101 | ✅ done |
 | [T104](T104-socket-worker-tuning.md) | SO_REUSEPORT, tcp_nodelay, backlog, worker/threads | M | T002 |
-| [T105](T105-upstream-pool-keepalive.md) | Upstream connection pool / keepalive / H2 multiplexing | M | T002 |
+| [T105](T105-upstream-pool-keepalive.md) | Upstream connection pool / keepalive / H2 multiplexing | M | T002 | 🟡 `upstream_h2` ทำไปแล้วใน T115 |
 | [T106](T106-header-rewrite-rules.md) | Header add/remove/set ต่อ route (precompiled) | M | T102 |
 | [T107](T107-timeout-retry-budget.md) | Request timeout + retry budget กัน retry storm | M | — |
 | [T108](T108-rate-limit.md) | Rate limit + connection limit ต่อ route/IP | L | T102 |
@@ -66,7 +66,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T112](T112-acme-auto-tls.md) | ACME auto TLS (Let's Encrypt) | L | T111 |
 | [T113](T113-active-health-check.md) | Active health check prober (เสริม passive CB) | M | — |
 | [T114](T114-lb-least-conn-sticky.md) | LB: least_conn, P2C-EWMA, sticky session | M | T105 |
-| [T115](T115-ws-grpc-conformance.md) | เทสต์จริงของ WebSocket + gRPC streaming | M | — |
+| [T115](T115-ws-grpc-conformance.md) | เทสต์จริงของ WebSocket + gRPC streaming | M | — | ✅ done (เจอบั๊ก 2 ตัว) |
 
 ### Phase 2 — Control plane
 
@@ -116,8 +116,16 @@ micro-benchmark รันแล้ว ผลเต็มอยู่ใน [`doc
 | `normalize_host` จัดสรร String ทุก request | 43 ns → **26.5 ns** (คืน `Cow::Borrowed`) | ✅ [T101](T101-zero-alloc-request-path.md) |
 | reload แพงขึ้นเพราะต้องสร้าง index | 1.32 ms → 1.91 ms ที่ 1000 routes (งบ 5 ms) | ยอมรับได้ อยู่นอก request path |
 
-**T101 และ T102 ทำเสร็จแล้ว** งานถัดไปตามลำดับคือ [T103](T103-config-snapshot-access.md) (ตัด `load_full()` ต่อ request)
-แล้วจึงไปวัด proxy-vs-proxy จริงเมื่อมีเครื่องที่มี Docker
+**T101, T102, T103, T115 ทำเสร็จแล้ว**
+
+T115 เจอสองเรื่องที่ไม่มีใครรู้มาก่อนเพราะไม่เคยมีเทสต์:
+
+| สิ่งที่เจอ | ผลกระทบ | สถานะ |
+|---|---|---|
+| **gRPC ใช้งานไม่ได้เลย** — ALPN ของ upstream ถูกตั้งเป็น H1 เสมอ และ listener ไม่เปิด h2c | เรียก gRPC ผ่าน prx ได้ 502 ทั้งที่ README เคลมว่ารองรับ | ✅ แก้แล้ว (`[server] h2c`, `[[service]] upstream_h2`) |
+| **websocket ที่เงียบเกิน `read_timeout_ms` โดนตัด** | connection ที่ idle ตายทุกครั้งที่ตั้ง read timeout | ✅ แก้แล้ว (ไม่ใส่ timeout ให้ connection ที่ upgrade) |
+
+งานถัดไป: วัด proxy-vs-proxy จริงเมื่อมีเครื่องที่มี Docker (T002) แล้วไล่ T104/T105 ต่อ
 
 และ Phase 0 ยังเจออีกสองเรื่องที่ไม่ได้อยู่ในแผนเดิม:
 

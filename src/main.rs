@@ -2,7 +2,7 @@ use std::{env, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use arc_swap::ArcSwap;
-use pingora::{listeners::tls::TlsSettings, prelude::*};
+use pingora::{apps::HttpServerOptions, listeners::tls::TlsSettings, prelude::*};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -49,6 +49,16 @@ fn run() -> anyhow::Result<()> {
             app_config.server.ready_path.clone(),
         ),
     );
+
+    if app_config.server.h2c {
+        // Pingora peeks for the h2 preface and falls back to HTTP/1.1, so this
+        // costs nothing for HTTP/1.1 clients and is what cleartext gRPC needs.
+        if let Some(app) = proxy_service.app_logic_mut() {
+            let mut options = HttpServerOptions::default();
+            options.h2c = true;
+            app.server_options = Some(options);
+        }
+    }
 
     for addr in &app_config.server.listen {
         proxy_service.add_tcp(addr);

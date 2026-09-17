@@ -1045,6 +1045,7 @@ async fn create_service(State(state): State<AdminState>, body: Body) -> Response
                     .as_deref()
                     .map(|s| s.parse().unwrap_or_default())
                     .unwrap_or_default(),
+                upstream_h2: crate::config::UpstreamH2::default(),
                 max_retries: payload.max_retries.unwrap_or(0),
                 retry_backoff_ms: payload.retry_backoff_ms.unwrap_or(0),
                 circuit_breaker: payload
@@ -1181,6 +1182,9 @@ async fn update_service(
                     .as_deref()
                     .map(|s| s.parse().unwrap_or_default())
                     .unwrap_or_else(|| config.services[index].lb.clone()),
+                // Preserved rather than reset: the admin API does not expose
+                // this knob yet (T205 will generate the payload from the schema).
+                upstream_h2: config.services[index].upstream_h2,
                 max_retries: payload
                     .max_retries
                     .unwrap_or(config.services[index].max_retries),
