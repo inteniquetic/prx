@@ -40,12 +40,12 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 
 ### Phase 0 — Measurement (ทำก่อนทุกอย่าง)
 
-| ID | Task | Size | Depends |
-|---|---|---|---|
-| [T001](T001-bench-harness.md) | Benchmark harness: prx vs nginx vs haproxy | M | — |
-| [T002](T002-baseline-report.md) | Baseline report + `docs/BENCHMARKS.md` | S | T001 |
-| [T003](T003-profiling-and-microbench.md) | Flamegraph + criterion micro-bench | M | T001 |
-| [T004](T004-perf-ci-gate.md) | Perf regression gate ใน CI | M | T002, T003 |
+| ID | Task | Size | Depends | สถานะ |
+|---|---|---|---|---|
+| [T001](T001-bench-harness.md) | Benchmark harness: prx vs nginx vs haproxy | M | — | ✅ done |
+| [T002](T002-baseline-report.md) | Baseline report + `docs/BENCHMARKS.md` | S | T001 | 🟡 micro-bench วัดแล้ว / proxy-vs-proxy รอเครื่องที่มี Docker |
+| [T003](T003-profiling-and-microbench.md) | Flamegraph + criterion micro-bench | M | T001 | ✅ done |
+| [T004](T004-perf-ci-gate.md) | Perf regression gate ใน CI | M | T002, T003 | ✅ done |
 
 ### Phase 1 — Data plane
 
@@ -103,6 +103,19 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T403](T403-access-log-async-json.md) | Access log JSON แบบ non-blocking + sampling | M | T101 |
 | [T404](T404-packaging-deploy.md) | Docker slim, systemd unit, Helm chart | M | T310 |
 | [T405](T405-docs-and-benchmark-publication.md) | เอกสารสถาปัตยกรรม + เผยแพร่ผล benchmark | M | T004 |
+
+## ผลจาก Phase 0 (วัดแล้ว)
+
+micro-benchmark รันแล้ว ผลเต็มอยู่ใน [`docs/BENCHMARKS.md`](../BENCHMARKS.md) สรุปสิ่งที่เจอ:
+
+| สิ่งที่เจอ | ตัวเลข | ไปแก้ที่ |
+|---|---|---|
+| wildcard host matching จัดสรรหน่วยความจำต่อ route ต่อ request | 1000 wildcard routes = **59.3 µs/request** (เพดาน ~16.8k rps/core) | [T101](T101-zero-alloc-request-path.md), [T102](T102-route-matcher-index.md) |
+| route matching เป็นเชิงเส้นตามจำนวน route | 1000 exact routes = 3.1–4.3 µs/request | [T102](T102-route-matcher-index.md) |
+| `normalize_host` จัดสรร String ทุก request | 43 ns (68 ns เมื่อมี port) | [T101](T101-zero-alloc-request-path.md) |
+| reload ไม่ใช่ปัญหา | `RuntimeConfig::from_config` ที่ 1000 routes = 1.32 ms (งบ 5 ms) | — |
+
+ลำดับความสำคัญจึงชัดแล้ว: **T101 + T102 คืองานถัดไป** ไม่ใช่ฟีเจอร์ใหม่
 
 ## Milestones ที่แนะนำ
 

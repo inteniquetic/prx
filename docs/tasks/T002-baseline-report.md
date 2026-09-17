@@ -1,7 +1,7 @@
 # T002 — Baseline report + docs/BENCHMARKS.md
 
 **Phase:** 0 · Measurement
-**Status:** todo
+**Status:** partial
 **Size:** S (~0.5d)
 **Depends on:** T001
 **Files:** `docs/BENCHMARKS.md`, `bench/results/baseline/`
@@ -30,3 +30,13 @@
 ## Out of scope
 
 - แก้โค้ดให้เร็วขึ้น
+
+## สถานะ: ทำได้บางส่วน
+
+ทำแล้ว:
+- `docs/BENCHMARKS.md` พร้อมตัวเลข micro-benchmark จริง + การวิเคราะห์ว่าแพ้ตรงไหนและ link ไป task ที่รับผิดชอบ
+- `bench/results/baseline/micro-bench.json` — baseline ของ criterion (25 benchmarks)
+- README หลัก link ไป `docs/BENCHMARKS.md`
+
+ยังทำไม่ได้: ตัวเลข prx vs nginx vs haproxy — สภาพแวดล้อมที่พัฒนาไม่มี Docker
+ต้องรัน `scripts/bench.sh --all <scenario>` บนเครื่อง reference แล้ว copy ผลเข้า `bench/results/baseline/`

@@ -119,7 +119,11 @@ impl ConfigAdmin {
         }
     }
 
-    pub fn modify_config<F>(&self, active_config: &Arc<ArcSwap<RuntimeConfig>>, f: F) -> anyhow::Result<()>
+    pub fn modify_config<F>(
+        &self,
+        active_config: &Arc<ArcSwap<RuntimeConfig>>,
+        f: F,
+    ) -> anyhow::Result<()>
     where
         F: FnOnce(&mut PrxConfig) -> anyhow::Result<()>,
     {
@@ -128,7 +132,9 @@ impl ConfigAdmin {
             .lock()
             .map_err(|_| anyhow::anyhow!("config write lock is poisoned"))?;
 
-        let previous_bytes = fs::read(&self.config_path).with_context(|| {
+        // Fail early when the current config is unreadable, before anything is
+        // modified. Keeping the bytes around for rollback is T204's job.
+        fs::read(&self.config_path).with_context(|| {
             format!(
                 "failed to read previous config at {}",
                 self.config_path.to_string_lossy()
@@ -558,8 +564,9 @@ async fn render_route_health_payload(config: PrxConfig, timeout_ms: u64) -> Rout
         if let Some(service) = service_map.get(&route.service) {
             for upstream in &service.upstreams {
                 let per_upstream_timeout_ms = health_timeout_ms(upstream.connect_timeout_ms);
-                upstream_payloads
-                    .push(check_upstream_health(upstream.addr.clone(), per_upstream_timeout_ms).await);
+                upstream_payloads.push(
+                    check_upstream_health(upstream.addr.clone(), per_upstream_timeout_ms).await,
+                );
             }
         }
 
@@ -859,13 +866,13 @@ async fn get_webui_path(AxumPath(path): AxumPath<String>) -> Response<Body> {
 
 // ==================== Service CRUD Handlers ====================
 
-async fn list_services(
-    State(state): State<AdminState>,
-) -> Response<Body> {
+async fn list_services(State(state): State<AdminState>) -> Response<Body> {
     match state.config_admin.read_parsed_config() {
         Ok(config) => {
-            let services: Vec<AdminServicePayload> = config.services.iter().map(|s| {
-                AdminServicePayload {
+            let services: Vec<AdminServicePayload> = config
+                .services
+                .iter()
+                .map(|s| AdminServicePayload {
                     name: s.name.clone(),
                     lb: lb_to_string(s.lb.clone()).to_string(),
                     max_retries: s.max_retries,
@@ -875,8 +882,10 @@ async fn list_services(
                         consecutive_failures: s.circuit_breaker.consecutive_failures,
                         open_ms: s.circuit_breaker.open_ms,
                     },
-                    upstreams: s.upstreams.iter().map(|u| {
-                        AdminUpstreamPayload {
+                    upstreams: s
+                        .upstreams
+                        .iter()
+                        .map(|u| AdminUpstreamPayload {
                             addr: u.addr.clone(),
                             tls: u.tls,
                             sni: u.sni.clone().unwrap_or_default(),
@@ -888,10 +897,10 @@ async fn list_services(
                             read_timeout_ms: u.read_timeout_ms,
                             write_timeout_ms: u.write_timeout_ms,
                             idle_timeout_ms: u.idle_timeout_ms,
-                        }
-                    }).collect(),
-                }
-            }).collect();
+                        })
+                        .collect(),
+                })
+                .collect();
             json_response(StatusCode::OK, &services)
         }
         Err(err) => text_response(
@@ -918,8 +927,10 @@ async fn get_service(
                         consecutive_failures: service.circuit_breaker.consecutive_failures,
                         open_ms: service.circuit_breaker.open_ms,
                     },
-                    upstreams: service.upstreams.iter().map(|u| {
-                        AdminUpstreamPayload {
+                    upstreams: service
+                        .upstreams
+                        .iter()
+                        .map(|u| AdminUpstreamPayload {
                             addr: u.addr.clone(),
                             tls: u.tls,
                             sni: u.sni.clone().unwrap_or_default(),
@@ -931,8 +942,8 @@ async fn get_service(
                             read_timeout_ms: u.read_timeout_ms,
                             write_timeout_ms: u.write_timeout_ms,
                             idle_timeout_ms: u.idle_timeout_ms,
-                        }
-                    }).collect(),
+                        })
+                        .collect(),
                 };
                 json_response(StatusCode::OK, &service_payload)
             } else {
@@ -946,10 +957,7 @@ async fn get_service(
     }
 }
 
-async fn create_service(
-    State(state): State<AdminState>,
-    body: Body,
-) -> Response<Body> {
+async fn create_service(State(state): State<AdminState>, body: Body) -> Response<Body> {
     let bytes = match body::to_bytes(body, MAX_ADMIN_CONFIG_BODY_BYTES).await {
         Ok(bytes) => bytes,
         Err(err) => {
@@ -981,7 +989,10 @@ async fn create_service(
     };
 
     if payload.name.is_empty() {
-        return text_response(StatusCode::BAD_REQUEST, b"service_name_cannot_be_empty\n".to_vec());
+        return text_response(
+            StatusCode::BAD_REQUEST,
+            b"service_name_cannot_be_empty\n".to_vec(),
+        );
     }
 
     if payload.upstreams.is_empty() {
@@ -1002,58 +1013,70 @@ async fn create_service(
     }
 
     // Validate circuit breaker if provided
-    if let Some(cb) = &payload.circuit_breaker {
-        if cb.enabled.unwrap_or(false) {
-            if cb.consecutive_failures.unwrap_or(0) == 0 {
-                return text_response(
-                    StatusCode::BAD_REQUEST,
-                    b"circuit_breaker_consecutive_failures_must_be_gt_0_when_enabled\n".to_vec(),
-                );
-            }
-            if cb.open_ms.unwrap_or(0) == 0 {
-                return text_response(
-                    StatusCode::BAD_REQUEST,
-                    b"circuit_breaker_open_ms_must_be_gt_0_when_enabled\n".to_vec(),
-                );
-            }
+    if let Some(cb) = &payload.circuit_breaker
+        && cb.enabled.unwrap_or(false)
+    {
+        if cb.consecutive_failures.unwrap_or(0) == 0 {
+            return text_response(
+                StatusCode::BAD_REQUEST,
+                b"circuit_breaker_consecutive_failures_must_be_gt_0_when_enabled\n".to_vec(),
+            );
+        }
+        if cb.open_ms.unwrap_or(0) == 0 {
+            return text_response(
+                StatusCode::BAD_REQUEST,
+                b"circuit_breaker_open_ms_must_be_gt_0_when_enabled\n".to_vec(),
+            );
         }
     }
 
-    match state.config_admin.modify_config(&state.active_config, |config| {
-        // Check for duplicate service name
-        if config.services.iter().any(|s| s.name == payload.name) {
-            return Err(anyhow::anyhow!("service '{}' already exists", payload.name));
-        }
+    match state
+        .config_admin
+        .modify_config(&state.active_config, |config| {
+            // Check for duplicate service name
+            if config.services.iter().any(|s| s.name == payload.name) {
+                return Err(anyhow::anyhow!("service '{}' already exists", payload.name));
+            }
 
-        let service = crate::config::ServiceConfig {
-            name: payload.name.clone(),
-            lb: payload.lb.as_deref().map(|s| s.parse().unwrap_or_default())
-                .unwrap_or_default(),
-            max_retries: payload.max_retries.unwrap_or(0),
-            retry_backoff_ms: payload.retry_backoff_ms.unwrap_or(0),
-            circuit_breaker: payload.circuit_breaker.map(|cb| crate::config::CircuitBreakerConfig {
-                enabled: cb.enabled.unwrap_or(false),
-                consecutive_failures: cb.consecutive_failures.unwrap_or_default(),
-                open_ms: cb.open_ms.unwrap_or_default(),
-            }).unwrap_or_default(),
-            upstreams: payload.upstreams.into_iter().map(|u| crate::config::UpstreamConfig {
-                addr: u.addr,
-                tls: u.tls.unwrap_or(false),
-                sni: u.sni,
-                weight: u.weight.unwrap_or(1),
-                verify_cert: u.verify_cert,
-                verify_hostname: u.verify_hostname,
-                connect_timeout_ms: u.connect_timeout_ms,
-                total_connect_timeout_ms: u.total_connect_timeout_ms,
-                read_timeout_ms: u.read_timeout_ms,
-                write_timeout_ms: u.write_timeout_ms,
-                idle_timeout_ms: u.idle_timeout_ms,
-            }).collect(),
-        };
+            let service = crate::config::ServiceConfig {
+                name: payload.name.clone(),
+                lb: payload
+                    .lb
+                    .as_deref()
+                    .map(|s| s.parse().unwrap_or_default())
+                    .unwrap_or_default(),
+                max_retries: payload.max_retries.unwrap_or(0),
+                retry_backoff_ms: payload.retry_backoff_ms.unwrap_or(0),
+                circuit_breaker: payload
+                    .circuit_breaker
+                    .map(|cb| crate::config::CircuitBreakerConfig {
+                        enabled: cb.enabled.unwrap_or(false),
+                        consecutive_failures: cb.consecutive_failures.unwrap_or_default(),
+                        open_ms: cb.open_ms.unwrap_or_default(),
+                    })
+                    .unwrap_or_default(),
+                upstreams: payload
+                    .upstreams
+                    .into_iter()
+                    .map(|u| crate::config::UpstreamConfig {
+                        addr: u.addr,
+                        tls: u.tls.unwrap_or(false),
+                        sni: u.sni,
+                        weight: u.weight.unwrap_or(1),
+                        verify_cert: u.verify_cert,
+                        verify_hostname: u.verify_hostname,
+                        connect_timeout_ms: u.connect_timeout_ms,
+                        total_connect_timeout_ms: u.total_connect_timeout_ms,
+                        read_timeout_ms: u.read_timeout_ms,
+                        write_timeout_ms: u.write_timeout_ms,
+                        idle_timeout_ms: u.idle_timeout_ms,
+                    })
+                    .collect(),
+            };
 
-        config.services.push(service);
-        Ok(())
-    }) {
+            config.services.push(service);
+            Ok(())
+        }) {
         Ok(_) => text_response(StatusCode::CREATED, b"service_created\n".to_vec()),
         Err(err) => {
             if err.to_string().contains("already exists") {
@@ -1125,56 +1148,81 @@ async fn update_service(
     }
 
     // Validate circuit breaker if provided
-    if let Some(cb) = &payload.circuit_breaker {
-        if cb.enabled.unwrap_or(false) {
-            if cb.consecutive_failures.unwrap_or(0) == 0 {
-                return text_response(
-                    StatusCode::BAD_REQUEST,
-                    b"circuit_breaker_consecutive_failures_must_be_gt_0_when_enabled\n".to_vec(),
-                );
-            }
-            if cb.open_ms.unwrap_or(0) == 0 {
-                return text_response(
-                    StatusCode::BAD_REQUEST,
-                    b"circuit_breaker_open_ms_must_be_gt_0_when_enabled\n".to_vec(),
-                );
-            }
+    if let Some(cb) = &payload.circuit_breaker
+        && cb.enabled.unwrap_or(false)
+    {
+        if cb.consecutive_failures.unwrap_or(0) == 0 {
+            return text_response(
+                StatusCode::BAD_REQUEST,
+                b"circuit_breaker_consecutive_failures_must_be_gt_0_when_enabled\n".to_vec(),
+            );
+        }
+        if cb.open_ms.unwrap_or(0) == 0 {
+            return text_response(
+                StatusCode::BAD_REQUEST,
+                b"circuit_breaker_open_ms_must_be_gt_0_when_enabled\n".to_vec(),
+            );
         }
     }
 
-    match state.config_admin.modify_config(&state.active_config, |config| {
-        let index = config.services.iter().position(|s| s.name == name)
-            .ok_or_else(|| anyhow::anyhow!("service '{}' not found", name))?;
+    match state
+        .config_admin
+        .modify_config(&state.active_config, |config| {
+            let index = config
+                .services
+                .iter()
+                .position(|s| s.name == name)
+                .ok_or_else(|| anyhow::anyhow!("service '{}' not found", name))?;
 
-        let service = crate::config::ServiceConfig {
-            name: payload.name.clone(),
-            lb: payload.lb.as_deref().map(|s| s.parse().unwrap_or_default())
-                .unwrap_or_else(|| config.services[index].lb.clone()),
-            max_retries: payload.max_retries.unwrap_or(config.services[index].max_retries),
-            retry_backoff_ms: payload.retry_backoff_ms.unwrap_or(config.services[index].retry_backoff_ms),
-            circuit_breaker: payload.circuit_breaker.map(|cb| crate::config::CircuitBreakerConfig {
-                enabled: cb.enabled.unwrap_or(config.services[index].circuit_breaker.enabled),
-                consecutive_failures: cb.consecutive_failures.unwrap_or(config.services[index].circuit_breaker.consecutive_failures),
-                open_ms: cb.open_ms.unwrap_or(config.services[index].circuit_breaker.open_ms),
-            }).unwrap_or_else(|| config.services[index].circuit_breaker.clone()),
-            upstreams: payload.upstreams.into_iter().map(|u| crate::config::UpstreamConfig {
-                addr: u.addr,
-                tls: u.tls.unwrap_or(false),
-                sni: u.sni,
-                weight: u.weight.unwrap_or(1),
-                verify_cert: u.verify_cert,
-                verify_hostname: u.verify_hostname,
-                connect_timeout_ms: u.connect_timeout_ms,
-                total_connect_timeout_ms: u.total_connect_timeout_ms,
-                read_timeout_ms: u.read_timeout_ms,
-                write_timeout_ms: u.write_timeout_ms,
-                idle_timeout_ms: u.idle_timeout_ms,
-            }).collect(),
-        };
+            let service = crate::config::ServiceConfig {
+                name: payload.name.clone(),
+                lb: payload
+                    .lb
+                    .as_deref()
+                    .map(|s| s.parse().unwrap_or_default())
+                    .unwrap_or_else(|| config.services[index].lb.clone()),
+                max_retries: payload
+                    .max_retries
+                    .unwrap_or(config.services[index].max_retries),
+                retry_backoff_ms: payload
+                    .retry_backoff_ms
+                    .unwrap_or(config.services[index].retry_backoff_ms),
+                circuit_breaker: payload
+                    .circuit_breaker
+                    .map(|cb| crate::config::CircuitBreakerConfig {
+                        enabled: cb
+                            .enabled
+                            .unwrap_or(config.services[index].circuit_breaker.enabled),
+                        consecutive_failures: cb
+                            .consecutive_failures
+                            .unwrap_or(config.services[index].circuit_breaker.consecutive_failures),
+                        open_ms: cb
+                            .open_ms
+                            .unwrap_or(config.services[index].circuit_breaker.open_ms),
+                    })
+                    .unwrap_or_else(|| config.services[index].circuit_breaker.clone()),
+                upstreams: payload
+                    .upstreams
+                    .into_iter()
+                    .map(|u| crate::config::UpstreamConfig {
+                        addr: u.addr,
+                        tls: u.tls.unwrap_or(false),
+                        sni: u.sni,
+                        weight: u.weight.unwrap_or(1),
+                        verify_cert: u.verify_cert,
+                        verify_hostname: u.verify_hostname,
+                        connect_timeout_ms: u.connect_timeout_ms,
+                        total_connect_timeout_ms: u.total_connect_timeout_ms,
+                        read_timeout_ms: u.read_timeout_ms,
+                        write_timeout_ms: u.write_timeout_ms,
+                        idle_timeout_ms: u.idle_timeout_ms,
+                    })
+                    .collect(),
+            };
 
-        config.services[index] = service;
-        Ok(())
-    }) {
+            config.services[index] = service;
+            Ok(())
+        }) {
         Ok(_) => text_response(StatusCode::OK, b"service_updated\n".to_vec()),
         Err(err) => {
             if err.to_string().contains("not found") {
@@ -1190,22 +1238,27 @@ async fn delete_service(
     State(state): State<AdminState>,
     AxumPath(name): AxumPath<String>,
 ) -> Response<Body> {
-    match state.config_admin.modify_config(&state.active_config, |config| {
-        let index = config.services.iter().position(|s| s.name == name)
-            .ok_or_else(|| anyhow::anyhow!("service '{}' not found", name))?;
+    match state
+        .config_admin
+        .modify_config(&state.active_config, |config| {
+            let index = config
+                .services
+                .iter()
+                .position(|s| s.name == name)
+                .ok_or_else(|| anyhow::anyhow!("service '{}' not found", name))?;
 
-        // Check if any routes reference this service
-        let referenced = config.routes.iter().any(|r| r.service == name);
-        if referenced {
-            return Err(anyhow::anyhow!(
-                "service '{}' is referenced by one or more routes",
-                name
-            ));
-        }
+            // Check if any routes reference this service
+            let referenced = config.routes.iter().any(|r| r.service == name);
+            if referenced {
+                return Err(anyhow::anyhow!(
+                    "service '{}' is referenced by one or more routes",
+                    name
+                ));
+            }
 
-        config.services.remove(index);
-        Ok(())
-    }) {
+            config.services.remove(index);
+            Ok(())
+        }) {
         Ok(_) => text_response(StatusCode::OK, b"service_deleted\n".to_vec()),
         Err(err) => {
             if err.to_string().contains("not found") {
@@ -1221,21 +1274,21 @@ async fn delete_service(
 
 // ==================== Route CRUD Handlers ====================
 
-async fn list_routes(
-    State(state): State<AdminState>,
-) -> Response<Body> {
+async fn list_routes(State(state): State<AdminState>) -> Response<Body> {
     match state.config_admin.read_parsed_config() {
         Ok(config) => {
-            let routes: Vec<AdminRoutePayload> = config.routes.iter().map(|r| {
-                AdminRoutePayload {
+            let routes: Vec<AdminRoutePayload> = config
+                .routes
+                .iter()
+                .map(|r| AdminRoutePayload {
                     name: r.name.clone(),
                     service: r.service.clone(),
                     host: r.host.clone().unwrap_or_default(),
                     path_prefix: r.path_prefix.clone(),
                     methods: r.methods.clone(),
                     is_default: r.is_default,
-                }
-            }).collect();
+                })
+                .collect();
             json_response(StatusCode::OK, &routes)
         }
         Err(err) => text_response(
@@ -1272,10 +1325,7 @@ async fn get_route(
     }
 }
 
-async fn create_route(
-    State(state): State<AdminState>,
-    body: Body,
-) -> Response<Body> {
+async fn create_route(State(state): State<AdminState>, body: Body) -> Response<Body> {
     let bytes = match body::to_bytes(body, MAX_ADMIN_CONFIG_BODY_BYTES).await {
         Ok(bytes) => bytes,
         Err(err) => {
@@ -1307,11 +1357,17 @@ async fn create_route(
     };
 
     if payload.name.is_empty() {
-        return text_response(StatusCode::BAD_REQUEST, b"route_name_cannot_be_empty\n".to_vec());
+        return text_response(
+            StatusCode::BAD_REQUEST,
+            b"route_name_cannot_be_empty\n".to_vec(),
+        );
     }
 
     if payload.service.is_empty() {
-        return text_response(StatusCode::BAD_REQUEST, b"service_cannot_be_empty\n".to_vec());
+        return text_response(
+            StatusCode::BAD_REQUEST,
+            b"service_cannot_be_empty\n".to_vec(),
+        );
     }
 
     let path_prefix = payload.path_prefix.as_deref().unwrap_or("/");
@@ -1322,36 +1378,36 @@ async fn create_route(
         );
     }
 
-    match state.config_admin.modify_config(&state.active_config, |config| {
-        // Check for duplicate route name
-        if config.routes.iter().any(|r| r.name == payload.name) {
-            return Err(anyhow::anyhow!("route '{}' already exists", payload.name));
-        }
+    match state
+        .config_admin
+        .modify_config(&state.active_config, |config| {
+            // Check for duplicate route name
+            if config.routes.iter().any(|r| r.name == payload.name) {
+                return Err(anyhow::anyhow!("route '{}' already exists", payload.name));
+            }
 
-        // Check if service exists
-        if !config.services.iter().any(|s| s.name == payload.service) {
-            return Err(anyhow::anyhow!("service '{}' not found", payload.service));
-        }
+            // Check if service exists
+            if !config.services.iter().any(|s| s.name == payload.service) {
+                return Err(anyhow::anyhow!("service '{}' not found", payload.service));
+            }
 
-        // Check for duplicate default route
-        if payload.is_default.unwrap_or(false) {
-            if config.routes.iter().any(|r| r.is_default) {
+            // Check for duplicate default route
+            if payload.is_default.unwrap_or(false) && config.routes.iter().any(|r| r.is_default) {
                 return Err(anyhow::anyhow!("only one route can be marked as default"));
             }
-        }
 
-        let route = crate::config::RouteConfig {
-            name: payload.name.clone(),
-            service: payload.service.clone(),
-            host: payload.host,
-            path_prefix: payload.path_prefix.unwrap_or_else(|| "/".to_string()),
-            methods: payload.methods.unwrap_or_default(),
-            is_default: payload.is_default.unwrap_or(false),
-        };
+            let route = crate::config::RouteConfig {
+                name: payload.name.clone(),
+                service: payload.service.clone(),
+                host: payload.host,
+                path_prefix: payload.path_prefix.unwrap_or_else(|| "/".to_string()),
+                methods: payload.methods.unwrap_or_default(),
+                is_default: payload.is_default.unwrap_or(false),
+            };
 
-        config.routes.push(route);
-        Ok(())
-    }) {
+            config.routes.push(route);
+            Ok(())
+        }) {
         Ok(_) => text_response(StatusCode::CREATED, b"route_created\n".to_vec()),
         Err(err) => {
             let err_str = err.to_string();
@@ -1411,7 +1467,10 @@ async fn update_route(
     }
 
     if payload.service.is_empty() {
-        return text_response(StatusCode::BAD_REQUEST, b"service_cannot_be_empty\n".to_vec());
+        return text_response(
+            StatusCode::BAD_REQUEST,
+            b"service_cannot_be_empty\n".to_vec(),
+        );
     }
 
     let path_prefix = payload.path_prefix.as_deref().unwrap_or("/");
@@ -1422,36 +1481,46 @@ async fn update_route(
         );
     }
 
-    match state.config_admin.modify_config(&state.active_config, |config| {
-        let index = config.routes.iter().position(|r| r.name == name)
-            .ok_or_else(|| anyhow::anyhow!("route '{}' not found", name))?;
+    match state
+        .config_admin
+        .modify_config(&state.active_config, |config| {
+            let index = config
+                .routes
+                .iter()
+                .position(|r| r.name == name)
+                .ok_or_else(|| anyhow::anyhow!("route '{}' not found", name))?;
 
-        // Check if service exists
-        if !config.services.iter().any(|s| s.name == payload.service) {
-            return Err(anyhow::anyhow!("service '{}' not found", payload.service));
-        }
+            // Check if service exists
+            if !config.services.iter().any(|s| s.name == payload.service) {
+                return Err(anyhow::anyhow!("service '{}' not found", payload.service));
+            }
 
-        // Check for duplicate default route
-        let current_default = config.routes[index].is_default;
-        let new_default = payload.is_default.unwrap_or(current_default);
-        if new_default && !current_default {
-            if config.routes.iter().any(|r| r.is_default && r.name != name) {
+            // Check for duplicate default route
+            let current_default = config.routes[index].is_default;
+            let new_default = payload.is_default.unwrap_or(current_default);
+            if new_default
+                && !current_default
+                && config.routes.iter().any(|r| r.is_default && r.name != name)
+            {
                 return Err(anyhow::anyhow!("only one route can be marked as default"));
             }
-        }
 
-        let route = crate::config::RouteConfig {
-            name: payload.name.clone(),
-            service: payload.service.clone(),
-            host: payload.host,
-            path_prefix: payload.path_prefix.unwrap_or_else(|| "/".to_string()),
-            methods: payload.methods.unwrap_or_else(|| config.routes[index].methods.clone()),
-            is_default: payload.is_default.unwrap_or(config.routes[index].is_default),
-        };
+            let route = crate::config::RouteConfig {
+                name: payload.name.clone(),
+                service: payload.service.clone(),
+                host: payload.host,
+                path_prefix: payload.path_prefix.unwrap_or_else(|| "/".to_string()),
+                methods: payload
+                    .methods
+                    .unwrap_or_else(|| config.routes[index].methods.clone()),
+                is_default: payload
+                    .is_default
+                    .unwrap_or(config.routes[index].is_default),
+            };
 
-        config.routes[index] = route;
-        Ok(())
-    }) {
+            config.routes[index] = route;
+            Ok(())
+        }) {
         Ok(_) => text_response(StatusCode::OK, b"route_updated\n".to_vec()),
         Err(err) => {
             let err_str = err.to_string();
@@ -1470,13 +1539,18 @@ async fn delete_route(
     State(state): State<AdminState>,
     AxumPath(name): AxumPath<String>,
 ) -> Response<Body> {
-    match state.config_admin.modify_config(&state.active_config, |config| {
-        let index = config.routes.iter().position(|r| r.name == name)
-            .ok_or_else(|| anyhow::anyhow!("route '{}' not found", name))?;
+    match state
+        .config_admin
+        .modify_config(&state.active_config, |config| {
+            let index = config
+                .routes
+                .iter()
+                .position(|r| r.name == name)
+                .ok_or_else(|| anyhow::anyhow!("route '{}' not found", name))?;
 
-        config.routes.remove(index);
-        Ok(())
-    }) {
+            config.routes.remove(index);
+            Ok(())
+        }) {
         Ok(_) => text_response(StatusCode::OK, b"route_deleted\n".to_vec()),
         Err(err) => {
             if err.to_string().contains("not found") {
@@ -1498,10 +1572,16 @@ fn build_router(state: AdminState) -> Router {
         )
         // Service CRUD endpoints
         .route(ADMIN_SERVICES_PATH, get(list_services).post(create_service))
-        .route(ADMIN_SERVICES_NAME_PATH, get(get_service).put(update_service).delete(delete_service))
+        .route(
+            ADMIN_SERVICES_NAME_PATH,
+            get(get_service).put(update_service).delete(delete_service),
+        )
         // Route CRUD endpoints
         .route(ADMIN_ROUTES_PATH, get(list_routes).post(create_route))
-        .route(ADMIN_ROUTES_NAME_PATH, get(get_route).put(update_route).delete(delete_route))
+        .route(
+            ADMIN_ROUTES_NAME_PATH,
+            get(get_route).put(update_route).delete(delete_route),
+        )
         // WebUI
         .route("/", get(get_webui_root))
         .route("/{*path}", get(get_webui_path))

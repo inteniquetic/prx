@@ -3,6 +3,14 @@ name = "prx"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "prx"
+path = "src/lib.rs"
+
+[[bin]]
+name = "prx"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 arc-swap = "1"
@@ -24,7 +32,22 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
 tempfile = "3"
+
+[[bench]]
+name = "routing"
+harness = false
+
+[[bench]]
+name = "config"
+harness = false
+
+# Release build with debug symbols, used by scripts/profile.sh so that
+# flamegraphs show real frame names instead of raw addresses.
+[profile.profiling]
+inherits = "release"
+debug = 1
 
 [patch.crates-io]
 pingora-core = { path = "vendor/pingora-core" }

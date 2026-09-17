@@ -1,7 +1,7 @@
 # T001 — Benchmark harness: prx vs nginx vs haproxy
 
 **Phase:** 0 · Measurement
-**Status:** todo
+**Status:** done
 **Size:** M (~1d)
 **Depends on:** —
 **Files:** `bench/` (ใหม่), `scripts/bench.sh`, `Makefile`
@@ -49,3 +49,16 @@ make bench-compare
 
 - CI gate (อยู่ T004)
 - การ optimize ใดๆ (harness ต้องเป็นกลาง ห้ามแก้ prx ใน PR นี้)
+
+## ผลลัพธ์ที่ส่งมอบ
+
+- `bench/docker-compose.yml` — compose profile แยกต่อ target (รันทีละตัว ไม่แย่ง CPU), pin cpuset
+- `bench/configs/{prx.toml,nginx.conf,haproxy.cfg}` — ตั้งค่าให้เทียบเท่ากัน (4 workers, 2 upstreams round-robin, keepalive, ไม่ retry, ปิด access log)
+- `bench/backend/` — backend จำลอง (Rust/tokio) ตอบ 1KB/64KB และมี `/slow/<ms>` — ทดสอบแล้วว่า keepalive reuse ทำงาน
+- `scripts/bench.sh` — warmup + measure, เก็บ peak RSS และ CPU ticks ของ process ใน container
+- `scripts/bench-parse.py` — normalize ผล oha/h2load เป็น JSON schema เดียว (ทดสอบแล้ว)
+- `scripts/bench-compare.sh` — ตารางเทียบ + % ของ prx เทียบแต่ละตัว (ทดสอบแล้ว)
+- `bench/README.md` — วิธีรัน ข้อควรระวัง และเหตุผลที่ผลบนแล็ปท็อปเชื่อไม่ได้
+- `make bench` / `make bench-all` / `make bench-compare`
+
+**ยังเหลือ:** ต้องรันจริงบนเครื่องที่มี Docker เพื่อยืนยัน acceptance criteria ข้อ "รันซ้ำ 3 รอบต่างกัน < 3%"

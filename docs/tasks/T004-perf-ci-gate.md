@@ -1,7 +1,7 @@
 # T004 — Perf regression gate ใน CI
 
 **Phase:** 0 · Measurement
-**Status:** todo
+**Status:** done
 **Size:** M (~1d)
 **Depends on:** T002, T003
 **Files:** `.github/workflows/perf.yml`, `scripts/perf-gate.sh`
@@ -31,3 +31,14 @@
 ## Out of scope
 
 - Self-hosted bare-metal runner (บันทึกเป็น follow-up ถ้า noise สูงเกินใช้งาน)
+
+## ผลลัพธ์ที่ส่งมอบ
+
+- `.github/workflows/perf.yml` — job `micro` (nightly / manual / PR ที่ติด label `perf`) และ job `macro` (nightly, informational)
+- `scripts/perf-gate.sh micro` — เทียบ criterion median กับ baseline ที่ commit ไว้ fail ถ้าช้าลงเกิน 5%
+- `scripts/perf-gate.sh macro <scenario>` — เทียบ RPS/RSS กับ baseline fail ถ้า RPS ตกเกิน 7% หรือ RSS โตเกิน 10%
+- ทดสอบแล้ว: ใส่ regression 30% เข้าไป gate คืน exit 1 และชี้ชื่อ benchmark ที่ช้าลง
+
+CI ปกติ (`ci.yml`) ไม่ช้าลง — เพิ่มแค่ `cargo build --benches` เพื่อกัน bench พังเงียบ
+
+**ยังเหลือ:** job `macro` ตั้งเป็น `continue-on-error` จนกว่าจะมี runner ที่นิ่งพอ (shared runner วัด proxy-vs-proxy ไม่ได้)

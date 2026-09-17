@@ -1,10 +1,3 @@
-mod admin;
-mod config;
-mod metrics;
-mod proxy;
-mod reload;
-mod runtime;
-
 use std::{env, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Context;
@@ -13,7 +6,7 @@ use pingora::{listeners::tls::TlsSettings, prelude::*};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use crate::{
+use prx::{
     admin::{AdminAxumService, DEFAULT_ADMIN_LISTEN, bind_admin_listener},
     config::PrxConfig,
     proxy::PrxProxy,

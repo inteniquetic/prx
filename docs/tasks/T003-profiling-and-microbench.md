@@ -1,7 +1,7 @@
 # T003 — Flamegraph + criterion micro-bench
 
 **Phase:** 0 · Measurement
-**Status:** todo
+**Status:** done
 **Size:** M (~1d)
 **Depends on:** T001
 **Files:** `Cargo.toml`, `benches/` (ใหม่), `scripts/profile.sh`, `docs/PROFILING.md`
@@ -38,3 +38,17 @@ bash scripts/profile.sh h1-keepalive
 ## Out of scope
 
 - การแก้ code ตามผล profile (ไปที่ T101/T102/T103)
+
+## ผลลัพธ์ที่ส่งมอบ
+
+- `src/lib.rs` — แยก lib target ออกจาก bin เพื่อให้ benches/tests เข้าถึง `runtime`/`config` ได้โดยตรง
+- `benches/routing.rs` — `select_route` ที่ 10/100/1000 routes × (first/last/fallback/host-with-port/wildcard) + `normalize_host` + `hash_key`
+- `benches/config.rs` — parse+validate และ `RuntimeConfig::from_config` ที่ 10/100/1000 routes
+- `scripts/profile.sh` — flamegraph ของ prx ใต้ load (profile `profiling` = release + debug symbols)
+- `scripts/bench-micro-export.py` — export ผล criterion เป็น JSON สำหรับ baseline/CI
+- `docs/PROFILING.md` — วิธีอ่าน flamegraph และสิ่งที่ต้องมองหาในเส้นทาง request ของ prx
+- `make bench-micro`, `make profile`
+
+รันจริงแล้ว ผลอยู่ใน `docs/BENCHMARKS.md` — เจอปัญหาใหญ่: wildcard host matching ที่ 1000 routes = 59.3µs/request
+
+**ยังเหลือ:** flamegraph ยังไม่ได้ commit (ต้อง perf ซึ่งรันในคอนเทนเนอร์นี้ไม่ได้)

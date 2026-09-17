@@ -430,7 +430,13 @@ mod tests {
         }
     }
 
-    fn route(name: &str, service: &str, host: Option<&str>, path_prefix: &str, is_default: bool) -> RouteConfig {
+    fn route(
+        name: &str,
+        service: &str,
+        host: Option<&str>,
+        path_prefix: &str,
+        is_default: bool,
+    ) -> RouteConfig {
         RouteConfig {
             name: name.to_string(),
             service: service.to_string(),
@@ -457,7 +463,12 @@ mod tests {
     #[test]
     fn select_route_returns_none_when_no_route_matches_and_no_default() {
         let runtime = runtime_from_parts(
-            vec![service("api", LbStrategy::RoundRobin, 0, vec![upstream("127.0.0.1:9000")])],
+            vec![service(
+                "api",
+                LbStrategy::RoundRobin,
+                0,
+                vec![upstream("127.0.0.1:9000")],
+            )],
             vec![route("api", "api", Some("api.local"), "/api", false)],
         );
 
@@ -468,8 +479,18 @@ mod tests {
     fn select_route_uses_default_route_when_present() {
         let runtime = runtime_from_parts(
             vec![
-                service("api", LbStrategy::RoundRobin, 0, vec![upstream("127.0.0.1:9000")]),
-                service("default", LbStrategy::RoundRobin, 0, vec![upstream("127.0.0.1:9001")]),
+                service(
+                    "api",
+                    LbStrategy::RoundRobin,
+                    0,
+                    vec![upstream("127.0.0.1:9000")],
+                ),
+                service(
+                    "default",
+                    LbStrategy::RoundRobin,
+                    0,
+                    vec![upstream("127.0.0.1:9001")],
+                ),
             ],
             vec![
                 route("api", "api", Some("api.local"), "/api", false),
@@ -486,10 +507,12 @@ mod tests {
     #[test]
     fn next_upstream_skips_attempted_candidate_for_failover() {
         let runtime = runtime_from_parts(
-            vec![service("default", LbStrategy::Hash, 1, vec![
-                upstream("127.0.0.1:9100"),
-                upstream("127.0.0.1:9101"),
-            ])],
+            vec![service(
+                "default",
+                LbStrategy::Hash,
+                1,
+                vec![upstream("127.0.0.1:9100"), upstream("127.0.0.1:9101")],
+            )],
             vec![route("default", "default", None, "/", true)],
         );
 
@@ -527,7 +550,10 @@ mod tests {
             circuit_breaker: breaker,
             upstreams: vec![upstream("127.0.0.1:9200"), upstream("127.0.0.1:9201")],
         };
-        let runtime = runtime_from_parts(vec![svc], vec![route("default", "default", None, "/", true)]);
+        let runtime = runtime_from_parts(
+            vec![svc],
+            vec![route("default", "default", None, "/", true)],
+        );
 
         let route = runtime.route(0).expect("route exists");
         let service = runtime.service(route.service_idx).expect("service exists");
@@ -555,7 +581,10 @@ mod tests {
             circuit_breaker: breaker,
             upstreams: vec![upstream("127.0.0.1:9300")],
         };
-        let runtime = runtime_from_parts(vec![svc], vec![route("default", "default", None, "/", true)]);
+        let runtime = runtime_from_parts(
+            vec![svc],
+            vec![route("default", "default", None, "/", true)],
+        );
 
         let route = runtime.route(0).expect("route exists");
         let service = runtime.service(route.service_idx).expect("service exists");
@@ -568,8 +597,18 @@ mod tests {
     fn route_resolves_correct_service_index() {
         let runtime = runtime_from_parts(
             vec![
-                service("first", LbStrategy::RoundRobin, 0, vec![upstream("127.0.0.1:8001")]),
-                service("second", LbStrategy::RoundRobin, 0, vec![upstream("127.0.0.1:8002")]),
+                service(
+                    "first",
+                    LbStrategy::RoundRobin,
+                    0,
+                    vec![upstream("127.0.0.1:8001")],
+                ),
+                service(
+                    "second",
+                    LbStrategy::RoundRobin,
+                    0,
+                    vec![upstream("127.0.0.1:8002")],
+                ),
             ],
             vec![
                 route("r1", "second", None, "/a", false),
@@ -579,16 +618,10 @@ mod tests {
 
         let r1 = runtime.route(0).expect("r1 exists");
         assert_eq!(r1.service_idx, 1); // "second" is at index 1
-        assert_eq!(
-            runtime.service(r1.service_idx).unwrap().name,
-            "second"
-        );
+        assert_eq!(runtime.service(r1.service_idx).unwrap().name, "second");
 
         let r2 = runtime.route(1).expect("r2 exists");
         assert_eq!(r2.service_idx, 0); // "first" is at index 0
-        assert_eq!(
-            runtime.service(r2.service_idx).unwrap().name,
-            "first"
-        );
+        assert_eq!(runtime.service(r2.service_idx).unwrap().name, "first");
     }
 }

@@ -65,6 +65,21 @@ Config wiki:
 Planned work is broken down into small, independently shippable tasks:
 `docs/tasks/README.md`
 
+## Benchmarks
+
+Measured numbers and how to reproduce them: `docs/BENCHMARKS.md`.
+The harness that compares prx against nginx and haproxy lives in `bench/`:
+
+```bash
+scripts/bench.sh --all h1-keepalive   # needs docker + oha
+make bench-micro                      # criterion micro-benchmarks, no docker
+```
+
+Profiling guide: `docs/PROFILING.md`.
+
+No performance claim belongs in this README unless `docs/BENCHMARKS.md` carries
+the number behind it.
+
 Key config knobs:
 
 - `[server].health_path` and `[server].ready_path` for liveness/readiness probes
