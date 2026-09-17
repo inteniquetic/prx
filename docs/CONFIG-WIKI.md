@@ -70,6 +70,7 @@ Validation:
 | `name` | `string` | `"default"` | No | Route name |
 | `host` | `string` | `null` | No | host matcher |
 | `path_prefix` | `string` | `"/"` | No | path prefix matcher |
+| `methods` | `array` | `[]` | No | allowed HTTP methods (empty = any) |
 | `is_default` | `bool` | `false` | No | Fallback route when no match |
 | `lb` | enum | `"round_robin"` | No | `round_robin`, `random`, `hash` |
 | `max_retries` | `number` | `0` | No | Retries per request |
@@ -80,16 +81,45 @@ Validation:
 Validation:
 - `path_prefix` must not be empty and must start with `/`.
 - At most one route can have `is_default = true`.
+- Every entry in `methods` must be a known HTTP method (case-insensitive):
+  `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, `TRACE`, `CONNECT`.
 
 Host matching:
 - `host = "api.example.com"`: exact match
 - `host = "*.example.com"`: matches both `foo.example.com` and `example.com`.
-- If `host` is `null`: matches all hosts.
+- If `host` is `null` or `""`: matches all hosts.
 - Host is normalized to lowercase and `:port` is stripped before matching.
 
 Path matching:
 - Uses `starts_with(path_prefix)`.
-- Routes are sorted so longer `path_prefix` values match first.
+
+### Matching precedence
+
+Requests are matched against an index built at load time, in this order:
+
+1. **Host tier**: exact host wins over wildcard host, which wins over a route
+   with no host. Among wildcards, the longest suffix wins
+   (`*.api.example.com` before `*.example.com`).
+2. **Path**: within the winning host, the longest `path_prefix` wins.
+3. **Config order**: routes that tie on host and path are resolved by the order
+   they appear in the file — the first one wins.
+4. **Default**: a route with `is_default = true` is used when nothing matched.
+
+The first host tier that covers the path decides the request. A more specific
+host does not fall through to a broader one.
+
+### Method matching
+
+`methods` is a hard filter on the route that wins the path match:
+
+- empty list (the default) accepts every method;
+- otherwise, only the listed methods are accepted, and any other method gets
+  `405 method_not_allowed`;
+- prx does **not** fall back to a broader route or to the default route on a
+  method mismatch, because that would route a request past the restriction
+  you asked for;
+- a method prx does not know (for example `PROPFIND`) only matches routes that
+  list no methods at all.
 
 ### 3.5 `[route.circuit_breaker]`
 
@@ -131,6 +161,8 @@ Runtime notes:
 If no route matches `(host, path)`:
 - If a route has `is_default = true`, that route is used.
 - If no default route exists, the response is `404`.
+- If a route matched the path but rejected the request method, the response is
+  `405` and the default route is not used.
 
 ### 4.2 Health/Readiness
 
@@ -157,6 +189,7 @@ If no route matches `(host, path)`:
 - `route '<name>' path_prefix must start with '/'`
 - `route '<name>' includes upstream with empty addr`
 - `only one route can be marked is_default = true`
+- `route '<name>' lists unsupported HTTP method '<method>'`
 
 ## 6) Full Config Example (Production-style Baseline)
 

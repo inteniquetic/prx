@@ -1,7 +1,7 @@
 # T101 — ตัด allocation ต่อ request ใน request path
 
 **Phase:** 1 · Data plane
-**Status:** todo
+**Status:** done
 **Size:** M (~1d)
 **Depends on:** T003
 **Files:** `src/proxy.rs`, `src/runtime.rs`
@@ -52,3 +52,25 @@ make bench SCENARIO=h1-keepalive   # เทียบกับ baseline
 ## Out of scope
 
 - เปลี่ยนอัลกอริทึม matching (T102)
+
+## ผลลัพธ์ที่ส่งมอบ
+
+- `RouteRuntime.name` เป็น `Arc<str>` และ `ctx.route_name` เป็น `Option<Arc<str>>` → clone = refcount ไม่ใช่ alloc
+- ชื่อคงที่ (`health`, `ready`, `no_route`, `method_not_allowed`, `unknown`) สร้างไว้ล่วงหน้าใน `PrxProxy`
+- `normalize_host` คืน `Cow<str>` → ยืมได้เมื่อ host เป็นตัวเล็กและไม่มี port (เคสปกติ)
+- `ctx.host` / `ctx.path` ถูกลบทิ้ง — `logging()` และ error path อ่านจาก `session` โดยตรง
+- `hash_key` ถูกเรียกเฉพาะ service ที่ใช้ `lb = "hash"` (เดิมคำนวณทุก request)
+- `matches_host` ที่มี `format!` ถูกแทนด้วย index ของ T102
+- `request_filter` ตอนนี้ไม่มี allocation เหลือ: `.clone()` ทุกตัวที่เหลือเป็น `Arc`
+
+## ผลวัด (median, container 4 vCPU)
+
+| benchmark | ก่อน | หลัง |
+|---|---|---|
+| `normalize_host/plain` | 43.0 ns | 26.5 ns (1.6×) |
+| `normalize_host/with_port` | 68.1 ns | 52.4 ns (1.3×) |
+| `normalize_host/ipv6` | 35.8 ns | 19.2 ns (1.9×) |
+
+ผลของ `select_route` อยู่ใน T102 เพราะสองงานนี้แก้โค้ดชุดเดียวกัน
+
+**ยังไม่ได้ทำ:** flamegraph ยืนยันว่า `__rust_alloc` หลุดจาก top-10 (ต้องใช้ perf ซึ่งรันในคอนเทนเนอร์นี้ไม่ได้)

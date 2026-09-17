@@ -15,6 +15,13 @@
 `src/metrics.rs` (~80 บรรทัด) มี metric พื้นฐานอยู่บ้าง — ต้องสำรวจว่ามีอะไรแล้ว และเติมส่วนที่ขาด
 โดยไม่ทำให้ cardinality ระเบิด
 
+## บั๊กที่ต้องแก้ในงานนี้ (เจอตอนทำ T101)
+
+`logging()` (`src/proxy.rs`) เริ่มด้วย `if !self.access_log { return; }` แต่ `metrics::observe_request`
+ถูกเรียก **หลัง** บรรทัดนั้น → ตั้ง `access_log = false` (ซึ่งเป็นค่าที่ใช้ตอน benchmark และที่หลายคนใช้ใน production)
+แล้ว metric ของ request จะไม่ถูกบันทึกเลย ทั้งที่ `/metrics` ยังเปิดอยู่
+ต้องแยกการบันทึก metric ออกจากเงื่อนไขของ access log
+
 ## ขอบเขตงาน
 
 1. Metric ที่ควรมี:

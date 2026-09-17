@@ -4,14 +4,16 @@
 ถ้าตัวเลขไหนไม่มีในนี้ = ยังไม่ได้วัด ห้ามเอาไปเคลม
 
 สถานะ: [T002](tasks/T002-baseline-report.md) — **micro-benchmark วัดแล้ว / proxy-vs-proxy ยังไม่ได้วัด**
+อัปเดตล่าสุด: หลัง [T101](tasks/T101-zero-alloc-request-path.md) + [T102](tasks/T102-route-matcher-index.md)
 
 ## สรุปสั้น
 
 | สิ่งที่อยากรู้ | สถานะ |
 |---|---|
 | prx เร็วกว่า nginx/haproxy ไหม | **ยังไม่รู้** — ต้องรัน `scripts/bench.sh --all` บนเครื่องที่มี Docker |
-| route matching แพงแค่ไหน | วัดแล้ว ดูตารางด้านล่าง — และเจอปัญหาใหญ่ 1 จุด |
-| reload config แพงแค่ไหน | วัดแล้ว: ~10.6ms ที่ 1000 routes |
+| route matching แพงแค่ไหน | วัดแล้ว: 55–84 ns ต่อ request ไม่ว่าจะมี 10 หรือ 1000 routes |
+| ปัญหา wildcard ที่เจอตอนแรก | แก้แล้ว — 59.3 µs → 81.9 ns (724×) |
+| reload config แพงแค่ไหน | วัดแล้ว: ~10.8 ms ที่ 1000 routes (ส่วนใหญ่คือ TOML parse) |
 
 ## 1. Micro-benchmarks (วัดแล้ว)
 
@@ -24,65 +26,73 @@ criterion `--warm-up-time 1 --measurement-time 3 --sample-size 30`
 
 ### 1.1 `select_route` — ต้นทุนการหา route ต่อ 1 request
 
-| เคส | 10 routes | 100 routes | 1000 routes | โตแบบไหน |
-|---|---|---|---|---|
-| route แรกในลิสต์ | 52 ns | 336 ns | 3.11 µs | เชิงเส้น |
-| route สุดท้ายในลิสต์ | 95 ns | 480 ns | 4.27 µs | เชิงเส้น |
-| ไม่มี host ตรง → default | 82 ns | 364 ns | 3.14 µs | เชิงเส้น |
-| host มี port + ตัวใหญ่ | 80 ns | 366 ns | 3.15 µs | เชิงเส้น |
-| **wildcard host (`*.x`)** | **667 ns** | **5.99 µs** | **59.34 µs** | **เชิงเส้น × 14 เท่าต่อ route** |
+ก่อน = linear scan เดิม, หลัง = route index ของ T102 (median, ns)
+
+| เคส | 10 routes | 100 routes | 1000 routes |
+|---|---|---|---|
+| route แรกในลิสต์ | 52.0 → **67.9** (ช้าลง) | 335.9 → **67.4** (5.0×) | 3,111 → **67.8** (45.9×) |
+| route สุดท้ายในลิสต์ | 94.6 → **54.8** (1.7×) | 479.7 → **62.6** (7.7×) | 4,268 → **58.0** (73.6×) |
+| ไม่มี host ตรง → default | 82.3 → **55.7** (1.5×) | 364.1 → **55.7** (6.5×) | 3,143 → **55.2** (56.9×) |
+| host มี port + ตัวใหญ่ | 79.7 → **79.7** (เท่าเดิม) | 365.8 → **78.2** (4.7×) | 3,148 → **78.6** (40.1×) |
+| wildcard host (`*.x`) | 667 → **81.4** (8.2×) | 5,993 → **83.7** (71.6×) | 59,341 → **81.9** (724×) |
+
+เวลาที่ใช้แทบไม่ขึ้นกับจำนวน route แล้ว (55–84 ns ตั้งแต่ 10 ถึง 1000 routes)
 
 ### 1.2 ฟังก์ชันย่อยใน request path
 
-| ฟังก์ชัน | เวลา | หมายเหตุ |
-|---|---|---|
-| `normalize_host` (host ปกติ) | 43.0 ns | จัดสรร `String` ใหม่ทุก request |
-| `normalize_host` (มี port) | 68.1 ns | จัดสรรสองครั้ง (lowercase + split) |
-| `normalize_host` (IPv6) | 35.8 ns | |
-| `hash_key(host, path)` | 32.6 ns | คำนวณทุก request แม้ LB ไม่ใช่ `hash` |
+| ฟังก์ชัน | ก่อน | หลัง | หมายเหตุ |
+|---|---|---|---|
+| `normalize_host` (host ปกติ) | 43.0 ns | **26.5 ns** | คืน `Cow::Borrowed` ไม่ต้องจัดสรร |
+| `normalize_host` (มี port) | 68.1 ns | **52.4 ns** | จัดสรรครั้งเดียวแทนสองครั้ง |
+| `normalize_host` (IPv6) | 35.8 ns | **19.2 ns** | |
+| `hash_key(host, path)` | 32.6 ns | 32.6 ns | เรียกเฉพาะ service ที่ใช้ `lb = "hash"` แล้ว |
 
 ### 1.3 Config reload
 
 | งาน | 10 routes | 100 routes | 1000 routes |
 |---|---|---|---|
-| parse + validate TOML | 93.8 µs | 889 µs | 9.29 ms |
-| `RuntimeConfig::from_config` | 8.8 µs | 108 µs | 1.32 ms |
-| **รวมต่อ 1 reload** | ~0.1 ms | ~1.0 ms | **~10.6 ms** |
+| parse + validate TOML | 92.5 µs | 881 µs | 8.86 ms |
+| `RuntimeConfig::from_config` (รวมสร้าง index) | 13.8 µs | 155 µs | **1.91 ms** (เดิม 1.32 ms) |
+| **รวมต่อ 1 reload** | ~0.11 ms | ~1.0 ms | **~10.8 ms** |
 
 ## 2. อ่านตัวเลขข้างบนยังไง
 
-### ปัญหาที่ 1 (ใหญ่ที่สุด): wildcard host แพงมหาศาล
+### แก้แล้ว: wildcard host ไม่จัดสรรหน่วยความจำต่อ route อีกแล้ว
 
-`matches_host()` (`src/runtime.rs:143`) เรียก `format!(".{suffix}")` **ทุกครั้งที่เทียบกับ wildcard route หนึ่งตัว**
-= จัดสรรหน่วยความจำ N ครั้งต่อ 1 request เมื่อมี N wildcard routes
+เดิม `matches_host()` เรียก `format!(".{suffix}")` ทุกครั้งที่เทียบกับ wildcard route หนึ่งตัว
+ที่ 1000 wildcard routes จึงกิน 59.3 µs ต่อ request (เพดาน ~16.8k rps/core)
 
-ที่ 1000 wildcard routes: **59.34 µs ต่อ request เฉพาะขั้นตอนหา route**
-แปลว่าเพดาน throughput ของ 1 core อยู่ที่ราว **16,800 req/s** ก่อนจะทำงานอย่างอื่นเลยด้วยซ้ำ
-nginx ที่ทำ server_name hash จะไม่เจอปัญหานี้
+ตอนนี้ wildcard เก็บใน map แล้ว lookup ด้วยการไล่ตัด label ทีละชั้น
+(`a.b.example.com` → `b.example.com` → `example.com` → `com`) = hash ไม่กี่ครั้งตามจำนวน label
+ไม่ขึ้นกับจำนวน route → **81.9 ns (เร็วขึ้น 724 เท่า)**
 
-→ แก้ที่ [T101](tasks/T101-zero-alloc-request-path.md) (ตัด `format!`) และ [T102](tasks/T102-route-matcher-index.md) (index)
+### แก้แล้ว: route matching ไม่เป็นเชิงเส้นอีกแล้ว
 
-### ปัญหาที่ 2: matching เป็นเชิงเส้นตามจำนวน route
+host เข้า hash map (FxHash) แล้ว path เดินบน radix trie → O(len(path)) ไม่ใช่ O(จำนวน route)
+ที่ 1000 routes เร็วขึ้น 40–74 เท่า และเวลาที่ใช้คงที่ไม่ว่าจะมี 10 หรือ 1000 routes
 
-ทุกเคสโตเป็นเส้นตรงตามจำนวน route ตามที่คาด เพราะ `select_route` วน `for` ทั้งตาราง (`src/runtime.rs:56-75`)
+### แก้แล้ว: allocation ต่อ request
 
-ที่ 1000 exact-host routes: 3.1–4.3 µs/request → เพดานราว 230–320k req/s ต่อ core
-ยังพอไหว แต่จุดขายของ prx คือ "เพิ่ม route ผ่าน Web UI ได้เยอะๆ" ดังนั้นต้องเป็น O(1)/O(log n)
+`request_filter` ไม่มี allocation เหลือแล้ว — `.clone()` ที่เหลือทั้งหมดเป็น `Arc` refcount
+(`normalize_host` คืน `Cow::Borrowed`, ชื่อ route เป็น `Arc<str>`, ไม่ copy path/host เข้า ctx,
+และ `hash_key` ถูกเรียกเฉพาะ service ที่ใช้ `lb = "hash"`)
 
-→ แก้ที่ [T102](tasks/T102-route-matcher-index.md) เป้าหมาย: ที่ 1000 routes ต้องเร็วขึ้น ≥ 10 เท่า
+### สิ่งที่แลกไป (ต้องรู้ไว้)
 
-### ปัญหาที่ 3: allocation ต่อ request
+1. **สร้าง index แพงขึ้น**: `RuntimeConfig::from_config` ที่ 1000 routes 1.32 ms → 1.91 ms (+45%)
+   เกิดเฉพาะตอน reload อยู่นอก request path และยังต่ำกว่างบ 5 ms ที่ T102 ตั้งไว้
+   รวมกับ TOML parse แล้ว reload 1000 routes ใช้ ~10.8 ms
+2. **เคสดีที่สุดของ scan เดิมช้าลงเล็กน้อย**: "route แรกจาก 10 routes" 52 ns → 56–68 ns
+   (วัดได้ไม่นิ่งบนคอนเทนเนอร์ 4 vCPU นี้ ต่างกันได้ ~20% ระหว่างรอบ)
+   เพราะต้อง hash host ก่อนแทนที่จะเทียบ route แรกแล้วจบ
+   เคสอื่นที่ 10 routes เร็วขึ้นหมด (route สุดท้าย 1.7×, default 1.5×, wildcard 8.2×)
+   ผมเลือกไม่เพิ่ม code path พิเศษสำหรับตารางเล็กเพื่อไล่ ~10 ns เพราะได้ไม่คุ้มความซับซ้อน
 
-`normalize_host` 43–68 ns คือค่าของการ allocate + lowercase ทุก request
-รวมกับ `path.to_string()`, `route.name.clone()`, `snapshot.clone()` ใน `src/proxy.rs:169-220`
+### ยังไม่ได้แก้
 
-→ แก้ที่ [T101](tasks/T101-zero-alloc-request-path.md) และ [T103](tasks/T103-config-snapshot-access.md)
-
-### ข่าวดี: reload ไม่ใช่ปัญหา
-
-`RuntimeConfig::from_config` ที่ 1000 routes = 1.32 ms ยังต่ำกว่างบ 5 ms ที่ T102 ตั้งไว้มาก
-ต้นทุนส่วนใหญ่ของ reload อยู่ที่ TOML parse (9.29 ms) ซึ่งเกิดนอก request path จึงไม่กระทบ traffic
-แต่มีผลกับความรู้สึกตอนกด Save ใน Web UI (T204/T307 ควรเผื่อไว้ที่ ~10ms ต่อ 1000 routes)
+`config_parse_validate/1000` = 8.86 ms ยังเป็นต้นทุนหลักของ reload
+ถ้าอยากให้ UI ตอบสนองเร็วขึ้นตอนกด Save ที่ config ใหญ่มาก ต้องไปดูตรง TOML parse
+(เกี่ยวกับ [T204](tasks/T204-atomic-apply-reload.md) และ [T307](tasks/T307-toml-editor-diff-apply.md))
 
 ## 3. Proxy vs nginx vs haproxy (ยังไม่ได้วัด)
 
@@ -124,6 +134,8 @@ p99 ดีกว่า ≥ 20% ตอน connection reuse สูง, peak RSS �
   แต่โค้ดส่ง `c_int`) — แก้แล้ว ไม่งั้นวัดอะไรไม่ได้เลย
 - `cargo audit` แดงอยู่ก่อนแล้ว: `pingora-cache` 0.7.0 (cache poisoning, 8.4 high) และ `h2` 0.4.13
   → ดู [T005](tasks/T005-dependency-security-upgrade.md)
+- `metrics::observe_request` ถูกเรียกอยู่ใต้ `if !self.access_log { return; }` ใน `logging()`
+  แปลว่า **ปิด access log แล้ว metrics ของ request หายไปด้วย** → บันทึกไว้ที่ [T401](tasks/T401-metrics-expansion.md)
 
 ## 6. วิธี reproduce
 

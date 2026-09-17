@@ -9,4 +9,5 @@ pub mod config;
 pub mod metrics;
 pub mod proxy;
 pub mod reload;
+pub mod router;
 pub mod runtime;

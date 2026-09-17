@@ -9,14 +9,39 @@ use bytes::Bytes;
 use pingora::prelude::*;
 use tracing::{debug, error, info, warn};
 
+use crate::config::LbStrategy;
 use crate::metrics;
+use crate::router::RouteMatch;
 use crate::runtime::{RuntimeConfig, hash_key, normalize_host};
+
+/// Names used for requests that never reach a configured route. Pre-built so
+/// the request path never allocates one (T101).
+struct StaticNames {
+    health: Arc<str>,
+    ready: Arc<str>,
+    no_route: Arc<str>,
+    method_not_allowed: Arc<str>,
+    unknown: Arc<str>,
+}
+
+impl Default for StaticNames {
+    fn default() -> Self {
+        Self {
+            health: Arc::from("health"),
+            ready: Arc::from("ready"),
+            no_route: Arc::from("no_route"),
+            method_not_allowed: Arc::from("method_not_allowed"),
+            unknown: Arc::from("unknown"),
+        }
+    }
+}
 
 pub struct PrxProxy {
     active_config: Arc<ArcSwap<RuntimeConfig>>,
     access_log: bool,
     health_path: String,
     ready_path: String,
+    names: StaticNames,
 }
 
 impl PrxProxy {
@@ -31,6 +56,7 @@ impl PrxProxy {
             access_log,
             health_path,
             ready_path,
+            names: StaticNames::default(),
         }
     }
 
@@ -86,14 +112,14 @@ impl PrxProxy {
             return;
         };
 
-        metrics::inc_upstream_error(route.name.as_str(), upstream.addr.as_str(), stage);
+        metrics::inc_upstream_error(route.name.as_ref(), upstream.addr.as_str(), stage);
         let opened = service.mark_upstream_failure(upstream_idx);
         let is_open = upstream.is_circuit_open();
-        metrics::set_circuit_state(route.name.as_str(), upstream.addr.as_str(), is_open);
+        metrics::set_circuit_state(route.name.as_ref(), upstream.addr.as_str(), is_open);
         if opened {
-            metrics::mark_circuit_open(route.name.as_str(), upstream.addr.as_str());
+            metrics::mark_circuit_open(route.name.as_ref(), upstream.addr.as_str());
             warn!(
-                route = route.name.as_str(),
+                route = route.name.as_ref(),
                 service = service.name.as_str(),
                 upstream = upstream.addr.as_str(),
                 "opened circuit breaker for upstream"
@@ -122,8 +148,16 @@ impl PrxProxy {
         };
 
         service.mark_upstream_success(upstream_idx);
-        metrics::set_circuit_state(route.name.as_str(), upstream.addr.as_str(), false);
+        metrics::set_circuit_state(route.name.as_ref(), upstream.addr.as_str(), false);
     }
+}
+
+/// What `request_filter` decided while the request header was still borrowed.
+#[derive(Debug, Clone, Copy)]
+enum Decision {
+    Health,
+    Ready,
+    Route(RouteMatch),
 }
 
 pub struct RequestCtx {
@@ -133,10 +167,8 @@ pub struct RequestCtx {
     service_idx: Option<usize>,
     attempted_upstreams: Vec<usize>,
     retries: usize,
-    hash_seed: Option<u64>,
-    host: String,
-    path: String,
-    route_name: Option<String>,
+    /// Refcount bump instead of a `String` clone per request (T101).
+    route_name: Option<Arc<str>>,
     upstream_addr: Option<String>,
 }
 
@@ -149,9 +181,6 @@ impl Default for RequestCtx {
             service_idx: None,
             attempted_upstreams: Vec::new(),
             retries: 0,
-            hash_seed: None,
-            host: String::new(),
-            path: String::new(),
             route_name: None,
             upstream_addr: None,
         }
@@ -170,58 +199,71 @@ impl ProxyHttp for PrxProxy {
         let snapshot = self.active_config.load_full();
         ctx.snapshot = Some(snapshot.clone());
 
-        let req_header = session.req_header();
-        let host = req_header
-            .headers
-            .get("host")
-            .and_then(|val| val.to_str().ok())
-            .map(normalize_host)
-            .unwrap_or_else(|| "localhost".to_string());
-        let path = req_header.uri.path().to_string();
+        // Everything that borrows the request header is resolved here, so the
+        // borrow ends before the session is used mutably below. Nothing in this
+        // block allocates: the host is borrowed from the header when it is
+        // already lowercase and port-free, and the match result is Copy (T101).
+        let decision = {
+            let req_header = session.req_header();
+            let path = req_header.uri.path();
 
-        ctx.host = host;
-        ctx.path = path;
-        ctx.hash_seed = Some(hash_key(&[ctx.host.as_str(), ctx.path.as_str()]));
-
-        if ctx.path == self.health_path {
-            ctx.route_name = Some("health".to_string());
-            return Self::respond_text(session, 200, "ok\n").await;
-        }
-        if ctx.path == self.ready_path {
-            let ready = snapshot.is_ready();
-            ctx.route_name = Some("ready".to_string());
-            if ready {
-                return Self::respond_text(session, 200, "ready\n").await;
+            if path == self.health_path {
+                Decision::Health
+            } else if path == self.ready_path {
+                Decision::Ready
+            } else {
+                let host = req_header
+                    .headers
+                    .get("host")
+                    .and_then(|val| val.to_str().ok())
+                    .unwrap_or("localhost");
+                let host = normalize_host(host);
+                Decision::Route(snapshot.select(&host, path, Some(req_header.method.as_str())))
             }
-            return Self::respond_text(session, 503, "not_ready\n").await;
-        }
+        };
 
-        ctx.route_idx = snapshot.select_route(&ctx.host, &ctx.path);
-
-        if let Some(route_idx) = ctx.route_idx {
-            if let Some(route) = snapshot.route(route_idx) {
-                ctx.service_idx = Some(route.service_idx);
-                ctx.route_name = Some(route.name.clone());
-                debug!(
-                    route = %route.name,
-                    host = %ctx.host,
-                    path = %ctx.path,
-                    "matched route"
+        match decision {
+            Decision::Health => {
+                ctx.route_name = Some(self.names.health.clone());
+                Self::respond_text(session, 200, "ok\n").await
+            }
+            Decision::Ready => {
+                ctx.route_name = Some(self.names.ready.clone());
+                if snapshot.is_ready() {
+                    Self::respond_text(session, 200, "ready\n").await
+                } else {
+                    Self::respond_text(session, 503, "not_ready\n").await
+                }
+            }
+            Decision::Route(RouteMatch::Matched(route_idx)) => {
+                ctx.route_idx = Some(route_idx);
+                if let Some(route) = snapshot.route(route_idx) {
+                    ctx.service_idx = Some(route.service_idx);
+                    ctx.route_name = Some(route.name.clone());
+                    debug!(route = %route.name, "matched route");
+                }
+                Ok(false)
+            }
+            Decision::Route(RouteMatch::MethodNotAllowed) => {
+                ctx.route_name = Some(self.names.method_not_allowed.clone());
+                warn!(
+                    "{}: method not allowed for the matching route",
+                    session.request_summary()
                 );
+                Self::respond_text(session, 405, "method_not_allowed\n").await
             }
-        } else {
-            ctx.route_name = Some("no_route".to_string());
-            warn!(host = %ctx.host, path = %ctx.path, "no route matched");
-            session.respond_error(404).await?;
-            return Ok(true);
+            Decision::Route(RouteMatch::NotFound) => {
+                ctx.route_name = Some(self.names.no_route.clone());
+                warn!("{}: no route matched", session.request_summary());
+                session.respond_error(404).await?;
+                Ok(true)
+            }
         }
-
-        Ok(false)
     }
 
     async fn upstream_peer(
         &self,
-        _session: &mut Session,
+        session: &mut Session,
         ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
         let snapshot = if let Some(snapshot) = &ctx.snapshot {
@@ -237,7 +279,7 @@ impl ProxyHttp for PrxProxy {
             None => {
                 return Error::e_explain(
                     HTTPStatus(404),
-                    format!("no route matched host={} path={}", ctx.host, ctx.path),
+                    format!("no route matched for {}", session.request_summary()),
                 );
             }
         };
@@ -264,9 +306,19 @@ impl ProxyHttp for PrxProxy {
             tokio::time::sleep(Duration::from_millis(service.retry_backoff_ms)).await;
         }
 
-        let hash_seed = ctx
-            .hash_seed
-            .unwrap_or_else(|| hash_key(&[ctx.host.as_str(), ctx.path.as_str()]));
+        // Only the hash strategy needs a key, so the other strategies do not
+        // pay for hashing the host and path on every request (T101).
+        let hash_seed = if matches!(service.lb, LbStrategy::Hash) {
+            let req_header = session.req_header();
+            let host = req_header
+                .headers
+                .get("host")
+                .and_then(|val| val.to_str().ok())
+                .unwrap_or("");
+            hash_key(&[host, req_header.uri.path()])
+        } else {
+            0
+        };
         let (upstream_idx, upstream) =
             if let Some(selected) = service.next_upstream(hash_seed, &ctx.attempted_upstreams) {
                 selected
@@ -382,17 +434,17 @@ impl ProxyHttp for PrxProxy {
                 .as_ref()
                 .and_then(|cfg| ctx.route_idx.and_then(|idx| cfg.route(idx)))
                 .map(|route| route.name.clone())
-                .unwrap_or_else(|| "unknown".to_string())
+                .unwrap_or_else(|| self.names.unknown.clone())
         });
         let status = session
             .response_written()
             .map(|resp| resp.status.as_u16())
             .unwrap_or_else(|| if e.is_some() { 500 } else { 0 });
-        metrics::observe_request(route_name.as_str(), status, latency_ms as f64);
+        metrics::observe_request(route_name.as_ref(), status, latency_ms as f64);
 
         if let Some(err) = e {
             error!(
-                route = route_name,
+                route = route_name.as_ref(),
                 upstream = ctx.upstream_addr.as_deref().unwrap_or("-"),
                 retries = ctx.retries,
                 latency_ms,
@@ -404,7 +456,7 @@ impl ProxyHttp for PrxProxy {
         }
 
         info!(
-            route = route_name,
+            route = route_name.as_ref(),
             upstream = ctx.upstream_addr.as_deref().unwrap_or("-"),
             retries = ctx.retries,
             latency_ms,

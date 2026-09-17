@@ -109,6 +109,19 @@ impl PrxConfig {
                     route.service
                 );
             }
+
+            // An unknown method would silently make the route unreachable, so
+            // reject it while the config is being loaded instead.
+            for method in &route.methods {
+                if crate::router::method_bit(method).is_none() {
+                    bail!(
+                        "route '{}' lists unsupported HTTP method '{}' (supported: \
+                         GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, TRACE, CONNECT)",
+                        route.name,
+                        method
+                    );
+                }
+            }
         }
 
         if defaults > 1 {
@@ -378,6 +391,24 @@ mod tests {
             services: vec![valid_service("default")],
             routes: vec![valid_route("default", "default")],
         }
+    }
+
+    #[test]
+    fn validate_rejects_unknown_http_method() {
+        let mut cfg = valid_config();
+        cfg.routes[0].methods = vec!["GET".to_string(), "FETCH".to_string()];
+
+        let err = cfg.validate().expect_err("unknown method should fail");
+        assert!(err.to_string().contains("FETCH"), "{err}");
+    }
+
+    #[test]
+    fn validate_accepts_known_http_methods_in_any_case() {
+        let mut cfg = valid_config();
+        cfg.routes[0].methods = vec!["get".to_string(), "Post".to_string()];
+
+        cfg.validate()
+            .expect("known methods should pass validation");
     }
 
     #[test]

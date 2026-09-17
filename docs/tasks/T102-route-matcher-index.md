@@ -1,7 +1,7 @@
 # T102 — Route matching: host map + path trie แทน linear scan
 
 **Phase:** 1 · Data plane
-**Status:** todo
+**Status:** done
 **Size:** L (~2d)
 **Depends on:** T003
 **Files:** `src/runtime.rs`, `src/router.rs` (ใหม่), `benches/routing.rs`
@@ -41,3 +41,46 @@
 ## Out of scope
 
 - regex / path parameter matching (บันทึกเป็น follow-up ถ้าจำเป็น)
+
+## ผลลัพธ์ที่ส่งมอบ
+
+- `src/router.rs`: exact host map (FxHash) → wildcard suffix map → any-host bucket,
+  แต่ละ bucket เป็น radix trie ของ path prefix เก็บ node ไว้ใน `Vec` เดียว
+- wildcard lookup ไล่ตัด label ทีละชั้น (`a.b.example.com` → `b.example.com` → `example.com` → `com`)
+  = hash ตามจำนวน label ไม่ขึ้นกับจำนวน route
+- method matching ด้วย bitmask + คืน 405 เมื่อ path ตรงแต่ method ไม่ตรง
+- `config.rs` validate ชื่อ method (เดิมใส่ค่าที่ไม่มีอยู่จริงได้ แล้ว route นั้นจะไม่มีวันถูก match)
+- routes ไม่ถูก sort แล้ว — index เป็นตัวกำหนดลำดับความสำคัญ ทำให้ index ของ route ตรงกับลำดับในไฟล์
+- กติกาการ match เขียนไว้ทั้งใน rustdoc ของ `src/router.rs` และ `docs/CONFIG-WIKI.md`
+
+## ผลวัด (median, container 4 vCPU)
+
+| เคส @ 1000 routes | ก่อน | หลัง | เร็วขึ้น |
+|---|---|---|---|
+| route แรก | 3,111 ns | 67.8 ns | 45.9× |
+| route สุดท้าย | 4,268 ns | 58.0 ns | 73.6× |
+| default fallback | 3,143 ns | 55.2 ns | 56.9× |
+| host มี port | 3,148 ns | 78.6 ns | 40.1× |
+| wildcard | 59,341 ns | 81.9 ns | 724× |
+
+เวลาที่ใช้คงที่ 55–84 ns ตั้งแต่ 10 ถึง 1000 routes
+
+## Acceptance criteria
+
+- [x] ที่ 1000 routes เร็วกว่าเดิม ≥ 10× (ได้ 40–724×)
+- [~] ไม่แย่ลงที่ 10 routes — **ไม่ผ่านบางเคส**: "route แรกจาก 10" 52 ns → 56–68 ns
+      เพราะต้อง hash host ก่อนแทนที่จะเทียบ route แรกแล้วจบทันที
+      เคสอื่นที่ 10 routes เร็วขึ้นหมด (route สุดท้าย 1.7×, default 1.5×, wildcard 8.2×)
+      ตัดสินใจไม่เพิ่ม code path พิเศษสำหรับตารางเล็กเพื่อไล่ ~10 ns
+- [x] เทสต์ครอบ exact ชนะ wildcard, wildcard ยาวชนะสั้น, longest path prefix, default fallback, method mismatch → 405
+      (15 unit tests ใน `src/router.rs` + 2 e2e ใน `tests/e2e_proxy.rs`)
+- [x] build index ที่ 1000 routes < 5 ms — วัดได้ 1.91 ms (เดิม 1.32 ms, แพงขึ้น 0.59 ms)
+- [x] เทสต์เดิมทั้งหมดยังผ่าน
+
+## หมายเหตุพฤติกรรมที่เปลี่ยน
+
+1. `host = ""` เดิมทำให้ route นั้นไม่มีวันถูก match (เทียบ `"" == host` เสมอเป็นเท็จ)
+   ตอนนี้แปลว่า "ทุก host" เหมือนการไม่ใส่ `host` เลย
+2. `methods` เดิมถูกประกาศได้แต่ไม่เคยถูกใช้ match — ตอนนี้ใช้จริงและคืน 405
+3. method mismatch จะไม่ตกไป route ที่กว้างกว่าหรือ default route เพราะจะเป็นการพา request
+   ข้ามข้อจำกัดที่ผู้ใช้ตั้งไว้

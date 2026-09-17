@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     net::SocketAddr,
@@ -11,12 +12,16 @@ use std::{
 
 use rand::Rng;
 
-use crate::config::{LbStrategy, PrxConfig};
+use crate::{
+    config::{LbStrategy, PrxConfig},
+    router::{IndexedRoute, RouteIndex, RouteMatch, method_mask},
+};
 
 #[derive(Debug)]
 pub struct RuntimeConfig {
     routes: Vec<RouteRuntime>,
     services: Vec<ServiceRuntime>,
+    index: RouteIndex,
 }
 
 impl RuntimeConfig {
@@ -35,43 +40,45 @@ impl RuntimeConfig {
             .map(|(idx, svc)| (svc.name.clone(), idx))
             .collect();
 
-        // Build routes, resolving service names to indices
-        let mut routes = config
+        // Routes keep their config order: the index encodes precedence, so
+        // route indices stay stable and predictable for logs and the admin API.
+        let routes = config
             .routes
             .into_iter()
             .map(|route| RouteRuntime::from_config(route, &service_index))
             .collect::<Vec<_>>();
 
-        // Sort routes by path_prefix length (longest first) for matching
-        routes.sort_by(|a, b| {
-            b.path_prefix
-                .len()
-                .cmp(&a.path_prefix.len())
-                .then_with(|| a.name.cmp(&b.name))
-        });
+        let index = RouteIndex::build(routes.iter().map(|route| IndexedRoute {
+            host: route.host.as_deref(),
+            path_prefix: route.path_prefix.as_str(),
+            methods: route.methods,
+            is_default: route.is_default,
+        }));
 
-        Self { routes, services }
+        Self {
+            routes,
+            services,
+            index,
+        }
     }
 
-    pub fn select_route(&self, host: &str, path: &str) -> Option<usize> {
-        let normalized = normalize_host(host);
-        let mut fallback_idx = None;
-
-        for (idx, route) in self.routes.iter().enumerate() {
-            if route.is_default && fallback_idx.is_none() {
-                fallback_idx = Some(idx);
-            }
-
-            if !route.matches_host(&normalized) {
-                continue;
-            }
-
-            if path.starts_with(&route.path_prefix) {
-                return Some(idx);
-            }
+    /// Matches a request against the route index.
+    ///
+    /// `host` is the raw Host header; `method` is the request method, or `None`
+    /// to ignore method filtering. Neither argument is allocated from.
+    pub fn select(&self, host: &str, path: &str, method: Option<&str>) -> RouteMatch {
+        match normalize_host(host) {
+            Cow::Borrowed(host) => self.index.select(host, path, method),
+            Cow::Owned(host) => self.index.select(&host, path, method),
         }
+    }
 
-        fallback_idx
+    /// Convenience wrapper that ignores method filtering.
+    pub fn select_route(&self, host: &str, path: &str) -> Option<usize> {
+        match self.select(host, path, None) {
+            RouteMatch::Matched(idx) => Some(idx),
+            RouteMatch::MethodNotAllowed | RouteMatch::NotFound => None,
+        }
     }
 
     pub fn route(&self, idx: usize) -> Option<&RouteRuntime> {
@@ -108,9 +115,12 @@ impl CircuitBreakerRuntime {
 
 #[derive(Debug)]
 pub struct RouteRuntime {
-    pub name: String,
+    /// `Arc<str>` so cloning the name per request is a refcount bump, not an
+    /// allocation (T101).
+    pub name: Arc<str>,
     pub host: Option<String>,
     pub path_prefix: String,
+    pub methods: crate::router::MethodMask,
     pub is_default: bool,
     pub service_idx: usize,
 }
@@ -120,30 +130,22 @@ impl RouteRuntime {
         config: crate::config::RouteConfig,
         service_index: &std::collections::HashMap<String, usize>,
     ) -> Self {
-        let host = config.host.as_deref().map(normalize_host);
+        let host = config
+            .host
+            .as_deref()
+            .map(|host| normalize_host_pattern(host).into_owned());
         let service_idx = service_index
             .get(&config.service)
             .copied()
             .expect("route references a service that was not found in service_index");
 
         Self {
-            name: config.name,
+            name: config.name.into(),
             host,
             path_prefix: config.path_prefix,
+            methods: method_mask(&config.methods),
             is_default: config.is_default,
             service_idx,
-        }
-    }
-
-    fn matches_host(&self, request_host: &str) -> bool {
-        let Some(pattern) = &self.host else {
-            return true;
-        };
-
-        if let Some(suffix) = pattern.strip_prefix("*.") {
-            request_host == suffix || request_host.ends_with(&format!(".{suffix}"))
-        } else {
-            pattern == request_host
         }
     }
 }
@@ -363,16 +365,43 @@ fn upstream_weight(upstream: &UpstreamRuntime, _idx: usize) -> usize {
     upstream.weight.clamp(1, 256) as usize
 }
 
-pub fn normalize_host(host: &str) -> String {
-    let trimmed = host.trim().to_ascii_lowercase();
+/// Normalizes a Host header for matching: trimmed, lowercased, port removed.
+///
+/// Returns a borrow when the header is already in that shape, which is the
+/// common case, so the request path does not allocate (T101). IPv6 literals in
+/// brackets are kept as-is, port included, matching the previous behavior.
+pub fn normalize_host(host: &str) -> Cow<'_, str> {
+    let trimmed = host.trim();
+
     if trimmed.starts_with('[') {
-        return trimmed;
+        return if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+            Cow::Owned(trimmed.to_ascii_lowercase())
+        } else {
+            Cow::Borrowed(trimmed)
+        };
     }
 
-    trimmed
-        .split_once(':')
-        .map(|(h, _)| h.to_string())
-        .unwrap_or(trimmed)
+    let without_port = match trimmed.split_once(':') {
+        Some((host, _)) => host,
+        None => trimmed,
+    };
+
+    if without_port.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(without_port.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(without_port)
+    }
+}
+
+/// Normalizes a configured host pattern, keeping a leading `*.` intact.
+fn normalize_host_pattern(pattern: &str) -> Cow<'_, str> {
+    match pattern.strip_prefix("*.") {
+        Some(suffix) => match normalize_host(suffix) {
+            Cow::Borrowed(suffix) if suffix.len() == pattern.len() - 2 => Cow::Borrowed(pattern),
+            other => Cow::Owned(format!("*.{other}")),
+        },
+        None => normalize_host(pattern),
+    }
 }
 
 pub fn hash_key(parts: &[&str]) -> u64 {
@@ -501,7 +530,7 @@ mod tests {
         let idx = runtime
             .select_route("no-match.local", "/anything")
             .expect("default route should match");
-        assert_eq!(runtime.route(idx).map(|r| r.name.as_str()), Some("default"));
+        assert_eq!(runtime.route(idx).map(|r| r.name.as_ref()), Some("default"));
     }
 
     #[test]

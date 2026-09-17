@@ -50,10 +50,10 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 
 ### Phase 1 — Data plane
 
-| ID | Task | Size | Depends |
-|---|---|---|---|
-| [T101](T101-zero-alloc-request-path.md) | ตัด allocation ต่อ request ใน `request_filter` | M | T003 |
-| [T102](T102-route-matcher-index.md) | เปลี่ยน route matching จาก linear scan เป็น host map + path trie | L | T003 |
+| ID | Task | Size | Depends | สถานะ |
+|---|---|---|---|---|
+| [T101](T101-zero-alloc-request-path.md) | ตัด allocation ต่อ request ใน `request_filter` | M | T003 | ✅ done |
+| [T102](T102-route-matcher-index.md) | เปลี่ยน route matching จาก linear scan เป็น host map + path trie | L | T003 | ✅ done |
 | [T103](T103-config-snapshot-access.md) | เลิก `load_full()` ต่อ request | S | T101 |
 | [T104](T104-socket-worker-tuning.md) | SO_REUSEPORT, tcp_nodelay, backlog, worker/threads | M | T002 |
 | [T105](T105-upstream-pool-keepalive.md) | Upstream connection pool / keepalive / H2 multiplexing | M | T002 |
@@ -111,12 +111,13 @@ micro-benchmark รันแล้ว ผลเต็มอยู่ใน [`doc
 
 | สิ่งที่เจอ | ตัวเลข | ไปแก้ที่ |
 |---|---|---|
-| wildcard host matching จัดสรรหน่วยความจำต่อ route ต่อ request | 1000 wildcard routes = **59.3 µs/request** (เพดาน ~16.8k rps/core) | [T101](T101-zero-alloc-request-path.md), [T102](T102-route-matcher-index.md) |
-| route matching เป็นเชิงเส้นตามจำนวน route | 1000 exact routes = 3.1–4.3 µs/request | [T102](T102-route-matcher-index.md) |
-| `normalize_host` จัดสรร String ทุก request | 43 ns (68 ns เมื่อมี port) | [T101](T101-zero-alloc-request-path.md) |
-| reload ไม่ใช่ปัญหา | `RuntimeConfig::from_config` ที่ 1000 routes = 1.32 ms (งบ 5 ms) | — |
+| wildcard host matching จัดสรรหน่วยความจำต่อ route ต่อ request | 59.3 µs/request → **81.9 ns (724×)** | ✅ [T101](T101-zero-alloc-request-path.md), [T102](T102-route-matcher-index.md) |
+| route matching เป็นเชิงเส้นตามจำนวน route | 3.1–4.3 µs → **55–84 ns คงที่ทุกขนาด (40–74×)** | ✅ [T102](T102-route-matcher-index.md) |
+| `normalize_host` จัดสรร String ทุก request | 43 ns → **26.5 ns** (คืน `Cow::Borrowed`) | ✅ [T101](T101-zero-alloc-request-path.md) |
+| reload แพงขึ้นเพราะต้องสร้าง index | 1.32 ms → 1.91 ms ที่ 1000 routes (งบ 5 ms) | ยอมรับได้ อยู่นอก request path |
 
-ลำดับความสำคัญจึงชัดแล้ว: **T101 + T102 คืองานถัดไป** ไม่ใช่ฟีเจอร์ใหม่
+**T101 และ T102 ทำเสร็จแล้ว** งานถัดไปตามลำดับคือ [T103](T103-config-snapshot-access.md) (ตัด `load_full()` ต่อ request)
+แล้วจึงไปวัด proxy-vs-proxy จริงเมื่อมีเครื่องที่มี Docker
 
 และ Phase 0 ยังเจออีกสองเรื่องที่ไม่ได้อยู่ในแผนเดิม:
 
