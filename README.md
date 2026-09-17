@@ -60,6 +60,11 @@ Config wiki:
 - `docs/CONFIG-WIKI.md` (full reference)
 - `docs/CONFIG-PLAYBOOK.md` (ready-to-use examples)
 
+## Roadmap
+
+Planned work is broken down into small, independently shippable tasks:
+`docs/tasks/README.md`
+
 Key config knobs:
 
 - `[server].health_path` and `[server].ready_path` for liveness/readiness probes
