@@ -13,7 +13,7 @@ use std::{
 use rand::Rng;
 
 use crate::{
-    config::{HealthCheckConfig, LbStrategy, PrxConfig, UpstreamH2},
+    config::{HealthCheckConfig, LbStrategy, PrxConfig, StickyConfig, UpstreamH2},
     headers::CompiledHeaderRules,
     router::{IndexedRoute, RouteIndex, RouteMatch, method_mask},
 };
@@ -195,6 +195,7 @@ pub struct ServiceRuntime {
     pub request_timeout_ms: u64,
     pub retry_budget: RetryBudget,
     pub health_check: HealthCheckConfig,
+    pub sticky: StickyConfig,
     pub circuit_breaker: CircuitBreakerRuntime,
     pub upstreams: Vec<UpstreamRuntime>,
     ring: Vec<usize>,
@@ -225,6 +226,7 @@ impl ServiceRuntime {
                 config.retry_budget_window_ms,
             ),
             health_check: config.health_check,
+            sticky: config.sticky,
             circuit_breaker,
             upstreams,
             ring,
@@ -245,6 +247,10 @@ impl ServiceRuntime {
             LbStrategy::RoundRobin => self.select_round_robin(attempted),
             LbStrategy::Random => self.select_random(attempted),
             LbStrategy::Hash => self.select_hash(hash_seed, attempted),
+            LbStrategy::LeastConn => {
+                self.select_power_of_two(attempted, |upstream| upstream.inflight() as u64)
+            }
+            LbStrategy::P2cEwma => self.select_power_of_two(attempted, UpstreamRuntime::load_score),
         }?;
 
         self.upstreams
@@ -266,6 +272,69 @@ impl ServiceRuntime {
     fn select_hash(&self, hash_seed: u64, attempted: &[usize]) -> Option<usize> {
         let base = (hash_seed as usize) % self.ring.len();
         self.select_from_ring(base, attempted)
+    }
+
+    /// Power of two choices: sample two candidates from the weighted ring and
+    /// keep the one with the lower score. Constant work per request, and it
+    /// avoids the herd effect of everyone picking whichever upstream currently
+    /// looks best.
+    ///
+    /// The two draws are made without replacement. With replacement, a service
+    /// with two upstreams would send a quarter of its traffic to the worse one
+    /// simply because both draws landed on it - and two or three upstreams is
+    /// the common case. The retry count is bounded so this stays O(1).
+    fn select_power_of_two(
+        &self,
+        attempted: &[usize],
+        score: impl Fn(&UpstreamRuntime) -> u64,
+    ) -> Option<usize> {
+        const DRAW_ATTEMPTS: usize = 4;
+
+        let mut rng = rand::rng();
+        let first = self.select_from_ring(rng.random_range(0..self.ring.len()), attempted)?;
+
+        let mut second = first;
+        for _ in 0..DRAW_ATTEMPTS {
+            let candidate =
+                self.select_from_ring(rng.random_range(0..self.ring.len()), attempted)?;
+            if candidate != first {
+                second = candidate;
+                break;
+            }
+        }
+        if first == second {
+            return Some(first);
+        }
+
+        let first_score = self.upstreams.get(first).map(&score)?;
+        let second_score = self.upstreams.get(second).map(&score)?;
+        Some(if first_score <= second_score {
+            first
+        } else {
+            second
+        })
+    }
+
+    /// Picks an upstream from the hash ring, regardless of the configured
+    /// strategy. Affinity modes that hash a key (`client_ip`, `header`) need
+    /// this: routing them through the service's own strategy would ignore the
+    /// key entirely and spread the client across upstreams.
+    pub fn select_by_hash(&self, hash: u64, attempted: &[usize]) -> Option<usize> {
+        if self.ring.is_empty() {
+            return None;
+        }
+        self.select_hash(hash, attempted)
+    }
+
+    /// Returns the upstream a sticky key points at, when it is still usable.
+    pub fn select_sticky(&self, addr_hash: u64, attempted: &[usize]) -> Option<usize> {
+        let now_ms = now_epoch_ms();
+        self.upstreams
+            .iter()
+            .position(|upstream| {
+                upstream.addr_hash() == addr_hash && upstream.is_available_at(now_ms)
+            })
+            .filter(|idx| !attempted.contains(idx))
     }
 
     fn select_from_ring(&self, start: usize, attempted: &[usize]) -> Option<usize> {
@@ -415,6 +484,11 @@ struct UpstreamState {
     probe_failures: AtomicUsize,
     /// Epoch milliseconds of the last probe, so the checker knows what is due.
     last_probe_ms: AtomicU64,
+    /// Requests currently in flight against this upstream.
+    inflight: AtomicUsize,
+    /// Moving average of observed latency, in microseconds. 0 means no sample
+    /// has been recorded yet.
+    ewma_us: AtomicU64,
 }
 
 impl Default for UpstreamState {
@@ -429,6 +503,8 @@ impl Default for UpstreamState {
             probe_successes: AtomicUsize::new(0),
             probe_failures: AtomicUsize::new(0),
             last_probe_ms: AtomicU64::new(0),
+            inflight: AtomicUsize::new(0),
+            ewma_us: AtomicU64::new(0),
         }
     }
 }
@@ -455,6 +531,13 @@ impl UpstreamRuntime {
         }
     }
 
+    /// Stable identifier for this upstream, used by sticky cookies so that a
+    /// cookie keeps pointing at the same address across reloads, and stops
+    /// matching when that address is gone.
+    pub fn addr_hash(&self) -> u64 {
+        hash_key(&[self.addr.as_str()])
+    }
+
     pub fn is_circuit_open(&self) -> bool {
         !self.is_available_at(now_epoch_ms())
     }
@@ -462,6 +545,56 @@ impl UpstreamRuntime {
     fn is_available_at(&self, now_ms: u64) -> bool {
         self.state.open_until_epoch_ms.load(Ordering::Relaxed) <= now_ms
             && self.state.probe_healthy.load(Ordering::Relaxed)
+    }
+
+    /// Requests currently in flight against this upstream.
+    pub fn inflight(&self) -> usize {
+        self.state.inflight.load(Ordering::Relaxed)
+    }
+
+    pub fn inc_inflight(&self) {
+        self.state.inflight.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn dec_inflight(&self) {
+        // saturating: a decrement without a matching increment must not wrap
+        // the counter around to usize::MAX and take the upstream out of
+        // consideration forever.
+        let _ = self
+            .state
+            .inflight
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(1))
+            });
+    }
+
+    /// Moving average latency in microseconds; 0 when nothing was measured yet.
+    pub fn ewma_us(&self) -> u64 {
+        self.state.ewma_us.load(Ordering::Relaxed)
+    }
+
+    /// Folds one latency sample into the moving average.
+    pub fn record_latency(&self, sample_us: u64) {
+        const ALPHA_NUM: u64 = 2;
+        const ALPHA_DEN: u64 = 10;
+        let _ = self
+            .state
+            .ewma_us
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(if current == 0 {
+                    sample_us
+                } else {
+                    (current * (ALPHA_DEN - ALPHA_NUM) + sample_us * ALPHA_NUM) / ALPHA_DEN
+                })
+            });
+    }
+
+    /// Cost used by `p2c_ewma`: in-flight requests scaled by observed latency.
+    /// `+1` keeps an idle upstream from looking free forever once it is slow.
+    fn load_score(&self) -> u64 {
+        let inflight = self.inflight() as u64 + 1;
+        let latency = self.ewma_us().max(1);
+        inflight.saturating_mul(latency)
     }
 
     /// Whether the active probe currently considers this upstream usable.
@@ -903,5 +1036,199 @@ set = { "X-Real-IP" = "$client_ip" }
             "route header rules were not compiled into the runtime"
         );
         assert!(route.request_headers.needs_client_addr());
+    }
+}
+
+#[cfg(test)]
+mod lb_tests {
+    use super::*;
+    use crate::config::{ServiceConfig, UpstreamConfig};
+
+    fn upstream_with(addr: &str, weight: u16) -> UpstreamConfig {
+        UpstreamConfig {
+            addr: addr.to_string(),
+            tls: false,
+            sni: None,
+            weight,
+            verify_cert: None,
+            verify_hostname: None,
+            connect_timeout_ms: None,
+            total_connect_timeout_ms: None,
+            read_timeout_ms: None,
+            write_timeout_ms: None,
+            idle_timeout_ms: None,
+        }
+    }
+
+    fn service_with(lb: LbStrategy, upstreams: Vec<UpstreamConfig>) -> ServiceRuntime {
+        ServiceRuntime::from_config(ServiceConfig {
+            name: "svc".to_string(),
+            lb,
+            upstreams,
+            ..Default::default()
+        })
+    }
+
+    /// T114: weight is honored, which was worth proving rather than assuming -
+    /// the helper that reads it had an unused parameter that made it look dead.
+    #[test]
+    fn weight_shapes_the_round_robin_distribution() {
+        let service = service_with(
+            LbStrategy::RoundRobin,
+            vec![
+                upstream_with("127.0.0.1:9000", 3),
+                upstream_with("127.0.0.1:9001", 1),
+            ],
+        );
+
+        let mut counts = [0usize; 2];
+        for _ in 0..4_000 {
+            let (idx, _) = service
+                .next_upstream(0, &[])
+                .expect("an upstream is available");
+            counts[idx] += 1;
+        }
+
+        let ratio = counts[0] as f64 / counts[1] as f64;
+        assert!(
+            (2.85..=3.15).contains(&ratio),
+            "expected roughly 3:1, got {ratio:.2} ({counts:?})"
+        );
+    }
+
+    /// T114: least_conn must prefer the upstream with fewer requests in flight.
+    #[test]
+    fn least_conn_avoids_the_busy_upstream() {
+        let service = service_with(
+            LbStrategy::LeastConn,
+            vec![
+                upstream_with("127.0.0.1:9000", 1),
+                upstream_with("127.0.0.1:9001", 1),
+            ],
+        );
+
+        // Upstream 0 is saturated.
+        for _ in 0..50 {
+            service.upstreams[0].inc_inflight();
+        }
+
+        let mut counts = [0usize; 2];
+        for _ in 0..1_000 {
+            let (idx, _) = service
+                .next_upstream(0, &[])
+                .expect("an upstream is available");
+            counts[idx] += 1;
+        }
+
+        assert!(
+            counts[1] > counts[0] * 10,
+            "the idle upstream should take nearly all of the traffic, got {counts:?}"
+        );
+    }
+
+    /// T114: p2c_ewma must also avoid an upstream that accepts requests but is
+    /// slow, which least_conn alone cannot see.
+    #[test]
+    fn p2c_ewma_avoids_the_slow_upstream() {
+        let service = service_with(
+            LbStrategy::P2cEwma,
+            vec![
+                upstream_with("127.0.0.1:9000", 1),
+                upstream_with("127.0.0.1:9001", 1),
+            ],
+        );
+
+        // Same in-flight count, very different latency.
+        for _ in 0..20 {
+            service.upstreams[0].record_latency(200_000);
+            service.upstreams[1].record_latency(2_000);
+        }
+
+        let mut counts = [0usize; 2];
+        for _ in 0..1_000 {
+            let (idx, _) = service
+                .next_upstream(0, &[])
+                .expect("an upstream is available");
+            counts[idx] += 1;
+        }
+
+        assert!(
+            counts[1] > counts[0] * 10,
+            "the fast upstream should take nearly all of the traffic, got {counts:?}"
+        );
+    }
+
+    /// T114: the moving average must react to new samples without being thrown
+    /// off by a single outlier.
+    #[test]
+    fn latency_average_is_smoothed() {
+        let service = service_with(
+            LbStrategy::P2cEwma,
+            vec![upstream_with("127.0.0.1:9000", 1)],
+        );
+        let upstream = &service.upstreams[0];
+
+        assert_eq!(upstream.ewma_us(), 0, "no sample means no average yet");
+        upstream.record_latency(1_000);
+        assert_eq!(
+            upstream.ewma_us(),
+            1_000,
+            "the first sample sets the average"
+        );
+
+        upstream.record_latency(100_000);
+        let after_spike = upstream.ewma_us();
+        assert!(
+            after_spike > 1_000 && after_spike < 50_000,
+            "one spike must move the average without dominating it, got {after_spike}"
+        );
+    }
+
+    /// T114: in-flight counting must be balanced, and must never wrap.
+    #[test]
+    fn inflight_counting_is_balanced_and_saturating() {
+        let service = service_with(
+            LbStrategy::LeastConn,
+            vec![upstream_with("127.0.0.1:9000", 1)],
+        );
+        let upstream = &service.upstreams[0];
+
+        upstream.inc_inflight();
+        upstream.inc_inflight();
+        assert_eq!(upstream.inflight(), 2);
+
+        upstream.dec_inflight();
+        upstream.dec_inflight();
+        assert_eq!(upstream.inflight(), 0);
+
+        // An extra decrement must not wrap around and hide the upstream.
+        upstream.dec_inflight();
+        assert_eq!(upstream.inflight(), 0);
+    }
+
+    /// T114: a sticky key points at one upstream, and stops pointing anywhere
+    /// once that upstream is unavailable, so affinity never costs availability.
+    #[test]
+    fn sticky_selection_falls_back_when_the_pinned_upstream_is_down() {
+        let service = service_with(
+            LbStrategy::RoundRobin,
+            vec![
+                upstream_with("127.0.0.1:9000", 1),
+                upstream_with("127.0.0.1:9001", 1),
+            ],
+        );
+
+        let pinned_hash = service.upstreams[1].addr_hash();
+        assert_eq!(service.select_sticky(pinned_hash, &[]), Some(1));
+
+        // An address that is not in this service pins nothing.
+        assert_eq!(
+            service.select_sticky(hash_key(&["127.0.0.1:9999"]), &[]),
+            None
+        );
+
+        // Marking it unhealthy releases the pin.
+        service.upstreams[1].record_probe(false, 1, 1);
+        assert_eq!(service.select_sticky(pinned_hash, &[]), None);
     }
 }

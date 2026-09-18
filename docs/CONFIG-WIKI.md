@@ -75,7 +75,7 @@ Validation:
 | `request_headers` | table | `{}` | No | header rules applied before the upstream sees the request |
 | `response_headers` | table | `{}` | No | header rules applied to the upstream response |
 | `is_default` | `bool` | `false` | No | Fallback route when no match |
-| `lb` | enum | `"round_robin"` | No | `round_robin`, `random`, `hash` |
+| `lb` | enum | `"round_robin"` | No | `round_robin`, `random`, `hash`, `least_conn`, `p2c_ewma` |
 | `max_retries` | `number` | `0` | No | Retries per request |
 | `retry_backoff_ms` | `number` | `0` | No | Backoff before retry |
 | `circuit_breaker` | `table` | defaults | No | passive circuit breaker |
@@ -123,6 +123,66 @@ host does not fall through to a broader one.
   you asked for;
 - a method prx does not know (for example `PROPFIND`) only matches routes that
   list no methods at all.
+
+### 3.4 `[[service]]` — load balancing
+
+| `lb` | Behavior |
+|---|---|
+| `round_robin` (default) | Walk the weighted ring in order |
+| `random` | Start at a random point in the ring |
+| `hash` | Pick from the ring by hashing host + path |
+| `least_conn` | Of two randomly sampled upstreams, take the one with fewer requests in flight |
+| `p2c_ewma` | Same, but scored by in-flight count times a moving average of latency |
+
+`weight` repeats an upstream in the ring, so `weight = 3` against `weight = 1`
+receives three times the traffic (verified by a distribution test).
+
+`least_conn` and `p2c_ewma` sample **two distinct** upstreams and keep the
+better one. Sampling two at random rather than scanning all of them keeps the
+cost constant and avoids every worker piling onto whichever upstream currently
+looks best; drawing without replacement matters because two or three upstreams
+is the common case, and drawing with replacement would send a quarter of the
+traffic to the worse of two.
+
+`p2c_ewma` is the one to reach for when upstreams are not equally fast:
+`least_conn` cannot tell a slow upstream from a quiet one, because a slow
+upstream that still accepts connections looks idle.
+
+Metrics: `prx_upstream_inflight{service,upstream}` and
+`prx_upstream_ewma_ms{service,upstream}`.
+
+### 3.4a2 `[service.sticky]` — session affinity
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `bool` | `false` | Turn affinity on |
+| `mode` | enum | `"cookie"` | `cookie`, `client_ip` or `header` |
+| `name` | `string` | `"prx_upstream"` | Cookie name, or header name in `header` mode |
+| `ttl_s` | `number` | `3600` | Cookie lifetime in `cookie` mode |
+
+```toml
+[service.sticky]
+enabled = true
+mode = "cookie"
+name = "prx_upstream"
+ttl_s = 3600
+```
+
+- **`cookie`** pins exactly: prx sets a cookie naming the chosen upstream
+  (`HttpOnly`, `SameSite=Lax`) and honors it afterwards. It survives a client
+  changing address, and a cookie for an upstream that no longer exists simply
+  stops matching.
+- **`client_ip`** and **`header`** hash the key onto the upstream ring, so no
+  state is stored, but adding or removing an upstream reshuffles some clients.
+  These modes ignore the service's `lb` setting by design: routing them through
+  it would spread the client across upstreams, which is the opposite of what
+  was asked for.
+
+Affinity is a preference, never a requirement. When the pinned upstream is
+unhealthy or gone, the request falls back to normal balancing. prx cannot know
+an upstream died until it tries, so pair affinity with `max_retries >= 1` or
+`[service.health_check]` if a client must not see an error when its upstream
+disappears.
 
 ### 3.4a `[[service]]` — retries and time budget
 
@@ -383,6 +443,8 @@ expected to sit idle; applying them would drop healthy websockets.
 - `service '<name>' health_check.timeout_ms must be > 0`
 - `service '<name>' health_check thresholds must be > 0`
 - `service '<name>' health_check.path must start with '/'`
+- `service '<name>' sticky.name must not be empty`
+- `service '<name>' sticky.name '<name>' is not a valid header name`
 - `route '<name>' header '<name>' uses unknown variable '$<var>'`
 
 ## 6) Full Config Example (Production-style Baseline)

@@ -726,6 +726,8 @@ fn lb_to_string(lb: LbStrategy) -> &'static str {
         LbStrategy::RoundRobin => "round_robin",
         LbStrategy::Random => "random",
         LbStrategy::Hash => "hash",
+        LbStrategy::LeastConn => "least_conn",
+        LbStrategy::P2cEwma => "p2c_ewma",
     }
 }
 

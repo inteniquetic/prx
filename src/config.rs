@@ -89,6 +89,21 @@ impl PrxConfig {
                 );
             }
 
+            if service.sticky.enabled {
+                if service.sticky.name.trim().is_empty() {
+                    bail!("service '{}' sticky.name must not be empty", service.name);
+                }
+                if service.sticky.mode == StickyMode::Header
+                    && http::header::HeaderName::from_bytes(service.sticky.name.as_bytes()).is_err()
+                {
+                    bail!(
+                        "service '{}' sticky.name '{}' is not a valid header name",
+                        service.name,
+                        service.sticky.name
+                    );
+                }
+            }
+
             if service.health_check.enabled {
                 let hc = &service.health_check;
                 if hc.interval_ms == 0 {
@@ -385,11 +400,66 @@ pub struct ServiceConfig {
     /// to discover that one is down.
     #[serde(default)]
     pub health_check: HealthCheckConfig,
+    /// Keep a client on the same upstream across requests.
+    #[serde(default)]
+    pub sticky: StickyConfig,
     /// Which HTTP version to speak to the upstreams of this service.
     #[serde(default)]
     pub upstream_h2: UpstreamH2,
     #[serde(rename = "upstream", default)]
     pub upstreams: Vec<UpstreamConfig>,
+}
+
+/// Session affinity: keep a client on the upstream it used last.
+///
+/// `cookie` is the only mode that survives a client changing IP, and it is the
+/// only one that pins exactly; `client_ip` and `header` hash the key onto the
+/// upstream ring, so adding or removing an upstream reshuffles some clients.
+/// Every mode falls back to normal load balancing when the chosen upstream is
+/// unavailable, so affinity never costs availability.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StickyConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub mode: StickyMode,
+    /// Cookie or header name, depending on the mode.
+    #[serde(default = "default_sticky_name")]
+    pub name: String,
+    /// Lifetime of the cookie in `cookie` mode.
+    #[serde(default = "default_sticky_ttl_s")]
+    pub ttl_s: u64,
+}
+
+impl Default for StickyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: StickyMode::default(),
+            name: default_sticky_name(),
+            ttl_s: default_sticky_ttl_s(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StickyMode {
+    /// prx sets a cookie naming the upstream and honors it on later requests.
+    #[default]
+    Cookie,
+    /// Hash the client address.
+    ClientIp,
+    /// Hash the value of a request header.
+    Header,
+}
+
+fn default_sticky_name() -> String {
+    "prx_upstream".to_string()
+}
+
+fn default_sticky_ttl_s() -> u64 {
+    3_600
 }
 
 /// Background probing of a service's upstreams.
@@ -508,6 +578,7 @@ impl Default for ServiceConfig {
             request_timeout_ms: 0,
             circuit_breaker: CircuitBreakerConfig::default(),
             health_check: HealthCheckConfig::default(),
+            sticky: StickyConfig::default(),
             upstreams: Vec::new(),
         }
     }
@@ -597,13 +668,20 @@ fn default_path_prefix() -> String {
     "/".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LbStrategy {
     #[default]
     RoundRobin,
     Random,
     Hash,
+    /// Send the request to whichever of two random upstreams has fewer
+    /// requests in flight. Power of two choices avoids scanning every
+    /// upstream while getting most of the benefit of true least-connections.
+    LeastConn,
+    /// Like `least_conn`, but weighted by a moving average of each upstream's
+    /// latency, so a slow-but-accepting upstream is avoided too.
+    P2cEwma,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -634,6 +712,8 @@ impl std::str::FromStr for LbStrategy {
             "round_robin" => Ok(LbStrategy::RoundRobin),
             "random" => Ok(LbStrategy::Random),
             "hash" => Ok(LbStrategy::Hash),
+            "least_conn" => Ok(LbStrategy::LeastConn),
+            "p2c_ewma" => Ok(LbStrategy::P2cEwma),
             _ => Err(format!("invalid load balancing strategy: {}", s)),
         }
     }

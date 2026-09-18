@@ -8,7 +8,8 @@
 - HTTP/1.1 + HTTP/2 proxy path
 - gRPC proxying (HTTP/2 end to end, trailers preserved)
 - WebSocket proxying, including long-idle connections
-- Route-level load balancing (`round_robin`, `random`, `hash`)
+- Load balancing: `round_robin`, `random`, `hash`, `least_conn`, `p2c_ewma` (power of two choices, latency aware)
+- Session affinity by cookie, client IP or header
 - Per-route request/response header rules (`X-Forwarded-For`, `X-Real-IP`, security headers)
 - Route-level failover retry
 - Passive per-route circuit breaker for unhealthy upstreams

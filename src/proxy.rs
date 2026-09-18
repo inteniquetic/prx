@@ -11,7 +11,7 @@ use pingora::prelude::*;
 use pingora::upstreams::peer::ALPN;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{LbStrategy, UpstreamH2};
+use crate::config::{LbStrategy, StickyMode, UpstreamH2};
 use crate::headers::HeaderContext;
 use crate::metrics;
 use crate::router::RouteMatch;
@@ -245,6 +245,38 @@ impl PrxProxy {
     }
 }
 
+/// Reads the affinity key for this request: the cookie value in cookie mode,
+/// or a hash of the client address or header value in the other modes.
+fn sticky_key(session: &Session, sticky: &crate::config::StickyConfig) -> Option<u64> {
+    match sticky.mode {
+        StickyMode::Cookie => {
+            let cookies = session.req_header().headers.get("cookie")?.to_str().ok()?;
+            let value = cookies.split(';').find_map(|pair| {
+                let (name, value) = pair.split_once('=')?;
+                (name.trim() == sticky.name).then(|| value.trim())
+            })?;
+            u64::from_str_radix(value, 16).ok()
+        }
+        StickyMode::ClientIp => {
+            let addr = session.client_addr()?;
+            let ip = match addr.as_inet() {
+                Some(inet) => inet.ip().to_string(),
+                None => addr.to_string(),
+            };
+            Some(hash_key(&[ip.as_str()]))
+        }
+        StickyMode::Header => {
+            let value = session
+                .req_header()
+                .headers
+                .get(sticky.name.as_str())?
+                .to_str()
+                .ok()?;
+            Some(hash_key(&[value]))
+        }
+    }
+}
+
 /// Shortens a per-attempt timeout so it cannot outlive the request's total
 /// budget. `None` means the service has no total budget.
 fn clamp_to_budget(timeout: Duration, remaining: Option<Duration>) -> Duration {
@@ -300,6 +332,9 @@ pub struct RequestCtx {
     /// Whether the request method is safe to replay once it may have reached
     /// the upstream.
     is_idempotent: bool,
+    /// Set when a sticky cookie should be written on the way back, holding the
+    /// upstream identifier to store.
+    sticky_cookie: Option<u64>,
     upstream_addr: Option<String>,
 }
 
@@ -318,6 +353,7 @@ impl Default for RequestCtx {
             client_port: None,
             request_id: None,
             is_idempotent: true,
+            sticky_cookie: None,
             upstream_addr: None,
         }
     }
@@ -501,25 +537,55 @@ impl ProxyHttp for PrxProxy {
         } else {
             0
         };
-        let (upstream_idx, upstream) =
+        // Session affinity is a preference, never a requirement: when the
+        // pinned upstream is gone or unhealthy the request falls back to normal
+        // balancing rather than failing.
+        let sticky_idx = if service.sticky.enabled {
+            let key = sticky_key(session, &service.sticky);
+            match service.sticky.mode {
+                StickyMode::Cookie => {
+                    let pinned =
+                        key.and_then(|hash| service.select_sticky(hash, &ctx.attempted_upstreams));
+                    if pinned.is_none() {
+                        // Remember to hand out a cookie for whatever we pick.
+                        ctx.sticky_cookie = Some(0);
+                    }
+                    pinned
+                }
+                StickyMode::ClientIp | StickyMode::Header => {
+                    key.and_then(|hash| service.select_by_hash(hash, &ctx.attempted_upstreams))
+                }
+            }
+        } else {
+            None
+        };
+
+        let (upstream_idx, upstream) = if let Some(idx) =
+            sticky_idx.and_then(|idx| service.upstreams.get(idx).map(|upstream| (idx, upstream)))
+        {
+            idx
+        } else if let Some(selected) = service.next_upstream(hash_seed, &ctx.attempted_upstreams) {
+            selected
+        } else {
+            ctx.attempted_upstreams.clear();
             if let Some(selected) = service.next_upstream(hash_seed, &ctx.attempted_upstreams) {
                 selected
             } else {
-                ctx.attempted_upstreams.clear();
-                if let Some(selected) = service.next_upstream(hash_seed, &ctx.attempted_upstreams) {
-                    selected
-                } else {
-                    return Error::e_explain(
-                        InternalError,
-                        format!(
-                            "service '{}' (via route '{}') has no selectable upstreams",
-                            service.name, route.name
-                        ),
-                    );
-                }
-            };
+                return Error::e_explain(
+                    InternalError,
+                    format!(
+                        "service '{}' (via route '{}') has no selectable upstreams",
+                        service.name, route.name
+                    ),
+                );
+            }
+        };
         ctx.attempted_upstreams.push(upstream_idx);
         ctx.upstream_addr = Some(upstream.addr.clone());
+        upstream.inc_inflight();
+        if ctx.sticky_cookie == Some(0) {
+            ctx.sticky_cookie = Some(upstream.addr_hash());
+        }
 
         let mut peer = HttpPeer::new(upstream.addr.clone(), upstream.tls, upstream.sni.clone());
         // Without this the peer defaults to HTTP/1.1, which makes gRPC
@@ -659,6 +725,20 @@ impl ProxyHttp for PrxProxy {
         let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx)) else {
             return Ok(());
         };
+
+        // Hand out the affinity cookie for the upstream this request landed on.
+        if let Some(addr_hash) = ctx.sticky_cookie.filter(|hash| *hash != 0)
+            && let Some(service) = snapshot.service(route.service_idx)
+            && service.sticky.enabled
+            && service.sticky.mode == StickyMode::Cookie
+        {
+            let cookie = format!(
+                "{}={:x}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax",
+                service.sticky.name, addr_hash, service.sticky.ttl_s
+            );
+            let _ = upstream_response.append_header("set-cookie", cookie);
+        }
+
         if route.response_headers.is_empty() {
             return Ok(());
         }
@@ -713,7 +793,40 @@ impl ProxyHttp for PrxProxy {
     }
 
     async fn logging(&self, session: &mut Session, e: Option<&Error>, ctx: &mut Self::CTX) {
-        let latency_ms = ctx.started_at.elapsed().as_millis();
+        let elapsed = ctx.started_at.elapsed();
+        let latency_ms = elapsed.as_millis();
+
+        // Every attempt took a slot; give them all back exactly once, and feed
+        // the latency of the attempt that actually served the request into the
+        // moving average used by p2c_ewma.
+        if let Some(snapshot) = &ctx.snapshot
+            && let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx))
+            && let Some(service) = snapshot.service(route.service_idx)
+        {
+            let last = ctx.attempted_upstreams.last().copied();
+            for idx in &ctx.attempted_upstreams {
+                if let Some(upstream) = service.upstreams.get(*idx) {
+                    upstream.dec_inflight();
+                    if Some(*idx) == last && e.is_none() {
+                        upstream.record_latency(elapsed.as_micros() as u64);
+                    }
+                    metrics::set_upstream_inflight(
+                        service.name.as_str(),
+                        upstream.addr.as_str(),
+                        upstream.inflight(),
+                    );
+                    metrics::set_upstream_ewma_ms(
+                        service.name.as_str(),
+                        upstream.addr.as_str(),
+                        upstream.ewma_us() as f64 / 1000.0,
+                    );
+                }
+            }
+            if e.is_none() {
+                service.retry_budget.record_success();
+            }
+        }
+
         let route_name = ctx.route_name.clone().unwrap_or_else(|| {
             ctx.snapshot
                 .as_ref()

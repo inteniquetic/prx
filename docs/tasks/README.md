@@ -65,7 +65,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T111](T111-tls-perf-multicert.md) | TLS: session resumption, ALPN, multi-cert SNI | L | T104 |
 | [T112](T112-acme-auto-tls.md) | ACME auto TLS (Let's Encrypt) | L | T111 |
 | [T113](T113-active-health-check.md) | Active health check prober (เสริม passive CB) | M | — | ✅ done |
-| [T114](T114-lb-least-conn-sticky.md) | LB: least_conn, P2C-EWMA, sticky session | M | T105 |
+| [T114](T114-lb-least-conn-sticky.md) | LB: least_conn, P2C-EWMA, sticky session | M | T105 | ✅ done |
 | [T115](T115-ws-grpc-conformance.md) | เทสต์จริงของ WebSocket + gRPC streaming | M | — | ✅ done (เจอบั๊ก 2 ตัว) |
 
 ### Phase 2 — Control plane

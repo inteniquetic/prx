@@ -96,6 +96,36 @@ static UPSTREAM_HEALTHY: Lazy<IntGaugeVec> = Lazy::new(|| {
     .expect("failed to register prx_upstream_healthy")
 });
 
+static UPSTREAM_INFLIGHT: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "prx_upstream_inflight",
+        "Requests currently in flight per upstream",
+        &["service", "upstream"]
+    )
+    .expect("failed to register prx_upstream_inflight")
+});
+
+static UPSTREAM_EWMA_MS: Lazy<prometheus::GaugeVec> = Lazy::new(|| {
+    prometheus::register_gauge_vec!(
+        "prx_upstream_ewma_ms",
+        "Moving average latency per upstream, in milliseconds",
+        &["service", "upstream"]
+    )
+    .expect("failed to register prx_upstream_ewma_ms")
+});
+
+pub fn set_upstream_inflight(service: &str, upstream: &str, inflight: usize) {
+    UPSTREAM_INFLIGHT
+        .with_label_values(&[service, upstream])
+        .set(inflight as i64);
+}
+
+pub fn set_upstream_ewma_ms(service: &str, upstream: &str, ewma_ms: f64) {
+    UPSTREAM_EWMA_MS
+        .with_label_values(&[service, upstream])
+        .set(ewma_ms);
+}
+
 pub fn inc_health_check(service: &str, upstream: &str, result: &str) {
     HEALTH_CHECK_TOTAL
         .with_label_values(&[service, upstream, result])
