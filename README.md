@@ -9,6 +9,7 @@
 - gRPC proxying (HTTP/2 end to end, trailers preserved)
 - WebSocket proxying, including long-idle connections
 - Route-level load balancing (`round_robin`, `random`, `hash`)
+- Per-route request/response header rules (`X-Forwarded-For`, `X-Real-IP`, security headers)
 - Route-level failover retry
 - Passive per-route circuit breaker for unhealthy upstreams
 - Graceful reload support from Pingora runtime

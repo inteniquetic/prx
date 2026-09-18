@@ -9,6 +9,8 @@ pub struct PrxConfig {
     pub server: ServerConfig,
     #[serde(default)]
     pub observability: ObservabilityConfig,
+    #[serde(default)]
+    pub headers: HeadersConfig,
     #[serde(rename = "service", default)]
     pub services: Vec<ServiceConfig>,
     #[serde(rename = "route", default)]
@@ -110,6 +112,9 @@ impl PrxConfig {
                 );
             }
 
+            validate_header_rules(&route.request_headers, &format!("route '{}'", route.name))?;
+            validate_header_rules(&route.response_headers, &format!("route '{}'", route.name))?;
+
             // An unknown method would silently make the route unreachable, so
             // reject it while the config is being loaded instead.
             for method in &route.methods {
@@ -128,8 +133,74 @@ impl PrxConfig {
             bail!("only one route can be marked is_default = true");
         }
 
+        validate_header_rules(&self.headers.request, "headers.request")?;
+        validate_header_rules(&self.headers.response, "headers.response")?;
+
         Ok(())
     }
+}
+
+/// Variables that can appear inside a header value.
+pub const HEADER_VARIABLES: [&str; 7] = [
+    "client_ip",
+    "client_port",
+    "scheme",
+    "host",
+    "route_name",
+    "upstream_addr",
+    "request_id",
+];
+
+fn validate_header_rules(rules: &HeaderRules, context: &str) -> anyhow::Result<()> {
+    let check_name = |name: &str| -> anyhow::Result<()> {
+        if http::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
+            bail!("{context} has an invalid header name '{name}'");
+        }
+        Ok(())
+    };
+
+    for (name, value) in rules.set.iter().chain(rules.add.iter()) {
+        check_name(name)?;
+        for variable in extract_variables(value) {
+            if !HEADER_VARIABLES.contains(&variable.as_str()) {
+                bail!(
+                    "{context} header '{name}' uses unknown variable '${variable}' \
+                     (supported: {})",
+                    HEADER_VARIABLES
+                        .iter()
+                        .map(|v| format!("${v}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
+    }
+    for name in &rules.remove {
+        check_name(name)?;
+    }
+    Ok(())
+}
+
+/// Returns the variable names used in a header value template.
+pub fn extract_variables(value: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let bytes = value.as_bytes();
+    let mut idx = 0;
+    while let Some(pos) = value[idx..].find('$') {
+        let start = idx + pos + 1;
+        let mut end = start;
+        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+            end += 1;
+        }
+        if end > start {
+            found.push(value[start..end].to_string());
+        }
+        idx = end.max(start);
+        if idx >= value.len() {
+            break;
+        }
+    }
+    found
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -267,6 +338,36 @@ fn default_service_name() -> String {
     "default".to_string()
 }
 
+/// Header rules applied to a request or a response.
+///
+/// `set` replaces any existing value, `add` appends another value, and
+/// `remove` drops the header. They are applied in that order, so a rule set
+/// can normalize a header and then append to it.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct HeaderRules {
+    #[serde(default)]
+    pub set: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub add: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub remove: Vec<String>,
+}
+
+impl HeaderRules {
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty() && self.add.is_empty() && self.remove.is_empty()
+    }
+}
+
+/// Header rules that apply to every route, applied before the route's own.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct HeadersConfig {
+    #[serde(default)]
+    pub request: HeaderRules,
+    #[serde(default)]
+    pub response: HeaderRules,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RouteConfig {
     #[serde(default = "default_route_name")]
@@ -280,6 +381,10 @@ pub struct RouteConfig {
     pub methods: Vec<String>,
     #[serde(default)]
     pub is_default: bool,
+    #[serde(default)]
+    pub request_headers: HeaderRules,
+    #[serde(default)]
+    pub response_headers: HeaderRules,
 }
 
 fn default_route_name() -> String {
@@ -409,6 +514,8 @@ mod tests {
             path_prefix: "/".to_string(),
             methods: Vec::new(),
             is_default: true,
+            request_headers: Default::default(),
+            response_headers: Default::default(),
         }
     }
 
@@ -416,6 +523,7 @@ mod tests {
         PrxConfig {
             server: ServerConfig::default(),
             observability: ObservabilityConfig::default(),
+            headers: Default::default(),
             services: vec![valid_service("default")],
             routes: vec![valid_route("default", "default")],
         }

@@ -176,3 +176,92 @@ pub fn send_get(port: u16, host: &str, path: &str) -> String {
         .expect("failed to read response");
     response
 }
+
+/// Upstream that replies with the request head it received, so a test can
+/// assert on exactly which headers prx forwarded.
+pub struct EchoHeadersUpstream {
+    shutdown: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+    port: u16,
+}
+
+impl EchoHeadersUpstream {
+    pub fn spawn(port: u16) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let stop = shutdown.clone();
+        let handle = thread::spawn(move || {
+            let listener =
+                TcpListener::bind(("127.0.0.1", port)).expect("failed to bind echo upstream");
+            listener
+                .set_nonblocking(true)
+                .expect("failed to set nonblocking echo listener");
+
+            while !stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = echo_request_head(&mut stream);
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Self {
+            shutdown,
+            handle: Some(handle),
+            port,
+        }
+    }
+}
+
+impl Drop for EchoHeadersUpstream {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn echo_request_head(stream: &mut TcpStream) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    let mut buf = [0u8; 8192];
+    let read = stream.read(&mut buf)?;
+    let head = String::from_utf8_lossy(&buf[..read]).to_string();
+
+    let resp = format!(
+        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\ncontent-type: text/plain\r\nx-upstream: echo\r\nserver: test-upstream\r\nconnection: close\r\n\r\n{}",
+        head.len(),
+        head
+    );
+    stream.write_all(resp.as_bytes())?;
+    stream.flush()?;
+    Ok(())
+}
+
+/// Sends a request with extra raw header lines (e.g. "X-Forwarded-For: 1.2.3.4").
+pub fn send_get_with_headers(port: u16, host: &str, path: &str, extra: &[&str]) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("failed to connect to prx");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("failed to set read timeout");
+    let mut req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n");
+    for line in extra {
+        req.push_str(line);
+        req.push_str("\r\n");
+    }
+    req.push_str("\r\n");
+    stream
+        .write_all(req.as_bytes())
+        .expect("failed to write request");
+    stream.flush().expect("failed to flush request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("failed to read response");
+    response
+}

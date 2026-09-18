@@ -57,7 +57,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T103](T103-config-snapshot-access.md) | เลิก `load_full()` ต่อ request | S | T101 | ✅ done |
 | [T104](T104-socket-worker-tuning.md) | SO_REUSEPORT, tcp_nodelay, backlog, worker/threads | M | T002 |
 | [T105](T105-upstream-pool-keepalive.md) | Upstream connection pool / keepalive / H2 multiplexing | M | T002 | 🟡 `upstream_h2` ทำไปแล้วใน T115 |
-| [T106](T106-header-rewrite-rules.md) | Header add/remove/set ต่อ route (precompiled) | M | T102 |
+| [T106](T106-header-rewrite-rules.md) | Header add/remove/set ต่อ route (precompiled) | M | T102 | ✅ done (เจอบั๊ก WebUI ตายด้วย) |
 | [T107](T107-timeout-retry-budget.md) | Request timeout + retry budget กัน retry storm | M | — |
 | [T108](T108-rate-limit.md) | Rate limit + connection limit ต่อ route/IP | L | T102 |
 | [T109](T109-micro-cache.md) | In-memory micro-cache สำหรับ GET | L | T102 |
@@ -124,6 +124,13 @@ T115 เจอสองเรื่องที่ไม่มีใครรู
 |---|---|---|
 | **gRPC ใช้งานไม่ได้เลย** — ALPN ของ upstream ถูกตั้งเป็น H1 เสมอ และ listener ไม่เปิด h2c | เรียก gRPC ผ่าน prx ได้ 502 ทั้งที่ README เคลมว่ารองรับ | ✅ แก้แล้ว (`[server] h2c`, `[[service]] upstream_h2`) |
 | **websocket ที่เงียบเกิน `read_timeout_ms` โดนตัด** | connection ที่ idle ตายทุกครั้งที่ตั้ง read timeout | ✅ แก้แล้ว (ไม่ใส่ timeout ให้ connection ที่ upgrade) |
+
+T106 เจออีกสองเรื่อง:
+
+| สิ่งที่เจอ | ผลกระทบ | สถานะ |
+|---|---|---|
+| **Web UI + admin API ตายตั้งแต่ start** — `admin_router()` ใช้ path syntax `:name` ของ axum 0.7 แต่ repo ใช้ axum 0.8 | router panic → thread admin ตาย (proxy ยังวิ่ง จึงไม่มีใครสังเกต) | ✅ แก้แล้ว |
+| **metrics หายเมื่อปิด access log** — `observe_request` อยู่ใต้ `if !access_log { return; }` | `/metrics` ว่างเปล่าใน production ที่ปิด access log | ✅ แก้แล้ว |
 
 งานถัดไป: วัด proxy-vs-proxy จริงเมื่อมีเครื่องที่มี Docker (T002) แล้วไล่ T104/T105 ต่อ
 

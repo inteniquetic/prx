@@ -72,6 +72,8 @@ Validation:
 | `host` | `string` | `null` | No | host matcher |
 | `path_prefix` | `string` | `"/"` | No | path prefix matcher |
 | `methods` | `array` | `[]` | No | allowed HTTP methods (empty = any) |
+| `request_headers` | table | `{}` | No | header rules applied before the upstream sees the request |
+| `response_headers` | table | `{}` | No | header rules applied to the upstream response |
 | `is_default` | `bool` | `false` | No | Fallback route when no match |
 | `lb` | enum | `"round_robin"` | No | `round_robin`, `random`, `hash` |
 | `max_retries` | `number` | `0` | No | Retries per request |
@@ -151,6 +153,58 @@ upstream_h2 = "always"
 addr = "127.0.0.1:50051"
 ```
 
+### 3.4c Header rules
+
+Rules exist per route (`[route.request_headers]`, `[route.response_headers]`)
+and globally (`[headers.request]`, `[headers.response]`). Global rules run
+first, so a route can override them.
+
+```toml
+[headers.request]
+set = { "X-Edge" = "prx" }
+
+[[route]]
+name = "api"
+service = "api"
+path_prefix = "/"
+
+[route.request_headers]
+set = { "X-Real-IP" = "$client_ip" }
+add = { "X-Forwarded-For" = "$client_ip" }
+remove = ["X-Internal-Token"]
+
+[route.response_headers]
+set = { "X-Frame-Options" = "DENY" }
+remove = ["Server"]
+```
+
+Order within one rule set: `remove`, then `set`, then `add`.
+
+- `set` replaces every existing value for that header.
+- `add` appends another value, keeping what is already there.
+- `remove` drops the header entirely.
+
+**Spoofing:** a client can send any header it likes. Use `set` when the
+upstream must trust the value (`set` overwrites whatever the client sent), and
+`add` only when you intentionally want to extend a chain such as
+`X-Forwarded-For` from a proxy you trust in front of prx.
+
+Variables usable inside a value:
+
+| Variable | Value |
+|---|---|
+| `$client_ip` | client IP address |
+| `$client_port` | client source port |
+| `$scheme` | `https` when the upstream connection uses TLS, otherwise `http` |
+| `$host` | Host header the client sent |
+| `$route_name` | name of the matched route |
+| `$upstream_addr` | address of the upstream this request went to |
+| `$request_id` | inbound `X-Request-Id` if present and usable, otherwise a generated id |
+
+A header whose value needs a variable that is unavailable for this request is
+skipped rather than written with a hole in it. Unknown variables and invalid
+header names are rejected when the config loads.
+
 ### 3.5 `[route.circuit_breaker]`
 
 | Field | Type | Default | Required | Description |
@@ -228,6 +282,8 @@ expected to sit idle; applying them would drop healthy websockets.
 - `route '<name>' includes upstream with empty addr`
 - `only one route can be marked is_default = true`
 - `route '<name>' lists unsupported HTTP method '<method>'`
+- `route '<name>' has an invalid header name '<name>'`
+- `route '<name>' header '<name>' uses unknown variable '$<var>'`
 
 ## 6) Full Config Example (Production-style Baseline)
 

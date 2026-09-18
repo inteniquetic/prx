@@ -33,9 +33,9 @@ pub const ADMIN_ROUTE_HEALTH_PATH: &str = "/web/health/routes";
 pub const DEFAULT_ADMIN_LISTEN: &str = "127.0.0.1:9090";
 const MAX_ADMIN_CONFIG_BODY_BYTES: usize = 10 * 1024 * 1024;
 pub const ADMIN_SERVICES_PATH: &str = "/admin/services";
-pub const ADMIN_SERVICES_NAME_PATH: &str = "/admin/services/:name";
+pub const ADMIN_SERVICES_NAME_PATH: &str = "/admin/services/{name}";
 pub const ADMIN_ROUTES_PATH: &str = "/admin/routes";
-pub const ADMIN_ROUTES_NAME_PATH: &str = "/admin/routes/:name";
+pub const ADMIN_ROUTES_NAME_PATH: &str = "/admin/routes/{name}";
 const WEBUI_INDEX_PATH: &str = "index.html";
 static WEBUI_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/webui/dist");
 
@@ -1407,6 +1407,10 @@ async fn create_route(State(state): State<AdminState>, body: Body) -> Response<B
                 path_prefix: payload.path_prefix.unwrap_or_else(|| "/".to_string()),
                 methods: payload.methods.unwrap_or_default(),
                 is_default: payload.is_default.unwrap_or(false),
+                // Not exposed by the admin API yet; edit Prx.toml for these
+                // until the schema-generated payloads of T205 land.
+                request_headers: Default::default(),
+                response_headers: Default::default(),
             };
 
             config.routes.push(route);
@@ -1520,6 +1524,10 @@ async fn update_route(
                 is_default: payload
                     .is_default
                     .unwrap_or(config.routes[index].is_default),
+                // Preserved: the admin API cannot express these yet, and an
+                // update through the UI must not silently drop them.
+                request_headers: config.routes[index].request_headers.clone(),
+                response_headers: config.routes[index].response_headers.clone(),
             };
 
             config.routes[index] = route;

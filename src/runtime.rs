@@ -14,6 +14,7 @@ use rand::Rng;
 
 use crate::{
     config::{LbStrategy, PrxConfig, UpstreamH2},
+    headers::CompiledHeaderRules,
     router::{IndexedRoute, RouteIndex, RouteMatch, method_mask},
 };
 
@@ -40,12 +41,24 @@ impl RuntimeConfig {
             .map(|(idx, svc)| (svc.name.clone(), idx))
             .collect();
 
+        // Global header rules are compiled once and merged into each route, so
+        // the request path applies a single list instead of two (T106).
+        let global_request_headers = CompiledHeaderRules::compile(&config.headers.request);
+        let global_response_headers = CompiledHeaderRules::compile(&config.headers.response);
+
         // Routes keep their config order: the index encodes precedence, so
         // route indices stay stable and predictable for logs and the admin API.
         let routes = config
             .routes
             .into_iter()
-            .map(|route| RouteRuntime::from_config(route, &service_index))
+            .map(|route| {
+                RouteRuntime::from_config(
+                    route,
+                    &service_index,
+                    &global_request_headers,
+                    &global_response_headers,
+                )
+            })
             .collect::<Vec<_>>();
 
         let index = RouteIndex::build(routes.iter().map(|route| IndexedRoute {
@@ -123,12 +136,17 @@ pub struct RouteRuntime {
     pub methods: crate::router::MethodMask,
     pub is_default: bool,
     pub service_idx: usize,
+    /// Global rules merged with the route's own, compiled once per reload.
+    pub request_headers: CompiledHeaderRules,
+    pub response_headers: CompiledHeaderRules,
 }
 
 impl RouteRuntime {
     fn from_config(
         config: crate::config::RouteConfig,
         service_index: &std::collections::HashMap<String, usize>,
+        global_request_headers: &CompiledHeaderRules,
+        global_response_headers: &CompiledHeaderRules,
     ) -> Self {
         let host = config
             .host
@@ -139,6 +157,15 @@ impl RouteRuntime {
             .copied()
             .expect("route references a service that was not found in service_index");
 
+        let request_headers = CompiledHeaderRules::merge(
+            global_request_headers,
+            &CompiledHeaderRules::compile(&config.request_headers),
+        );
+        let response_headers = CompiledHeaderRules::merge(
+            global_response_headers,
+            &CompiledHeaderRules::compile(&config.response_headers),
+        );
+
         Self {
             name: config.name.into(),
             host,
@@ -146,6 +173,8 @@ impl RouteRuntime {
             methods: method_mask(&config.methods),
             is_default: config.is_default,
             service_idx,
+            request_headers,
+            response_headers,
         }
     }
 }
@@ -476,6 +505,8 @@ mod tests {
             path_prefix: path_prefix.to_string(),
             methods: Vec::new(),
             is_default,
+            request_headers: Default::default(),
+            response_headers: Default::default(),
         }
     }
 
@@ -487,6 +518,7 @@ mod tests {
         RuntimeConfig::from_config(PrxConfig {
             server: ServerConfig::default(),
             observability: ObservabilityConfig::default(),
+            headers: Default::default(),
             services,
             routes,
         })
@@ -657,5 +689,43 @@ mod tests {
         let r2 = runtime.route(1).expect("r2 exists");
         assert_eq!(r2.service_idx, 0); // "first" is at index 0
         assert_eq!(runtime.service(r2.service_idx).unwrap().name, "first");
+    }
+}
+
+#[cfg(test)]
+mod header_rule_tests {
+    use super::*;
+
+    #[test]
+    fn route_header_rules_are_compiled_from_toml() {
+        let toml = r#"
+[[service]]
+name = "app"
+
+[[service.upstream]]
+addr = "127.0.0.1:3001"
+
+[[route]]
+name = "app"
+service = "app"
+path_prefix = "/"
+is_default = true
+
+[route.request_headers]
+set = { "X-Real-IP" = "$client_ip" }
+"#;
+        let config = PrxConfig::from_toml_str(toml).expect("config should be valid");
+        assert!(
+            !config.routes[0].request_headers.set.is_empty(),
+            "TOML did not reach RouteConfig"
+        );
+
+        let runtime = RuntimeConfig::from_config(config);
+        let route = runtime.route(0).expect("route 0 exists");
+        assert!(
+            !route.request_headers.is_empty(),
+            "route header rules were not compiled into the runtime"
+        );
+        assert!(route.request_headers.needs_client_addr());
     }
 }

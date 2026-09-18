@@ -11,6 +11,7 @@ use pingora::upstreams::peer::ALPN;
 use tracing::{debug, error, info, warn};
 
 use crate::config::{LbStrategy, UpstreamH2};
+use crate::headers::HeaderContext;
 use crate::metrics;
 use crate::router::RouteMatch;
 use crate::runtime::{RuntimeConfig, hash_key, normalize_host};
@@ -93,6 +94,38 @@ impl PrxProxy {
         Ok(true)
     }
 
+    /// Resolves the client address once per request, and only when a header
+    /// rule asks for it.
+    fn fill_client_addr(session: &Session, ctx: &mut RequestCtx) {
+        if ctx.client_ip.is_some() {
+            return;
+        }
+        let Some(addr) = session.client_addr() else {
+            return;
+        };
+        match addr.as_inet() {
+            Some(inet) => {
+                ctx.client_ip = Some(inet.ip().to_string());
+                ctx.client_port = Some(inet.port());
+            }
+            None => ctx.client_ip = Some(addr.to_string()),
+        }
+    }
+
+    /// Reuses an inbound `X-Request-Id` when present so a trace keeps one id
+    /// across hops, otherwise mints one.
+    fn request_id(request: &RequestHeader) -> String {
+        if let Some(existing) = request
+            .headers
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty() && value.len() <= 128)
+        {
+            return existing.to_string();
+        }
+        format!("{:032x}", rand::random::<u128>())
+    }
+
     fn record_upstream_failure(&self, ctx: &mut RequestCtx, stage: &'static str) {
         let Some(snapshot) = &ctx.snapshot else {
             return;
@@ -172,6 +205,12 @@ pub struct RequestCtx {
     route_name: Option<Arc<str>>,
     /// The client asked to upgrade the connection (websocket and friends).
     is_upgrade: bool,
+    /// Client address, rendered once per request only when a header rule needs
+    /// it (`$client_ip` / `$client_port`).
+    client_ip: Option<String>,
+    client_port: Option<u16>,
+    /// Only generated when a header rule uses `$request_id`.
+    request_id: Option<String>,
     upstream_addr: Option<String>,
 }
 
@@ -186,6 +225,9 @@ impl Default for RequestCtx {
             retries: 0,
             route_name: None,
             is_upgrade: false,
+            client_ip: None,
+            client_port: None,
+            request_id: None,
             upstream_addr: None,
         }
     }
@@ -394,32 +436,118 @@ impl ProxyHttp for PrxProxy {
 
     async fn upstream_request_filter(
         &self,
-        _session: &mut Session,
+        session: &mut Session,
         upstream_request: &mut RequestHeader,
+        ctx: &mut Self::CTX,
+    ) -> Result<()> {
+        // Phase 1: everything that needs the snapshot, ending with Copy values
+        // so ctx can be written to afterwards without cloning the rule set.
+        let needs = {
+            let Some(snapshot) = &ctx.snapshot else {
+                return Ok(());
+            };
+            let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx)) else {
+                return Ok(());
+            };
+            let Some(service) = snapshot.service(route.service_idx) else {
+                return Ok(());
+            };
+            let Some(upstream) = ctx
+                .attempted_upstreams
+                .last()
+                .copied()
+                .and_then(|idx| service.upstreams.get(idx))
+            else {
+                return Ok(());
+            };
+
+            // Keep Host aligned with SNI when proxying to strict virtual hosts.
+            // Route rules run after this, so a rule can still override Host.
+            upstream_request.insert_header("host", upstream.sni.as_str())?;
+            if route.request_headers.is_empty() {
+                None
+            } else {
+                Some((
+                    route.request_headers.needs_client_addr(),
+                    route.request_headers.needs_request_id(),
+                ))
+            }
+        };
+
+        // Phase 2: fill in what the rules ask for, and only that.
+        if let Some((needs_client_addr, needs_request_id)) = needs {
+            if needs_client_addr {
+                Self::fill_client_addr(session, ctx);
+            }
+            if needs_request_id && ctx.request_id.is_none() {
+                ctx.request_id = Some(Self::request_id(upstream_request));
+            }
+
+            // Phase 3: apply. Only immutable borrows of ctx from here.
+            let host = session
+                .req_header()
+                .headers
+                .get("host")
+                .and_then(|value| value.to_str().ok());
+            if let Some(snapshot) = &ctx.snapshot
+                && let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx))
+            {
+                {
+                    let scheme = snapshot
+                        .service(route.service_idx)
+                        .and_then(|service| {
+                            ctx.attempted_upstreams
+                                .last()
+                                .copied()
+                                .and_then(|idx| service.upstreams.get(idx))
+                        })
+                        .map(|upstream| if upstream.tls { "https" } else { "http" })
+                        .unwrap_or("http");
+
+                    let header_ctx = HeaderContext {
+                        client_ip: ctx.client_ip.as_deref(),
+                        client_port: ctx.client_port,
+                        scheme,
+                        host,
+                        route_name: Some(route.name.as_ref()),
+                        upstream_addr: ctx.upstream_addr.as_deref(),
+                        request_id: ctx.request_id.as_deref(),
+                    };
+                    route.request_headers.apply(upstream_request, &header_ctx);
+                }
+            }
+        }
+
+        self.record_upstream_success(ctx);
+        Ok(())
+    }
+
+    async fn response_filter(
+        &self,
+        _session: &mut Session,
+        upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> Result<()> {
         let Some(snapshot) = &ctx.snapshot else {
             return Ok(());
         };
-        let Some(route_idx) = ctx.route_idx else {
+        let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx)) else {
             return Ok(());
         };
-        let Some(route) = snapshot.route(route_idx) else {
+        if route.response_headers.is_empty() {
             return Ok(());
-        };
-        let Some(service) = snapshot.service(route.service_idx) else {
-            return Ok(());
-        };
-        let Some(upstream_idx) = ctx.attempted_upstreams.last().copied() else {
-            return Ok(());
-        };
-        let Some(upstream) = service.upstreams.get(upstream_idx) else {
-            return Ok(());
-        };
+        }
 
-        // Keep Host aligned with SNI when proxying to strict virtual hosts.
-        upstream_request.insert_header("host", upstream.sni.as_str())?;
-        self.record_upstream_success(ctx);
+        let header_ctx = HeaderContext {
+            client_ip: ctx.client_ip.as_deref(),
+            client_port: ctx.client_port,
+            scheme: "http",
+            host: None,
+            route_name: Some(route.name.as_ref()),
+            upstream_addr: ctx.upstream_addr.as_deref(),
+            request_id: ctx.request_id.as_deref(),
+        };
+        route.response_headers.apply(upstream_response, &header_ctx);
         Ok(())
     }
 
@@ -454,12 +582,7 @@ impl ProxyHttp for PrxProxy {
     }
 
     async fn logging(&self, session: &mut Session, e: Option<&Error>, ctx: &mut Self::CTX) {
-        if !self.access_log {
-            return;
-        }
-
         let latency_ms = ctx.started_at.elapsed().as_millis();
-        let summary = session.request_summary();
         let route_name = ctx.route_name.clone().unwrap_or_else(|| {
             ctx.snapshot
                 .as_ref()
@@ -471,7 +594,16 @@ impl ProxyHttp for PrxProxy {
             .response_written()
             .map(|resp| resp.status.as_u16())
             .unwrap_or_else(|| if e.is_some() { 500 } else { 0 });
+
+        // Metrics are recorded whether or not the access log is on: they are
+        // separate signals, and tying them together silently emptied /metrics
+        // for anyone running with access_log = false.
         metrics::observe_request(route_name.as_ref(), status, latency_ms as f64);
+
+        if !self.access_log {
+            return;
+        }
+        let summary = session.request_summary();
 
         if let Some(err) = e {
             error!(
@@ -545,6 +677,8 @@ mod tests {
             path_prefix: "/".to_string(),
             methods: Vec::new(),
             is_default: true,
+            request_headers: Default::default(),
+            response_headers: Default::default(),
         }
     }
 
@@ -552,6 +686,7 @@ mod tests {
         Arc::new(RuntimeConfig::from_config(PrxConfig {
             server: ServerConfig::default(),
             observability: ObservabilityConfig::default(),
+            headers: Default::default(),
             services: vec![service("default", max_retries, upstream_count)],
             routes: vec![route("default", "default")],
         }))
