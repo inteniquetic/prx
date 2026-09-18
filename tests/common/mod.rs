@@ -418,3 +418,152 @@ pub fn send_post(port: u16, host: &str, path: &str, body: &str) -> String {
     let _ = stream.read_to_string(&mut response);
     response
 }
+
+/// Upstream that counts requests and can be made slow, so a test can see how
+/// many fetches actually reached it.
+pub struct CountingUpstream {
+    shutdown: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+    port: u16,
+    hits: Arc<AtomicUsize>,
+}
+
+impl CountingUpstream {
+    pub fn spawn(port: u16, body: &'static str, delay: Duration) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let stop = shutdown.clone();
+        let counter = hits.clone();
+
+        let handle = thread::spawn(move || {
+            let listener =
+                TcpListener::bind(("127.0.0.1", port)).expect("failed to bind counting upstream");
+            listener
+                .set_nonblocking(true)
+                .expect("failed to set nonblocking listener");
+
+            while !stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let counter = counter.clone();
+                        thread::spawn(move || {
+                            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                            let mut buf = [0u8; 4096];
+                            let read = stream.read(&mut buf).unwrap_or(0);
+                            let request = String::from_utf8_lossy(&buf[..read]).to_string();
+                            counter.fetch_add(1, Ordering::Relaxed);
+                            thread::sleep(delay);
+
+                            // Echo the request line so a test can tell which
+                            // variant of a request produced this response.
+                            let first_line = request.lines().next().unwrap_or("").to_string();
+                            let payload = format!("{body}|{first_line}");
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\n{}",
+                                payload.len(),
+                                payload
+                            );
+                            let _ = stream.write_all(resp.as_bytes());
+                            let _ = stream.flush();
+                        });
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Self {
+            shutdown,
+            handle: Some(handle),
+            port,
+            hits,
+        }
+    }
+
+    pub fn hits(&self) -> usize {
+        self.hits.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for CountingUpstream {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Upstream that answers with the headers a test asks for, to exercise
+/// cacheability rules.
+pub struct HeaderControlledUpstream {
+    shutdown: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+    port: u16,
+    hits: Arc<AtomicUsize>,
+}
+
+impl HeaderControlledUpstream {
+    pub fn spawn(port: u16, extra_headers: &'static str, body: &'static str) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let stop = shutdown.clone();
+        let counter = hits.clone();
+
+        let handle = thread::spawn(move || {
+            let listener = TcpListener::bind(("127.0.0.1", port))
+                .expect("failed to bind header-controlled upstream");
+            listener
+                .set_nonblocking(true)
+                .expect("failed to set nonblocking listener");
+
+            while !stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        counter.fetch_add(1, Ordering::Relaxed);
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let mut buf = [0u8; 4096];
+                        let _ = stream.read(&mut buf);
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n{}connection: close\r\n\r\n{}",
+                            body.len(),
+                            extra_headers,
+                            body
+                        );
+                        let _ = stream.write_all(resp.as_bytes());
+                        let _ = stream.flush();
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Self {
+            shutdown,
+            handle: Some(handle),
+            port,
+            hits,
+        }
+    }
+
+    pub fn hits(&self) -> usize {
+        self.hits.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for HeaderControlledUpstream {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}

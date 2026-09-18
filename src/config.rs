@@ -178,6 +178,30 @@ impl PrxConfig {
                 );
             }
 
+            if route.cache.enabled {
+                if route.cache.ttl_ms == 0 {
+                    bail!("route '{}' cache.ttl_ms must be > 0", route.name);
+                }
+                if route.cache.max_body_bytes == 0 {
+                    bail!("route '{}' cache.max_body_bytes must be > 0", route.name);
+                }
+                if route.cache.cache_status_codes.is_empty() {
+                    bail!(
+                        "route '{}' cache.cache_status_codes must not be empty",
+                        route.name
+                    );
+                }
+                for name in &route.cache.vary_headers {
+                    if http::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
+                        bail!(
+                            "route '{}' cache.vary_headers contains an invalid header name '{}'",
+                            route.name,
+                            name
+                        );
+                    }
+                }
+            }
+
             if route.rate_limit.enabled {
                 if RateLimitKey::parse(&route.rate_limit.key).is_none() {
                     bail!(
@@ -630,6 +654,7 @@ impl Default for RouteConfig {
             response_headers: HeaderRules::default(),
             rate_limit: RateLimitConfig::default(),
             concurrency_limit: ConcurrencyLimitConfig::default(),
+            cache: CacheConfig::default(),
         }
     }
 }
@@ -697,6 +722,89 @@ pub struct RouteConfig {
     pub rate_limit: RateLimitConfig,
     #[serde(default)]
     pub concurrency_limit: ConcurrencyLimitConfig,
+    #[serde(default)]
+    pub cache: CacheConfig,
+}
+
+/// Short-lived response cache for a route.
+///
+/// Even a one-second TTL turns a burst of identical requests into a single
+/// upstream fetch, which is where most of the benefit comes from.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CacheConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_cache_ttl_ms")]
+    pub ttl_ms: u64,
+    /// Responses larger than this are streamed through without being stored.
+    #[serde(default = "default_cache_max_body_bytes")]
+    pub max_body_bytes: usize,
+    #[serde(default = "default_cache_max_entries")]
+    pub max_entries: usize,
+    #[serde(default = "default_cache_max_bytes")]
+    pub max_bytes: usize,
+    /// Status codes worth storing.
+    #[serde(default = "default_cache_status_codes")]
+    pub cache_status_codes: Vec<u16>,
+    /// Include the query string in the cache key.
+    #[serde(default = "default_true")]
+    pub key_query: bool,
+    /// Request headers whose values take part in the cache key, so responses
+    /// that differ by them are not mixed up.
+    #[serde(default = "default_cache_vary")]
+    pub vary_headers: Vec<String>,
+    /// How long a coalesced request waits for the in-flight fetch before going
+    /// upstream itself.
+    #[serde(default = "default_cache_coalesce_wait_ms")]
+    pub coalesce_wait_ms: u64,
+    /// Add an `X-Cache: HIT|MISS` header to responses.
+    #[serde(default = "default_true")]
+    pub add_status_header: bool,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ttl_ms: default_cache_ttl_ms(),
+            max_body_bytes: default_cache_max_body_bytes(),
+            max_entries: default_cache_max_entries(),
+            max_bytes: default_cache_max_bytes(),
+            cache_status_codes: default_cache_status_codes(),
+            key_query: true,
+            vary_headers: default_cache_vary(),
+            coalesce_wait_ms: default_cache_coalesce_wait_ms(),
+            add_status_header: true,
+        }
+    }
+}
+
+fn default_cache_ttl_ms() -> u64 {
+    2_000
+}
+
+fn default_cache_max_body_bytes() -> usize {
+    256 * 1024
+}
+
+fn default_cache_max_entries() -> usize {
+    10_000
+}
+
+fn default_cache_max_bytes() -> usize {
+    128 * 1024 * 1024
+}
+
+fn default_cache_status_codes() -> Vec<u16> {
+    vec![200, 203, 300, 301, 404]
+}
+
+fn default_cache_vary() -> Vec<String> {
+    vec!["accept-encoding".to_string()]
+}
+
+fn default_cache_coalesce_wait_ms() -> u64 {
+    2_000
 }
 
 /// Per-route rate limiting.

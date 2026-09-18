@@ -156,6 +156,44 @@ static LIMITER_ENTRIES: Lazy<IntGaugeVec> = Lazy::new(|| {
     .expect("failed to register prx_limiter_entries")
 });
 
+static CACHE_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_cache_total",
+        "Cache lookups by outcome (hit, miss, miss_follower)",
+        &["route", "result"]
+    )
+    .expect("failed to register prx_cache_total")
+});
+
+static CACHE_ENTRIES: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "prx_cache_entries",
+        "Responses currently stored per route",
+        &["route"]
+    )
+    .expect("failed to register prx_cache_entries")
+});
+
+static CACHE_BYTES: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "prx_cache_bytes",
+        "Bytes currently stored per route",
+        &["route"]
+    )
+    .expect("failed to register prx_cache_bytes")
+});
+
+pub fn inc_cache(route: &str, result: &str) {
+    CACHE_TOTAL.with_label_values(&[route, result]).inc();
+}
+
+pub fn set_cache_size(route: &str, entries: usize, bytes: usize) {
+    CACHE_ENTRIES
+        .with_label_values(&[route])
+        .set(entries as i64);
+    CACHE_BYTES.with_label_values(&[route]).set(bytes as i64);
+}
+
 pub fn inc_rate_limited(route: &str, kind: &str) {
     RATE_LIMITED_TOTAL.with_label_values(&[route, kind]).inc();
 }

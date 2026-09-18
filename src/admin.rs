@@ -30,6 +30,7 @@ use crate::{
 
 pub const ADMIN_CONFIG_PATH: &str = "/web/config";
 pub const ADMIN_ROUTE_HEALTH_PATH: &str = "/web/health/routes";
+pub const ADMIN_CACHE_PATH: &str = "/web/cache";
 pub const DEFAULT_ADMIN_LISTEN: &str = "127.0.0.1:9090";
 const MAX_ADMIN_CONFIG_BODY_BYTES: usize = 10 * 1024 * 1024;
 pub const ADMIN_SERVICES_PATH: &str = "/admin/services";
@@ -651,6 +652,90 @@ async fn render_route_health_payload(
         timeout_ms,
         routes: route_payloads,
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct CacheQuery {
+    /// Limit the action to one route; omitted means every route.
+    route: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CacheRoutePayload {
+    route: String,
+    entries: usize,
+    bytes: usize,
+    hits: u64,
+    misses: u64,
+    coalesced: u64,
+    evictions: u64,
+}
+
+async fn get_cache_status(
+    State(state): State<AdminState>,
+    Query(query): Query<CacheQuery>,
+) -> Response<Body> {
+    let snapshot = state.active_config.load();
+    let mut routes = Vec::new();
+    for idx in 0..snapshot.route_count() {
+        let Some(route) = snapshot.route(idx) else {
+            continue;
+        };
+        let Some(cache) = &route.cache else {
+            continue;
+        };
+        if query
+            .route
+            .as_deref()
+            .is_some_and(|name| name != route.name.as_ref())
+        {
+            continue;
+        }
+        routes.push(CacheRoutePayload {
+            route: route.name.to_string(),
+            entries: cache.store.entries(),
+            bytes: cache.store.bytes(),
+            hits: cache.store.hits(),
+            misses: cache.store.misses(),
+            coalesced: cache.store.coalesced(),
+            evictions: cache.store.evictions(),
+        });
+    }
+    json_response(StatusCode::OK, &routes)
+}
+
+async fn purge_cache(
+    State(state): State<AdminState>,
+    Query(query): Query<CacheQuery>,
+) -> Response<Body> {
+    let snapshot = state.active_config.load();
+    let mut purged = 0usize;
+    let mut touched = 0usize;
+    for idx in 0..snapshot.route_count() {
+        let Some(route) = snapshot.route(idx) else {
+            continue;
+        };
+        let Some(cache) = &route.cache else {
+            continue;
+        };
+        if query
+            .route
+            .as_deref()
+            .is_some_and(|name| name != route.name.as_ref())
+        {
+            continue;
+        }
+        purged += cache.store.purge();
+        touched += 1;
+    }
+
+    if touched == 0 && query.route.is_some() {
+        return text_response(StatusCode::NOT_FOUND, b"no_such_cached_route\n".to_vec());
+    }
+    text_response(
+        StatusCode::OK,
+        format!("purged {purged} entries from {touched} route(s)\n").into_bytes(),
+    )
 }
 
 async fn get_route_health(
@@ -1594,6 +1679,7 @@ async fn update_route(
                 response_headers: config.routes[index].response_headers.clone(),
                 rate_limit: config.routes[index].rate_limit.clone(),
                 concurrency_limit: config.routes[index].concurrency_limit.clone(),
+                cache: config.routes[index].cache.clone(),
             };
 
             config.routes[index] = route;
@@ -1648,6 +1734,7 @@ fn build_router(state: AdminState) -> Router {
             ADMIN_ROUTE_HEALTH_PATH,
             get(get_route_health).post(post_route_health),
         )
+        .route(ADMIN_CACHE_PATH, get(get_cache_status).delete(purge_cache))
         // Service CRUD endpoints
         .route(ADMIN_SERVICES_PATH, get(list_services).post(create_service))
         .route(

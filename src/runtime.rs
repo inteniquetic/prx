@@ -13,9 +13,10 @@ use std::{
 use rand::Rng;
 
 use crate::{
+    cache::ResponseCache,
     config::{
-        ConcurrencyLimitConfig, HealthCheckConfig, LbStrategy, PrxConfig, RateLimitKey,
-        StickyConfig, UpstreamH2,
+        CacheConfig, ConcurrencyLimitConfig, HealthCheckConfig, LbStrategy, PrxConfig,
+        RateLimitKey, StickyConfig, UpstreamH2,
     },
     headers::CompiledHeaderRules,
     limiter::{ConcurrencyLimiter, RateLimiter},
@@ -106,6 +107,11 @@ impl RuntimeConfig {
         self.services.get(idx)
     }
 
+    /// Number of routes, so callers can walk them by index.
+    pub fn route_count(&self) -> usize {
+        self.routes.len()
+    }
+
     /// Number of services, so the health checker can walk them by index.
     pub fn service_count(&self) -> usize {
         self.services.len()
@@ -148,10 +154,21 @@ pub struct RouteRuntime {
     /// Global rules merged with the route's own, compiled once per reload.
     pub request_headers: CompiledHeaderRules,
     pub response_headers: CompiledHeaderRules,
+    /// `None` when caching is off for this route.
+    pub cache: Option<RouteCache>,
     /// `None` when rate limiting is off for this route.
     pub rate_limit: Option<RouteRateLimit>,
     pub concurrency_limit: ConcurrencyLimitConfig,
     pub concurrency: ConcurrencyLimiter,
+}
+
+/// A route's response cache and the settings it was built from.
+#[derive(Debug)]
+pub struct RouteCache {
+    pub config: CacheConfig,
+    pub store: ResponseCache,
+    /// Header names that take part in the cache key, parsed once.
+    pub vary_headers: Vec<String>,
 }
 
 /// A route's compiled rate limit.
@@ -212,6 +229,25 @@ impl RouteRuntime {
             })
             .flatten();
 
+        let cache = config.cache.enabled.then(|| {
+            let vary_headers = config
+                .cache
+                .vary_headers
+                .iter()
+                .map(|name| name.to_ascii_lowercase())
+                .collect();
+            RouteCache {
+                store: ResponseCache::new(
+                    std::time::Duration::from_millis(config.cache.ttl_ms),
+                    config.cache.max_entries,
+                    config.cache.max_bytes,
+                    std::time::Duration::from_millis(config.cache.coalesce_wait_ms),
+                ),
+                vary_headers,
+                config: config.cache,
+            }
+        });
+
         Self {
             name: config.name.into(),
             host,
@@ -221,6 +257,7 @@ impl RouteRuntime {
             service_idx,
             request_headers,
             response_headers,
+            cache,
             rate_limit,
             concurrency_limit: config.concurrency_limit,
             concurrency: ConcurrencyLimiter::default(),

@@ -11,6 +11,7 @@ use pingora::prelude::*;
 use pingora::upstreams::peer::ALPN;
 use tracing::{debug, error, info, warn};
 
+use crate::cache::{Lookup, is_cacheable_response, storable_headers};
 use crate::config::{LbStrategy, RateLimitKey, StickyMode, UpstreamH2};
 use crate::headers::HeaderContext;
 use crate::limiter::Decision as LimitDecision;
@@ -149,6 +150,14 @@ impl PrxProxy {
 
     /// Answers a limited request, optionally telling the client when to come
     /// back.
+    async fn serve_cached(
+        session: &mut Session,
+        entry: &crate::cache::CachedResponse,
+        add_status_header: bool,
+    ) -> Result<bool> {
+        serve_cached_response(session, entry, add_status_header).await
+    }
+
     async fn respond_limited(
         session: &mut Session,
         status: u16,
@@ -264,6 +273,89 @@ impl PrxProxy {
     }
 }
 
+/// Only safe, unauthenticated reads are eligible for a shared cache.
+fn is_cacheable_request(session: &Session) -> bool {
+    let request = session.req_header();
+    if !matches!(request.method, Method::GET | Method::HEAD) {
+        return false;
+    }
+    // An authenticated response belongs to one client.
+    if request.headers.contains_key("authorization") {
+        return false;
+    }
+    request
+        .headers
+        .get("cache-control")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            let value = value.to_ascii_lowercase();
+            !value.contains("no-store") && !value.contains("no-cache")
+        })
+        .unwrap_or(true)
+}
+
+/// Builds the cache key from the route, host, path, optionally the query, and
+/// the headers the route varies on.
+fn cache_key(session: &Session, vary_headers: &[String], route_idx: usize) -> u64 {
+    let request = session.req_header();
+    let host = request
+        .headers
+        .get("host")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    let path = request.uri.path();
+    let query = request.uri.query().unwrap_or("");
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{Hash, Hasher};
+    route_idx.hash(&mut hasher);
+    host.hash(&mut hasher);
+    path.hash(&mut hasher);
+    query.hash(&mut hasher);
+    request.method.as_str().hash(&mut hasher);
+    for name in vary_headers {
+        name.hash(&mut hasher);
+        request
+            .headers
+            .get(name.as_str())
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Writes a stored response straight back to the client.
+async fn serve_cached_response(
+    session: &mut Session,
+    entry: &crate::cache::CachedResponse,
+    add_status_header: bool,
+) -> Result<bool> {
+    let mut header = ResponseHeader::build(entry.status, Some(entry.headers.len() + 2))?;
+    for (name, value) in &entry.headers {
+        header.insert_header(name.clone(), value.clone())?;
+    }
+    if add_status_header {
+        header.insert_header("x-cache", "HIT")?;
+        header.insert_header("age", (entry.age_ms(now_epoch_ms()) / 1000).to_string())?;
+    }
+
+    session
+        .write_response_header(Box::new(header), false)
+        .await?;
+    session
+        .write_response_body(Some(entry.body.clone()), true)
+        .await?;
+    Ok(true)
+}
+
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Builds the bucket key for a rate-limited request. Nothing is allocated for
 /// the common `client_ip` and `route` cases.
 fn rate_limit_key(session: &Session, key: &RateLimitKey, route_idx: usize) -> u64 {
@@ -335,6 +427,17 @@ fn clamp_to_budget(timeout: Duration, remaining: Option<Duration>) -> Duration {
     }
 }
 
+/// A response being collected on its way to the cache.
+#[derive(Debug)]
+struct PendingCacheEntry {
+    status: u16,
+    headers: Vec<(http::HeaderName, http::HeaderValue)>,
+    body: bytes::BytesMut,
+    /// Set when the body outgrew `max_body_bytes`, so it is streamed through
+    /// but never stored.
+    too_large: bool,
+}
+
 /// Where a failure happened, which decides whether a replay is safe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RetryStage {
@@ -386,6 +489,14 @@ pub struct RequestCtx {
     sticky_cookie: Option<u64>,
     /// True when this request holds a concurrency slot that must be released.
     holds_concurrency_slot: bool,
+    /// Cache key for this request, when the route caches and the request is
+    /// eligible.
+    cache_key: Option<u64>,
+    /// Set when this request owns the upstream fetch for `cache_key` and has to
+    /// wake the requests waiting behind it.
+    cache_leader: bool,
+    /// Response being assembled for the cache: status, headers and body so far.
+    cache_pending: Option<PendingCacheEntry>,
     upstream_addr: Option<String>,
 }
 
@@ -406,6 +517,9 @@ impl Default for RequestCtx {
             is_idempotent: true,
             sticky_cookie: None,
             holds_concurrency_slot: false,
+            cache_key: None,
+            cache_leader: false,
+            cache_pending: None,
             upstream_addr: None,
         }
     }
@@ -503,6 +617,31 @@ impl ProxyHttp for PrxProxy {
                         return Self::respond_limited(session, status, None).await;
                     }
                     ctx.holds_concurrency_slot = max_concurrent > 0;
+
+                    // Caching happens after the limits so a cached response
+                    // still counts against a client's allowance.
+                    if let Some(cache) = &route.cache
+                        && is_cacheable_request(session)
+                    {
+                        let key = cache_key(session, &cache.vary_headers, route_idx);
+                        ctx.cache_key = Some(key);
+                        match cache.store.lookup(key).await {
+                            Lookup::Hit(entry) => {
+                                metrics::inc_cache(route.name.as_ref(), "hit");
+                                let add_header = cache.config.add_status_header;
+                                return Self::serve_cached(session, &entry, add_header).await;
+                            }
+                            Lookup::MissLeader => {
+                                metrics::inc_cache(route.name.as_ref(), "miss");
+                                ctx.cache_leader = true;
+                            }
+                            Lookup::MissFollower => {
+                                // The leader did not finish in time; this
+                                // request fetches on its own rather than wait.
+                                metrics::inc_cache(route.name.as_ref(), "miss_follower");
+                            }
+                        }
+                    }
                 }
                 Ok(false)
             }
@@ -811,6 +950,29 @@ impl ProxyHttp for PrxProxy {
             let _ = upstream_response.append_header("set-cookie", cookie);
         }
 
+        if let Some(cache) = &route.cache
+            && ctx.cache_key.is_some()
+        {
+            let status = upstream_response.status.as_u16();
+            let headers = || {
+                upstream_response
+                    .headers
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+            };
+            if is_cacheable_response(status, &cache.config.cache_status_codes, headers()) {
+                ctx.cache_pending = Some(PendingCacheEntry {
+                    status,
+                    headers: storable_headers(headers()),
+                    body: bytes::BytesMut::new(),
+                    too_large: false,
+                });
+            }
+            if cache.config.add_status_header {
+                let _ = upstream_response.insert_header("x-cache", "MISS");
+            }
+        }
+
         if route.response_headers.is_empty() {
             return Ok(());
         }
@@ -826,6 +988,64 @@ impl ProxyHttp for PrxProxy {
         };
         route.response_headers.apply(upstream_response, &header_ctx);
         Ok(())
+    }
+
+    fn response_body_filter(
+        &self,
+        _session: &mut Session,
+        body: &mut Option<Bytes>,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<Option<Duration>>
+    where
+        Self::CTX: Send + Sync,
+    {
+        let Some(pending) = ctx.cache_pending.as_mut() else {
+            return Ok(None);
+        };
+        let Some(key) = ctx.cache_key else {
+            return Ok(None);
+        };
+
+        let max_body_bytes = ctx
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| ctx.route_idx.and_then(|idx| snapshot.route(idx)))
+            .and_then(|route| route.cache.as_ref())
+            .map(|cache| cache.config.max_body_bytes)
+            .unwrap_or(0);
+
+        if let Some(chunk) = body.as_ref()
+            && !pending.too_large
+        {
+            if pending.body.len() + chunk.len() > max_body_bytes {
+                // Streaming a large response is fine; storing it is not. Drop
+                // what was collected so the memory goes back immediately.
+                pending.too_large = true;
+                pending.body = bytes::BytesMut::new();
+            } else {
+                pending.body.extend_from_slice(chunk);
+            }
+        }
+
+        if end_of_stream && !pending.too_large {
+            let entry = ctx.cache_pending.take().expect("checked above");
+            if let Some(snapshot) = &ctx.snapshot
+                && let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx))
+                && let Some(cache) = &route.cache
+            {
+                cache
+                    .store
+                    .insert(key, entry.status, entry.headers, entry.body.freeze());
+                metrics::set_cache_size(
+                    route.name.as_ref(),
+                    cache.store.entries(),
+                    cache.store.bytes(),
+                );
+            }
+        }
+
+        Ok(None)
     }
 
     fn fail_to_connect(
@@ -877,6 +1097,15 @@ impl ProxyHttp for PrxProxy {
             if ctx.holds_concurrency_slot {
                 route.concurrency.release();
                 ctx.holds_concurrency_slot = false;
+            }
+            // Waiters must be woken whether the fetch succeeded, failed or was
+            // never cacheable; otherwise they sit until their timeout.
+            if ctx.cache_leader
+                && let Some(key) = ctx.cache_key
+                && let Some(cache) = &route.cache
+            {
+                cache.store.finish(key);
+                ctx.cache_leader = false;
             }
             if let Some(limit) = &route.rate_limit {
                 metrics::set_limiter_entries(route.name.as_ref(), limit.limiter.entries());

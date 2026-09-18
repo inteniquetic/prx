@@ -258,6 +258,60 @@ upstream_h2 = "always"
 addr = "127.0.0.1:50051"
 ```
 
+### 3.4b1 `[route.cache]` — short-lived response cache
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `bool` | `false` | Turn caching on for this route |
+| `ttl_ms` | `number` | `2000` | How long an entry stays fresh |
+| `max_body_bytes` | `number` | `262144` | Larger responses are streamed but never stored |
+| `max_entries` | `number` | `10000` | Cap on stored responses |
+| `max_bytes` | `number` | `134217728` | Cap on stored bytes |
+| `cache_status_codes` | array | `[200, 203, 300, 301, 404]` | Status codes worth storing |
+| `key_query` | `bool` | `true` | Include the query string in the key |
+| `vary_headers` | array | `["accept-encoding"]` | Request headers that take part in the key |
+| `coalesce_wait_ms` | `number` | `2000` | How long a queued request waits for the in-flight fetch |
+| `add_status_header` | `bool` | `true` | Add `X-Cache: HIT\|MISS` and `Age` |
+
+```toml
+[route.cache]
+enabled = true
+ttl_ms = 2000
+```
+
+**The coalescing is the main event.** When a popular object expires under load,
+every request that arrives during the refetch would normally become its own
+upstream request. prx sends one and queues the rest behind it; an end-to-end
+test holds 30 simultaneous requests on a cold key to exactly one upstream
+fetch. Even a one-second TTL is enough for this to matter.
+
+A queued request never waits indefinitely: after `coalesce_wait_ms` it goes
+upstream itself, so a stalled fetch cannot stall everyone behind it.
+
+What prx refuses to cache, regardless of configuration:
+
+- anything but `GET` and `HEAD`;
+- requests carrying `Authorization`, or `Cache-Control: no-store`/`no-cache`;
+- responses with `Cache-Control: no-store` or `private`, with `Set-Cookie`, or
+  with `Vary: *` — storing any of these would hand one client's response to
+  another;
+- bodies over `max_body_bytes`, which are streamed through untouched.
+
+Hop-by-hop headers (`Connection`, `Transfer-Encoding`, `Set-Cookie`, …) are
+stripped before storing, so a stored entry never replays another connection's
+state.
+
+Admin endpoints: `GET /web/cache` reports entries, bytes, hits, misses,
+coalesced requests and evictions per route; `DELETE /web/cache` purges
+everything, or one route with `?route=<name>`.
+
+Metrics: `prx_cache_total{route,result}` (`hit`, `miss`, `miss_follower`),
+`prx_cache_entries{route}` and `prx_cache_bytes{route}`.
+
+**Not implemented yet:** `stale-while-revalidate`. Serving a stale entry while
+refreshing in the background needs a revalidation task, and the coalescing
+above already removes most of the thundering-herd risk it would address.
+
 ### 3.4b2 `[route.rate_limit]` and `[route.concurrency_limit]`
 
 | Field | Type | Default | Description |
@@ -495,6 +549,10 @@ expected to sit idle; applying them would drop healthy websockets.
 - `only one route can be marked is_default = true`
 - `route '<name>' lists unsupported HTTP method '<method>'`
 - `route '<name>' has an invalid header name '<name>'`
+- `route '<name>' cache.ttl_ms must be > 0`
+- `route '<name>' cache.max_body_bytes must be > 0`
+- `route '<name>' cache.cache_status_codes must not be empty`
+- `route '<name>' cache.vary_headers contains an invalid header name '<name>'`
 - `route '<name>' rate_limit.key '<key>' is invalid`
 - `route '<name>' rate_limit.requests_per_second must be > 0`
 - `route '<name>' rate_limit.response_status must be a 4xx or 5xx code`

@@ -5,6 +5,7 @@
 //! configuration internals directly.
 
 pub mod admin;
+pub mod cache;
 pub mod config;
 pub mod headers;
 pub mod health;

@@ -1,7 +1,7 @@
 # T109 — In-memory micro-cache สำหรับ GET
 
 **Phase:** 1 · Data plane
-**Status:** todo
+**Status:** done
 **Size:** L (~2d)
 **Depends on:** T102
 **Files:** `src/cache.rs` (ใหม่), `src/config.rs`, `src/proxy.rs`
@@ -46,3 +46,45 @@ cache_status_codes = [200, 203, 300, 301, 404]
 ## Out of scope
 
 - Disk cache / shared cache ข้าม instance
+
+## ผลลัพธ์ที่ส่งมอบ
+
+- `src/cache.rs` — cache แบบ sharded (32 shard) มีเพดานทั้งจำนวน entry และจำนวน byte
+  evict ของหมดอายุก่อน แล้วค่อยไล่ทิ้งตัวที่เก่าสุด
+- **request coalescing (single-flight)** — miss พร้อมกันบน key เดียวกันจะมี "leader" ตัวเดียวที่ไป upstream
+  ที่เหลือรอแล้วรับผลจาก cache
+  - e2e ยืนยัน: **30 request พร้อมกันบน key เย็น → upstream โดนครั้งเดียว**
+  - คนที่รอมี timeout (`coalesce_wait_ms`) ถ้า leader ค้างจะไปเองไม่รอตลอดกาล
+  - leader ปลุกคนที่รอเสมอใน `logging()` ไม่ว่าจะสำเร็จ ล้มเหลว หรือไม่ cacheable
+- cache key = route + host + path + query + method + `vary_headers`
+- `X-Cache: HIT|MISS` + `Age`
+- admin: `GET /web/cache` (สถิติต่อ route), `DELETE /web/cache[?route=]` (purge) — ทดสอบกับ proxy จริงแล้ว
+- metrics: `prx_cache_total{route,result}`, `prx_cache_entries`, `prx_cache_bytes`
+
+## กฎความปลอดภัยที่บังคับเสมอ ไม่ขึ้นกับ config
+
+ทุกข้อมีเทสต์คุม:
+
+| กรณี | เหตุผล |
+|---|---|
+| method ที่ไม่ใช่ GET/HEAD | response ของ POST ไม่ใช่ของสาธารณะ |
+| request มี `Authorization` | response เป็นของ client คนนั้นคนเดียว |
+| request มี `Cache-Control: no-store`/`no-cache` | client ขอไม่ให้ใช้ของเก่า |
+| response มี `Cache-Control: no-store` หรือ `private` | upstream บอกว่าห้ามแชร์ |
+| response มี `Set-Cookie` | เก็บไว้ = ยก session ของคนหนึ่งให้อีกคน |
+| response มี `Vary: *` | เล่นซ้ำไม่ได้อย่างปลอดภัย |
+| body เกิน `max_body_bytes` | ส่งผ่านได้ แต่ไม่เก็บ |
+
+hop-by-hop header ถูกตัดทิ้งก่อนเก็บ
+
+## Acceptance criteria
+
+- [x] e2e: 30 concurrent GET บน key เย็น → upstream เห็นแค่ 1 request
+- [x] เคารพ no-store/private/Set-Cookie/Authorization (มีเทสต์แยกทุกเคส)
+- [x] memory ไม่เกิน cap (unit test ยัด 5,000 entry เข้า cache ที่ cap 64 entry / 64KB)
+- [ ] bench: RPS ของงาน read-heavy เพิ่มขึ้น — ต้องใช้ harness ของ T001
+
+## ที่ยังไม่ได้ทำ
+
+`stale-while-revalidate` — ต้องมี task refresh เบื้องหลัง และ coalescing ที่ทำไปแล้วปิดความเสี่ยง
+thundering herd ซึ่งเป็นเหตุผลหลักของฟีเจอร์นี้ไปเกือบหมด บันทึกไว้ใน CONFIG-WIKI ว่ายังไม่มี

@@ -12,6 +12,7 @@
 - Session affinity by cookie, client IP or header
 - Per-route request/response header rules (`X-Forwarded-For`, `X-Real-IP`, security headers)
 - Per-route rate limiting and concurrency limiting
+- Short-lived response cache with request coalescing (one upstream fetch per cold key)
 - Route-level failover retry
 - Passive per-route circuit breaker for unhealthy upstreams
 - Active health checking that removes a failing upstream before a request finds it
@@ -46,6 +47,8 @@ Endpoints:
 - `GET /web/health/routes` check route upstream TCP health status
 - `POST /web/health/routes` check health from provided TOML payload (used by WebUI draft)
 - `PUT /web/config` write new `Prx.toml` (validated before apply)
+- `GET /web/cache` cache statistics per route
+- `DELETE /web/cache[?route=<name>]` purge cached responses
 
 Note: `webui/dist` is embedded at compile time. Rebuild `prx` after `webui` changes.
 
