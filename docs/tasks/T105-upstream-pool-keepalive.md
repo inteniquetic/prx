@@ -23,7 +23,7 @@
    - `pool_idle_timeout_ms`, `max_idle_per_upstream`, `max_conns_per_upstream`
    - `upstream_h2: auto|always|never` (H2 ไป upstream = multiplex ลดจำนวน conn มาก)
    - `keepalive_requests` (รีไซเคิล conn หลัง N requests กัน connection เก่าค้าง)
-2. ตรวจว่าค่าเหล่านี้ map ลง Pingora peer options ถูกจริง (อ่าน `vendor/pingora-core`) และ reuse เกิดขึ้นจริง
+2. ตรวจว่าค่าเหล่านี้ map ลง Pingora peer options ถูกจริง (อ่าน source ของ `pingora-core`) และ reuse เกิดขึ้นจริง
 3. เพิ่ม metric: `prx_upstream_connection_reused_total`, `prx_upstream_connection_created_total`,
    `prx_upstream_pool_idle_connections` (gauge)
 4. Bench: วัด reuse ratio ใน scenario `h1-keepalive` และ `h2` เทียบ nginx `keepalive N`

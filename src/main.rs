@@ -216,7 +216,7 @@ fn run() -> anyhow::Result<()> {
     }
 
     if let Some(metrics_addr) = &app_config.observability.prometheus_listen {
-        let mut metrics_service = pingora::services::listening::Service::prometheus_http_service();
+        let mut metrics_service = pingora_prometheus::prometheus_http_service();
         metrics_service.add_tcp(metrics_addr);
         server.add_service(metrics_service);
         info!(

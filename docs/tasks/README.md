@@ -46,7 +46,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T002](T002-baseline-report.md) | Baseline report + `docs/BENCHMARKS.md` | S | T001 | 🟡 micro-bench วัดแล้ว / proxy-vs-proxy รอเครื่องที่มี Docker |
 | [T003](T003-profiling-and-microbench.md) | Flamegraph + criterion micro-bench | M | T001 | ✅ done |
 | [T004](T004-perf-ci-gate.md) | Perf regression gate ใน CI | M | T002, T003 | ✅ done |
-| [T005](T005-dependency-security-upgrade.md) | แก้ช่องโหว่ dependency ให้ `cargo audit` เขียว | L | — | 🟠 เหลือ `pingora-cache` ตัวเดียว (h2 แก้แล้ว) |
+| [T005](T005-dependency-security-upgrade.md) | แก้ช่องโหว่ dependency ให้ `cargo audit` เขียว | L | — | ✅ done (pingora 0.9, ลบ `vendor/` ทิ้ง) |
 
 ### Phase 1 — Data plane
 
@@ -149,7 +149,8 @@ T112 เจอเรื่องหนึ่งที่เทสต์จับ
 
 และ Phase 0 ยังเจออีกสองเรื่องที่ไม่ได้อยู่ในแผนเดิม:
 
-- **build พังอยู่ก่อนแล้ว** — `vendor/pingora-core` คอมไพล์ไม่ผ่านกับ libc ที่ lock ไว้ (แก้แล้วใน T001)
+- **build พังอยู่ก่อนแล้ว** — `vendor/pingora-core` คอมไพล์ไม่ผ่านกับ libc ที่ lock ไว้ (แก้แล้วใน T001,
+  แล้ว T005 อัป pingora 0.9 ซึ่ง upstream แก้ให้แล้ว จึงลบ `vendor/` ทิ้ง)
 - **`cargo audit` แดง** — pingora 0.7 ลาก `pingora-cache` 0.7.0 (cache poisoning, 8.4 high) และ `h2` 0.4.13 มาด้วย
   → [T005](T005-dependency-security-upgrade.md)
 
