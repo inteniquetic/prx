@@ -42,6 +42,27 @@ impl PrxConfig {
             bail!("config must include at least one [[route]] block");
         }
 
+        if let Some(tls) = &self.server.tls {
+            let certs = tls.all_certs();
+            if certs.is_empty() {
+                bail!(
+                    "[server.tls] is configured but has no certificate: add [[server.tls.cert]] \
+                     or cert_path/key_path"
+                );
+            }
+            if tls.cert_path.is_some() != tls.key_path.is_some() {
+                bail!("[server.tls] cert_path and key_path must be set together");
+            }
+            if certs.iter().filter(|cert| cert.is_default).count() > 1 {
+                bail!("only one [[server.tls.cert]] can be marked is_default = true");
+            }
+            for cert in &certs {
+                if cert.cert_path.trim().is_empty() || cert.key_path.trim().is_empty() {
+                    bail!("[[server.tls.cert]] needs both cert_path and key_path");
+                }
+            }
+        }
+
         if !self.server.health_path.starts_with('/') {
             bail!("server.health_path must start with '/'");
         }
@@ -392,10 +413,48 @@ fn default_ready_path() -> String {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TlsConfig {
     pub listen: String,
-    pub cert_path: String,
-    pub key_path: String,
+    /// Single-certificate form, kept so existing configs keep working. Prefer
+    /// `[[server.tls.cert]]`, which supports more than one domain.
+    #[serde(default)]
+    pub cert_path: Option<String>,
+    #[serde(default)]
+    pub key_path: Option<String>,
     #[serde(default = "default_true")]
     pub enable_h2: bool,
+    /// Certificates to choose from by SNI.
+    #[serde(rename = "cert", default)]
+    pub certs: Vec<TlsCertConfig>,
+}
+
+impl TlsConfig {
+    /// All certificates in one list, whichever form the config used.
+    pub fn all_certs(&self) -> Vec<TlsCertConfig> {
+        let mut certs = self.certs.clone();
+        if let (Some(cert_path), Some(key_path)) = (&self.cert_path, &self.key_path) {
+            certs.push(TlsCertConfig {
+                domains: Vec::new(),
+                cert_path: cert_path.clone(),
+                key_path: key_path.clone(),
+                is_default: certs.is_empty(),
+            });
+        }
+        certs
+    }
+}
+
+/// One certificate and the domains it answers for.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TlsCertConfig {
+    /// Domains this certificate serves. `*.example.com` also covers
+    /// `example.com`. Left empty, the names are read from the certificate
+    /// itself.
+    #[serde(default)]
+    pub domains: Vec<String>,
+    pub cert_path: String,
+    pub key_path: String,
+    /// Used for clients that send no SNI, or a name no certificate covers.
+    #[serde(default)]
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

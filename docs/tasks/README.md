@@ -62,7 +62,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T108](T108-rate-limit.md) | Rate limit + connection limit ต่อ route/IP | L | T102 | ✅ done |
 | [T109](T109-micro-cache.md) | In-memory micro-cache สำหรับ GET | L | T102 | ✅ done |
 | [T110](T110-compression.md) | gzip/brotli response compression | M | T106 | ✅ done |
-| [T111](T111-tls-perf-multicert.md) | TLS: session resumption, ALPN, multi-cert SNI | L | T104 |
+| [T111](T111-tls-perf-multicert.md) | TLS: session resumption, ALPN, multi-cert SNI | L | T104 | 🟡 multi-cert SNI done (TLS เคยพังทั้งหมด) |
 | [T112](T112-acme-auto-tls.md) | ACME auto TLS (Let's Encrypt) | L | T111 |
 | [T113](T113-active-health-check.md) | Active health check prober (เสริม passive CB) | M | — | ✅ done |
 | [T114](T114-lb-least-conn-sticky.md) | LB: least_conn, P2C-EWMA, sticky session | M | T105 | ✅ done |
@@ -124,6 +124,13 @@ T115 เจอสองเรื่องที่ไม่มีใครรู
 |---|---|---|
 | **gRPC ใช้งานไม่ได้เลย** — ALPN ของ upstream ถูกตั้งเป็น H1 เสมอ และ listener ไม่เปิด h2c | เรียก gRPC ผ่าน prx ได้ 502 ทั้งที่ README เคลมว่ารองรับ | ✅ แก้แล้ว (`[server] h2c`, `[[service]] upstream_h2`) |
 | **websocket ที่เงียบเกิน `read_timeout_ms` โดนตัด** | connection ที่ idle ตายทุกครั้งที่ตั้ง read timeout | ✅ แก้แล้ว (ไม่ใส่ timeout ให้ connection ที่ upgrade) |
+
+T111 เจอเรื่องที่ใหญ่ที่สุดของโปรเจกต์:
+
+| สิ่งที่เจอ | ผลกระทบ | สถานะ |
+|---|---|---|
+| **TLS ใช้งานไม่ได้เลย** — pingora ถูก build โดยไม่เปิด TLS feature ทำให้ `TlsSettings::intermediate()` ทิ้ง cert path และ `tls_handshake()` เป็น `unimplemented!()` | ทุก connection ที่เข้าทาง HTTPS ทำให้ worker thread **panic** ทั้งที่ `Prx.toml` ตัวอย่างมี `[server.tls]` อยู่ | ✅ แก้แล้ว (เปิด feature `openssl`) |
+| **h2c ทำให้ HTTP/1.1 over TLS พัง** — TLS stream peek ไม่ได้ pingora จึงเข้าโหมด h2 ทั้งที่ ALPN ตกลงเป็น http/1.1 | client HTTP/1.1 ได้ h2 frame เป็น body | ✅ แก้แล้ว (แยก TLS เป็น service ของตัวเอง) |
 
 T106 เจออีกสองเรื่อง:
 

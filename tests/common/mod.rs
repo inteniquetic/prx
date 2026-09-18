@@ -113,6 +113,10 @@ impl PrxProcess {
     }
 }
 
+pub fn prx_binary() -> PathBuf {
+    resolve_prx_binary()
+}
+
 fn resolve_prx_binary() -> PathBuf {
     if let Ok(path) = std::env::var("CARGO_BIN_EXE_prx") {
         return PathBuf::from(path);

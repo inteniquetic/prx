@@ -13,6 +13,7 @@ use prx::{
     proxy::PrxProxy,
     reload::spawn_config_watcher,
     runtime::RuntimeConfig,
+    tls::CertResolver,
 };
 
 fn main() {
@@ -55,6 +56,11 @@ fn run() -> anyhow::Result<()> {
     if app_config.server.h2c {
         // Pingora peeks for the h2 preface and falls back to HTTP/1.1, so this
         // costs nothing for HTTP/1.1 clients and is what cleartext gRPC needs.
+        //
+        // It must not be set on the TLS service: a TLS stream cannot be peeked,
+        // so pingora would treat every connection as h2 even when ALPN settled
+        // on http/1.1, and HTTP/1.1 clients would get an h2 frame as their
+        // response body.
         if let Some(app) = proxy_service.app_logic_mut() {
             let mut options = HttpServerOptions::default();
             options.h2c = true;
@@ -66,19 +72,44 @@ fn run() -> anyhow::Result<()> {
         proxy_service.add_tcp(addr);
     }
 
-    if let Some(tls) = &app_config.server.tls {
-        let mut tls_settings = TlsSettings::intermediate(&tls.cert_path, &tls.key_path)
-            .with_context(|| {
-                format!(
-                    "failed to initialize TLS settings using cert={} key={}",
-                    tls.cert_path, tls.key_path
-                )
-            })?;
-        if tls.enable_h2 {
-            tls_settings.enable_h2();
+    let tls_service = match &app_config.server.tls {
+        Some(tls) => {
+            // Certificates are loaded and checked here rather than during a
+            // handshake: a bad path or a key that does not match its
+            // certificate should stop startup, not break every client.
+            let resolver = CertResolver::load(&tls.all_certs())
+                .context("failed to load the configured TLS certificates")?;
+            resolver.report_expiry();
+            let cert_count = resolver.len();
+
+            let mut tls_settings = TlsSettings::with_callbacks(Box::new(resolver))
+                .map_err(|err| anyhow::anyhow!("failed to initialize TLS settings: {err}"))?;
+            if tls.enable_h2 {
+                tls_settings.enable_h2();
+            }
+
+            // A separate service, so the h2c option above never applies to a
+            // TLS listener.
+            let mut service = http_proxy_service(
+                &server.configuration,
+                PrxProxy::new(
+                    runtime_config.clone(),
+                    app_config.observability.access_log,
+                    app_config.server.health_path.clone(),
+                    app_config.server.ready_path.clone(),
+                    app_config.compression.clone(),
+                ),
+            );
+            service.add_tls_with_settings(&tls.listen, None, tls_settings);
+            info!(
+                listen = tls.listen.as_str(),
+                certificates = cert_count,
+                "TLS listener is enabled"
+            );
+            Some(service)
         }
-        proxy_service.add_tls_with_settings(&tls.listen, None, tls_settings);
-    }
+        None => None,
+    };
 
     let proxy_listen = app_config.server.listen.join(", ");
     let tls_listen = app_config
@@ -88,6 +119,9 @@ fn run() -> anyhow::Result<()> {
         .map(|tls| tls.listen.as_str())
         .unwrap_or("-");
     server.add_service(proxy_service);
+    if let Some(tls_service) = tls_service {
+        server.add_service(tls_service);
+    }
     info!(
         listen = proxy_listen.as_str(),
         tls_listen, "proxy server listeners are enabled"

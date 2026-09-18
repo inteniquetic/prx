@@ -183,6 +183,21 @@ static CACHE_BYTES: Lazy<IntGaugeVec> = Lazy::new(|| {
     .expect("failed to register prx_cache_bytes")
 });
 
+static TLS_CERT_EXPIRY: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "prx_tls_cert_expiry_seconds",
+        "Seconds until a TLS certificate expires, per domain",
+        &["domain"]
+    )
+    .expect("failed to register prx_tls_cert_expiry_seconds")
+});
+
+pub fn set_tls_cert_expiry(domain: &str, seconds_remaining: i64) {
+    TLS_CERT_EXPIRY
+        .with_label_values(&[domain])
+        .set(seconds_remaining);
+}
+
 pub fn inc_cache(route: &str, result: &str) {
     CACHE_TOTAL.with_label_values(&[route, result]).inc();
 }

@@ -267,9 +267,21 @@ struct AdminServerPayload {
 #[derive(Debug, Serialize)]
 struct AdminTlsPayload {
     listen: String,
+    /// Present only for the single-certificate form.
+    cert_path: Option<String>,
+    key_path: Option<String>,
+    enable_h2: bool,
+    /// Every certificate this listener can serve, including the single-cert
+    /// form, so the UI shows one consistent list.
+    certs: Vec<AdminTlsCertPayload>,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminTlsCertPayload {
+    domains: Vec<String>,
     cert_path: String,
     key_path: String,
-    enable_h2: bool,
+    is_default: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -431,11 +443,24 @@ impl From<PrxConfig> for AdminConfigPayload {
             grace_period_seconds: config.server.grace_period_seconds,
             graceful_shutdown_timeout_seconds: config.server.graceful_shutdown_timeout_seconds,
             config_reload_debounce_ms: config.server.config_reload_debounce_ms,
-            tls: config.server.tls.map(|tls| AdminTlsPayload {
-                listen: tls.listen,
-                cert_path: tls.cert_path,
-                key_path: tls.key_path,
-                enable_h2: tls.enable_h2,
+            tls: config.server.tls.map(|tls| {
+                let certs = tls
+                    .all_certs()
+                    .into_iter()
+                    .map(|cert| AdminTlsCertPayload {
+                        domains: cert.domains,
+                        cert_path: cert.cert_path,
+                        key_path: cert.key_path,
+                        is_default: cert.is_default,
+                    })
+                    .collect();
+                AdminTlsPayload {
+                    listen: tls.listen,
+                    cert_path: tls.cert_path,
+                    key_path: tls.key_path,
+                    enable_h2: tls.enable_h2,
+                    certs,
+                }
             }),
         };
 

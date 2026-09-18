@@ -150,7 +150,30 @@ Operational references:
 - Rollback runbook: `ops/ROLLBACK.md`
 - Zero-exception security policy: `ops/ZERO-EXCEPTION-POLICY.md`
 
-## TLS backend
+## TLS
 
-TLS provider support depends on Pingora build features.
-By default this project uses Pingora defaults; adjust Cargo features if you need a different TLS backend.
+prx builds pingora with its `openssl` TLS backend, so the TLS listener is a
+working one: building requires `libssl-dev` and running requires `libssl3`
+(the Dockerfile installs both).
+
+Certificates are chosen per connection from the client's SNI, so one listener
+can serve several domains:
+
+```toml
+[server.tls]
+listen = "0.0.0.0:8443"
+enable_h2 = true
+
+[[server.tls.cert]]
+domains = ["example.com", "*.example.com"]
+cert_path = "./certs/example.crt"
+key_path = "./certs/example.key"
+is_default = true
+```
+
+They are loaded and validated at startup: an unreadable file, or a key that
+does not match its certificate, stops the process rather than failing every
+handshake. `prx_tls_cert_expiry_seconds{domain}` reports how long each one has
+left.
+
+See `docs/CONFIG-WIKI.md` for the full reference.

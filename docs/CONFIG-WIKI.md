@@ -124,6 +124,58 @@ host does not fall through to a broader one.
 - a method prx does not know (for example `PROPFIND`) only matches routes that
   list no methods at all.
 
+### 3.3a `[server.tls]` — TLS listener and certificates
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `listen` | `string` | - | Address for the TLS listener |
+| `enable_h2` | `bool` | `true` | Offer HTTP/2 through ALPN |
+| `cert_path` / `key_path` | `string` | - | Single-certificate form, still supported |
+| `[[server.tls.cert]]` | table array | - | One entry per certificate |
+
+```toml
+[server.tls]
+listen = "0.0.0.0:8443"
+enable_h2 = true
+
+[[server.tls.cert]]
+domains = ["example.com", "*.example.com"]
+cert_path = "./certs/example.crt"
+key_path = "./certs/example.key"
+is_default = true
+
+[[server.tls.cert]]
+domains = ["api.other.com"]
+cert_path = "./certs/other.crt"
+key_path = "./certs/other.key"
+```
+
+prx picks the certificate from the SNI the client sent: an exact domain first,
+then the longest matching wildcard (`*.example.com` also covers
+`example.com`). A client that sends no SNI, or a name nothing covers, gets the
+entry marked `is_default`, or the first one; refusing the handshake instead
+would be a worse failure mode.
+
+`domains` may be omitted, in which case the names are read from the
+certificate's own SAN entries.
+
+Certificates are loaded and checked **at startup**, not during a handshake, so
+these stop the process instead of breaking every client:
+
+- a cert or key file that cannot be read or parsed;
+- a private key that does not match its certificate;
+- a TLS listener with no certificate configured at all.
+
+A certificate expiring within 14 days is logged as a warning at startup, and
+`prx_tls_cert_expiry_seconds{domain}` reports the seconds remaining so it can
+be alerted on.
+
+**Build requirement:** the TLS listener needs pingora's `openssl` feature,
+which `Cargo.toml` enables. Building needs `libssl-dev` and running needs
+`libssl3`; the Dockerfile installs both. Without that feature pingora compiles
+a stub whose handshake is `unimplemented!()`, so a TLS listener would accept
+connections and then panic the worker.
+
 ### 3.3b `[compression]`
 
 | Field | Type | Default | Description |
@@ -576,6 +628,10 @@ expected to sit idle; applying them would drop healthy websockets.
 - `only one route can be marked is_default = true`
 - `route '<name>' lists unsupported HTTP method '<method>'`
 - `route '<name>' has an invalid header name '<name>'`
+- `[server.tls] is configured but has no certificate`
+- `[server.tls] cert_path and key_path must be set together`
+- `only one [[server.tls.cert]] can be marked is_default = true`
+- `private key <path> does not match certificate <path>`
 - `compression.level must be between 1 and 11`
 - `route '<name>' cache.ttl_ms must be > 0`
 - `route '<name>' cache.max_body_bytes must be > 0`
