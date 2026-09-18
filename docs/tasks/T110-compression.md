@@ -1,7 +1,7 @@
 # T110 — Response compression (gzip / brotli / zstd)
 
 **Phase:** 1 · Data plane
-**Status:** todo
+**Status:** done
 **Size:** M (~1d)
 **Depends on:** T106
 **Files:** `src/config.rs`, `src/proxy.rs`, `docs/CONFIG-WIKI.md`
@@ -38,3 +38,34 @@ content_types = ["text/*", "application/json", "application/javascript", "image/
 ## Out of scope
 
 - Request body decompression
+
+## ผลลัพธ์ที่ส่งมอบ
+
+**ใช้ของ pingora ไม่เขียนเอง** — ตรวจตามที่ task กำหนดแล้วพบว่า `vendor/pingora-core` มี
+`ResponseCompressionBuilder` ที่บีบแบบ streaming พร้อม gzip/brotli/zstd (เป็น dependency ตรง ไม่ต้องเปิด feature)
+การเขียน compressor เองจะได้ของที่แย่กว่า: ถ้า buffer ทั้ง body ก่อนบีบ response ใหญ่ๆ จะเสีย streaming ไป
+
+- `[compression] enabled / level / decompress_upstream`
+- ลงทะเบียนผ่าน `init_downstream_modules()` — level 0 = มี module อยู่แต่ปิดอยู่ (ค่า default ของ pingora)
+- เจรจา `Accept-Encoding` ให้เอง รองรับ gzip, br, zstd
+- validate `level` ต้องอยู่ใน 1–11
+
+## ลำดับการทำงานร่วมกับ cache (T109)
+
+compression ทำงานที่ชั้น downstream module ซึ่งอยู่ **หลัง** `response_body_filter` ของ prx
+แปลว่า cache เก็บ body ดิบจาก upstream แล้วบีบตอนส่งออกทุกครั้ง (ทั้ง hit และ miss)
+ผลคือ entry เดียวเสิร์ฟได้ทุก encoding และไม่ต้องเก็บซ้ำต่อ variant
+
+## Acceptance criteria
+
+- [x] e2e: `Accept-Encoding: gzip` → ได้ gzip, ไม่ส่ง header → ไม่บีบ
+- [x] `br` และ `zstd` เจรจาได้ถูกต้อง (body 64KB → เหลือไม่ถึง 1/4)
+- [x] ไม่มี double-encoding — upstream ที่ส่ง `content-encoding: gzip` มาแล้วจะถูกส่งผ่าน
+- [x] compression เป็น opt-in (ปิดอยู่จนกว่าจะตั้งค่า)
+- [ ] bench: วัด RPS/CPU ทั้งเปิดและปิด แล้วบันทึกใน `docs/BENCHMARKS.md` — ต้องใช้ harness ของ T001
+
+## หมายเหตุขอบเขต
+
+`min_body_bytes` และ `content_types` allowlist ที่ระบุไว้ตอนแรกยังไม่ได้ทำ — pingora ตัดสินใจเรื่องนี้เอง
+ภายใน module ถ้าจะ override ต้องแก้ที่ `ResponseCompressionCtx` ต่อ request ซึ่งควรทำตอนมีตัวเลข
+จาก bench ว่ามันคุ้มจริง ไม่ใช่เดาเอา

@@ -48,6 +48,7 @@ fn run() -> anyhow::Result<()> {
             app_config.observability.access_log,
             app_config.server.health_path.clone(),
             app_config.server.ready_path.clone(),
+            app_config.compression.clone(),
         ),
     );
 

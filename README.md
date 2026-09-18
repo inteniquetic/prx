@@ -13,6 +13,7 @@
 - Per-route request/response header rules (`X-Forwarded-For`, `X-Real-IP`, security headers)
 - Per-route rate limiting and concurrency limiting
 - Short-lived response cache with request coalescing (one upstream fetch per cold key)
+- Response compression (gzip, brotli, zstd), streaming rather than buffered
 - Route-level failover retry
 - Passive per-route circuit breaker for unhealthy upstreams
 - Active health checking that removes a failing upstream before a request finds it

@@ -11,6 +11,8 @@ pub struct PrxConfig {
     pub observability: ObservabilityConfig,
     #[serde(default)]
     pub headers: HeadersConfig,
+    #[serde(default)]
+    pub compression: CompressionConfig,
     #[serde(rename = "service", default)]
     pub services: Vec<ServiceConfig>,
     #[serde(rename = "route", default)]
@@ -254,6 +256,10 @@ impl PrxConfig {
 
         if defaults > 1 {
             bail!("only one route can be marked is_default = true");
+        }
+
+        if self.compression.enabled && !(1..=11).contains(&self.compression.level) {
+            bail!("compression.level must be between 1 and 11");
         }
 
         validate_header_rules(&self.headers.request, "headers.request")?;
@@ -692,6 +698,39 @@ impl HeaderRules {
     }
 }
 
+/// Response compression.
+///
+/// prx uses pingora's streaming compressor, so a large response is compressed
+/// as it flows through rather than being buffered first.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CompressionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Compression level. Higher costs CPU for a smaller body; 3-6 is the
+    /// usual range for a proxy that compresses on the fly.
+    #[serde(default = "default_compression_level")]
+    pub level: u32,
+    /// Decompress an already-compressed upstream response when the client
+    /// cannot accept that encoding. Off by default: it is expensive and rarely
+    /// what an operator wants.
+    #[serde(default)]
+    pub decompress_upstream: bool,
+}
+
+impl Default for CompressionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            level: default_compression_level(),
+            decompress_upstream: false,
+        }
+    }
+}
+
+fn default_compression_level() -> u32 {
+    4
+}
+
 /// Header rules that apply to every route, applied before the route's own.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct HeadersConfig {
@@ -1073,6 +1112,7 @@ mod tests {
             server: ServerConfig::default(),
             observability: ObservabilityConfig::default(),
             headers: Default::default(),
+            compression: Default::default(),
             services: vec![valid_service("default")],
             routes: vec![valid_route("default", "default")],
         }

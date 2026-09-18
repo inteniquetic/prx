@@ -906,6 +906,7 @@ mod tests {
             server: ServerConfig::default(),
             observability: ObservabilityConfig::default(),
             headers: Default::default(),
+            compression: Default::default(),
             services,
             routes,
         })

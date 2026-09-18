@@ -567,3 +567,100 @@ impl Drop for HeaderControlledUpstream {
         }
     }
 }
+
+/// Sends a request and returns the raw bytes of the response, so a test can
+/// inspect a compressed body rather than assuming it is UTF-8.
+pub fn send_get_raw(port: u16, host: &str, path: &str, extra: &[&str]) -> Vec<u8> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("failed to connect to prx");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("failed to set read timeout");
+    let mut req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n");
+    for line in extra {
+        req.push_str(line);
+        req.push_str("\r\n");
+    }
+    req.push_str("\r\n");
+    stream
+        .write_all(req.as_bytes())
+        .expect("failed to write request");
+    stream.flush().expect("failed to flush request");
+    let mut response = Vec::new();
+    std::io::Read::read_to_end(&mut stream, &mut response).expect("failed to read response");
+    response
+}
+
+/// Splits a raw response into its head (as text) and body bytes.
+pub fn split_response(raw: &[u8]) -> (String, Vec<u8>) {
+    let separator = b"\r\n\r\n";
+    let position = raw
+        .windows(separator.len())
+        .position(|window| window == separator);
+    match position {
+        Some(idx) => (
+            String::from_utf8_lossy(&raw[..idx]).to_string(),
+            raw[idx + separator.len()..].to_vec(),
+        ),
+        None => (String::from_utf8_lossy(raw).to_string(), Vec::new()),
+    }
+}
+
+/// Upstream that returns a large, highly compressible body.
+pub struct BigBodyUpstream {
+    shutdown: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+    port: u16,
+}
+
+impl BigBodyUpstream {
+    pub fn spawn(port: u16, body_len: usize, extra_headers: &'static str) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let stop = shutdown.clone();
+        let handle = thread::spawn(move || {
+            let listener =
+                TcpListener::bind(("127.0.0.1", port)).expect("failed to bind big-body upstream");
+            listener
+                .set_nonblocking(true)
+                .expect("failed to set nonblocking listener");
+            let body = "a".repeat(body_len);
+
+            while !stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let mut buf = [0u8; 4096];
+                        let _ = stream.read(&mut buf);
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-length: {}\r\ncontent-type: text/plain\r\n{}connection: close\r\n\r\n{}",
+                            body.len(),
+                            extra_headers,
+                            body
+                        );
+                        let _ = stream.write_all(resp.as_bytes());
+                        let _ = stream.flush();
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Self {
+            shutdown,
+            handle: Some(handle),
+            port,
+        }
+    }
+}
+
+impl Drop for BigBodyUpstream {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}

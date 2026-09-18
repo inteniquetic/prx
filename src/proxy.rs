@@ -7,6 +7,8 @@ use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::Method;
+use pingora::modules::http::HttpModules;
+use pingora::modules::http::compression::ResponseCompressionBuilder;
 use pingora::prelude::*;
 use pingora::upstreams::peer::ALPN;
 use tracing::{debug, error, info, warn};
@@ -47,6 +49,7 @@ pub struct PrxProxy {
     health_path: String,
     ready_path: String,
     names: StaticNames,
+    compression: crate::config::CompressionConfig,
 }
 
 impl PrxProxy {
@@ -55,6 +58,7 @@ impl PrxProxy {
         access_log: bool,
         health_path: String,
         ready_path: String,
+        compression: crate::config::CompressionConfig,
     ) -> Self {
         Self {
             active_config,
@@ -62,6 +66,7 @@ impl PrxProxy {
             health_path,
             ready_path,
             names: StaticNames::default(),
+            compression,
         }
     }
 
@@ -531,6 +536,19 @@ impl ProxyHttp for PrxProxy {
 
     fn new_ctx(&self) -> Self::CTX {
         Self::CTX::default()
+    }
+
+    /// Registers pingora's streaming response compressor. Level 0 leaves it
+    /// present but inactive, which is what the default does; a configured level
+    /// turns it on for every response the client is willing to accept
+    /// compressed.
+    fn init_downstream_modules(&self, modules: &mut HttpModules) {
+        let level = if self.compression.enabled {
+            self.compression.level
+        } else {
+            0
+        };
+        modules.add_module(ResponseCompressionBuilder::enable(level));
     }
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
@@ -1244,6 +1262,7 @@ mod tests {
             server: ServerConfig::default(),
             observability: ObservabilityConfig::default(),
             headers: Default::default(),
+            compression: Default::default(),
             services: vec![service("default", max_retries, upstream_count)],
             routes: vec![route("default", "default")],
         }))
@@ -1255,6 +1274,7 @@ mod tests {
             false,
             "/healthz".to_string(),
             "/readyz".to_string(),
+            Default::default(),
         )
     }
 
@@ -1263,6 +1283,7 @@ mod tests {
             server: ServerConfig::default(),
             observability: ObservabilityConfig::default(),
             headers: Default::default(),
+            compression: Default::default(),
             services: vec![service],
             routes: vec![route("default", "default")],
         }))

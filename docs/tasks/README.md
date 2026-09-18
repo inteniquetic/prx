@@ -61,7 +61,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T107](T107-timeout-retry-budget.md) | Request timeout + retry budget กัน retry storm | M | — | ✅ done (แก้บั๊ก POST ถูก retry) |
 | [T108](T108-rate-limit.md) | Rate limit + connection limit ต่อ route/IP | L | T102 | ✅ done |
 | [T109](T109-micro-cache.md) | In-memory micro-cache สำหรับ GET | L | T102 | ✅ done |
-| [T110](T110-compression.md) | gzip/brotli response compression | M | T106 |
+| [T110](T110-compression.md) | gzip/brotli response compression | M | T106 | ✅ done |
 | [T111](T111-tls-perf-multicert.md) | TLS: session resumption, ALPN, multi-cert SNI | L | T104 |
 | [T112](T112-acme-auto-tls.md) | ACME auto TLS (Let's Encrypt) | L | T111 |
 | [T113](T113-active-health-check.md) | Active health check prober (เสริม passive CB) | M | — | ✅ done |

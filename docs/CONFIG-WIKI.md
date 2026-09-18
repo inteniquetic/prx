@@ -124,6 +124,33 @@ host does not fall through to a broader one.
 - a method prx does not know (for example `PROPFIND`) only matches routes that
   list no methods at all.
 
+### 3.3b `[compression]`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `bool` | `false` | Compress responses the client is willing to accept compressed |
+| `level` | `number` | `4` | 1–11; higher costs CPU for a smaller body |
+| `decompress_upstream` | `bool` | `false` | Decode an upstream response the client cannot accept |
+
+```toml
+[compression]
+enabled = true
+level = 4
+```
+
+prx uses pingora's streaming compressor, so a large response is compressed as
+it flows through instead of being buffered first. `gzip`, `br` and `zstd` are
+all negotiated from the client's `Accept-Encoding`; a client that sends none
+gets the body untouched, and a response the upstream already encoded is passed
+through rather than compressed twice.
+
+Compression is a CPU cost, so measure before turning it on for everything:
+`docs/BENCHMARKS.md` explains how to run the same scenario with and without it.
+
+**Interaction with `[route.cache]`:** the cache stores the response as it came
+from the upstream, and compression happens afterwards on the way to each
+client, so a cached entry serves every encoding correctly and is stored once.
+
 ### 3.4 `[[service]]` — load balancing
 
 | `lb` | Behavior |
@@ -549,6 +576,7 @@ expected to sit idle; applying them would drop healthy websockets.
 - `only one route can be marked is_default = true`
 - `route '<name>' lists unsupported HTTP method '<method>'`
 - `route '<name>' has an invalid header name '<name>'`
+- `compression.level must be between 1 and 11`
 - `route '<name>' cache.ttl_ms must be > 0`
 - `route '<name>' cache.max_body_bytes must be > 0`
 - `route '<name>' cache.cache_status_codes must not be empty`
