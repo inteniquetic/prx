@@ -1474,8 +1474,7 @@ async fn create_route(State(state): State<AdminState>, body: Body) -> Response<B
                 is_default: payload.is_default.unwrap_or(false),
                 // Not exposed by the admin API yet; edit Prx.toml for these
                 // until the schema-generated payloads of T205 land.
-                request_headers: Default::default(),
-                response_headers: Default::default(),
+                ..Default::default()
             };
 
             config.routes.push(route);
@@ -1593,6 +1592,8 @@ async fn update_route(
                 // update through the UI must not silently drop them.
                 request_headers: config.routes[index].request_headers.clone(),
                 response_headers: config.routes[index].response_headers.clone(),
+                rate_limit: config.routes[index].rate_limit.clone(),
+                concurrency_limit: config.routes[index].concurrency_limit.clone(),
             };
 
             config.routes[index] = route;

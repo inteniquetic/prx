@@ -11,6 +11,7 @@
 - Load balancing: `round_robin`, `random`, `hash`, `least_conn`, `p2c_ewma` (power of two choices, latency aware)
 - Session affinity by cookie, client IP or header
 - Per-route request/response header rules (`X-Forwarded-For`, `X-Real-IP`, security headers)
+- Per-route rate limiting and concurrency limiting
 - Route-level failover retry
 - Passive per-route circuit breaker for unhealthy upstreams
 - Active health checking that removes a failing upstream before a request finds it

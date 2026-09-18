@@ -11,8 +11,9 @@ use pingora::prelude::*;
 use pingora::upstreams::peer::ALPN;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{LbStrategy, StickyMode, UpstreamH2};
+use crate::config::{LbStrategy, RateLimitKey, StickyMode, UpstreamH2};
 use crate::headers::HeaderContext;
+use crate::limiter::Decision as LimitDecision;
 use crate::metrics;
 use crate::router::RouteMatch;
 use crate::runtime::{RuntimeConfig, hash_key, normalize_host};
@@ -146,6 +147,24 @@ impl PrxProxy {
         true
     }
 
+    /// Answers a limited request, optionally telling the client when to come
+    /// back.
+    async fn respond_limited(
+        session: &mut Session,
+        status: u16,
+        retry_after_s: Option<u64>,
+    ) -> Result<bool> {
+        let mut header = ResponseHeader::build(status, Some(3))?;
+        header.insert_header("content-length", "0")?;
+        if let Some(seconds) = retry_after_s {
+            header.insert_header("retry-after", seconds.to_string())?;
+        }
+        session
+            .write_response_header(Box::new(header), true)
+            .await?;
+        Ok(true)
+    }
+
     async fn respond_text(session: &mut Session, status: u16, body: &'static str) -> Result<bool> {
         session
             .respond_error_with_body(status, Bytes::from_static(body.as_bytes()))
@@ -245,6 +264,36 @@ impl PrxProxy {
     }
 }
 
+/// Builds the bucket key for a rate-limited request. Nothing is allocated for
+/// the common `client_ip` and `route` cases.
+fn rate_limit_key(session: &Session, key: &RateLimitKey, route_idx: usize) -> u64 {
+    match key {
+        RateLimitKey::Route => hash_key(&["route"]) ^ route_idx as u64,
+        RateLimitKey::ClientIp => match session.client_addr() {
+            Some(addr) => match addr.as_inet() {
+                // Bucket per address, ignoring the source port: a client opening
+                // new connections must not get a fresh allowance each time.
+                Some(inet) => {
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    std::hash::Hash::hash(&inet.ip(), &mut hasher);
+                    std::hash::Hasher::finish(&hasher)
+                }
+                None => hash_key(&[addr.to_string().as_str()]),
+            },
+            None => 0,
+        },
+        RateLimitKey::Header(name) => session
+            .req_header()
+            .headers
+            .get(name.as_str())
+            .and_then(|value| value.to_str().ok())
+            .map(|value| hash_key(&[value]))
+            // Requests without the header share one bucket, so a missing header
+            // cannot be used to bypass the limit.
+            .unwrap_or_else(|| hash_key(&["__missing__"])),
+    }
+}
+
 /// Reads the affinity key for this request: the cookie value in cookie mode,
 /// or a hash of the client address or header value in the other modes.
 fn sticky_key(session: &Session, sticky: &crate::config::StickyConfig) -> Option<u64> {
@@ -335,6 +384,8 @@ pub struct RequestCtx {
     /// Set when a sticky cookie should be written on the way back, holding the
     /// upstream identifier to store.
     sticky_cookie: Option<u64>,
+    /// True when this request holds a concurrency slot that must be released.
+    holds_concurrency_slot: bool,
     upstream_addr: Option<String>,
 }
 
@@ -354,6 +405,7 @@ impl Default for RequestCtx {
             request_id: None,
             is_idempotent: true,
             sticky_cookie: None,
+            holds_concurrency_slot: false,
             upstream_addr: None,
         }
     }
@@ -431,6 +483,26 @@ impl ProxyHttp for PrxProxy {
                     ctx.service_idx = Some(route.service_idx);
                     ctx.route_name = Some(route.name.clone());
                     debug!(route = %route.name, "matched route");
+
+                    // Limits are enforced before the upstream is chosen, so a
+                    // rejected request costs nothing beyond the hash.
+                    if let Some(limit) = &route.rate_limit {
+                        let key = rate_limit_key(session, &limit.key, route_idx);
+                        if let LimitDecision::Deny { retry_after_s } = limit.limiter.check(key) {
+                            metrics::inc_rate_limited(route.name.as_ref(), "rate");
+                            let status = limit.response_status;
+                            let retry_after = limit.retry_after.then_some(retry_after_s);
+                            return Self::respond_limited(session, status, retry_after).await;
+                        }
+                    }
+
+                    let max_concurrent = route.concurrency_limit.max_concurrent;
+                    if !route.concurrency.try_acquire(max_concurrent) {
+                        metrics::inc_rate_limited(route.name.as_ref(), "concurrency");
+                        let status = route.concurrency_limit.response_status;
+                        return Self::respond_limited(session, status, None).await;
+                    }
+                    ctx.holds_concurrency_slot = max_concurrent > 0;
                 }
                 Ok(false)
             }
@@ -801,6 +873,18 @@ impl ProxyHttp for PrxProxy {
         // moving average used by p2c_ewma.
         if let Some(snapshot) = &ctx.snapshot
             && let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx))
+        {
+            if ctx.holds_concurrency_slot {
+                route.concurrency.release();
+                ctx.holds_concurrency_slot = false;
+            }
+            if let Some(limit) = &route.rate_limit {
+                metrics::set_limiter_entries(route.name.as_ref(), limit.limiter.entries());
+            }
+        }
+
+        if let Some(snapshot) = &ctx.snapshot
+            && let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx))
             && let Some(service) = snapshot.service(route.service_idx)
         {
             let last = ctx.attempted_upstreams.last().copied();
@@ -922,8 +1006,7 @@ mod tests {
             path_prefix: "/".to_string(),
             methods: Vec::new(),
             is_default: true,
-            request_headers: Default::default(),
-            response_headers: Default::default(),
+            ..Default::default()
         }
     }
 

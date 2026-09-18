@@ -178,6 +178,39 @@ impl PrxConfig {
                 );
             }
 
+            if route.rate_limit.enabled {
+                if RateLimitKey::parse(&route.rate_limit.key).is_none() {
+                    bail!(
+                        "route '{}' rate_limit.key '{}' is invalid (expected 'client_ip', \
+                         'route', or 'header:<Name>')",
+                        route.name,
+                        route.rate_limit.key
+                    );
+                }
+                if route.rate_limit.requests_per_second == 0 {
+                    bail!(
+                        "route '{}' rate_limit.requests_per_second must be > 0",
+                        route.name
+                    );
+                }
+                if !(400..=599).contains(&route.rate_limit.response_status) {
+                    bail!(
+                        "route '{}' rate_limit.response_status must be a 4xx or 5xx code",
+                        route.name
+                    );
+                }
+                if route.rate_limit.max_entries == 0 {
+                    bail!("route '{}' rate_limit.max_entries must be > 0", route.name);
+                }
+            }
+
+            if !(400..=599).contains(&route.concurrency_limit.response_status) {
+                bail!(
+                    "route '{}' concurrency_limit.response_status must be a 4xx or 5xx code",
+                    route.name
+                );
+            }
+
             validate_header_rules(&route.request_headers, &format!("route '{}'", route.name))?;
             validate_header_rules(&route.response_headers, &format!("route '{}'", route.name))?;
 
@@ -595,6 +628,8 @@ impl Default for RouteConfig {
             is_default: false,
             request_headers: HeaderRules::default(),
             response_headers: HeaderRules::default(),
+            rate_limit: RateLimitConfig::default(),
+            concurrency_limit: ConcurrencyLimitConfig::default(),
         }
     }
 }
@@ -658,6 +693,130 @@ pub struct RouteConfig {
     pub request_headers: HeaderRules,
     #[serde(default)]
     pub response_headers: HeaderRules,
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
+    #[serde(default)]
+    pub concurrency_limit: ConcurrencyLimitConfig,
+}
+
+/// Per-route rate limiting.
+///
+/// Cheap enough to leave on: one hash and a short lock on a sharded bucket per
+/// request, with a hard cap on how many keys are tracked so a flood of unique
+/// keys cannot grow memory without bound.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RateLimitConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// What to count per: `client_ip`, `route`, or `header:<Name>`.
+    #[serde(default = "default_rate_limit_key")]
+    pub key: String,
+    #[serde(default = "default_requests_per_second")]
+    pub requests_per_second: u64,
+    /// How many requests may arrive at once before the sustained rate applies.
+    #[serde(default)]
+    pub burst: u64,
+    #[serde(default = "default_rate_limit_status")]
+    pub response_status: u16,
+    /// Send a `Retry-After` header with the rejection.
+    #[serde(default = "default_true")]
+    pub retry_after: bool,
+    /// Keys idle for this long may be forgotten.
+    #[serde(default = "default_rate_limit_ttl_ms")]
+    pub entry_ttl_ms: u64,
+    /// Upper bound on tracked keys.
+    #[serde(default = "default_rate_limit_max_entries")]
+    pub max_entries: usize,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            key: default_rate_limit_key(),
+            requests_per_second: default_requests_per_second(),
+            burst: 0,
+            response_status: default_rate_limit_status(),
+            retry_after: true,
+            entry_ttl_ms: default_rate_limit_ttl_ms(),
+            max_entries: default_rate_limit_max_entries(),
+        }
+    }
+}
+
+/// Caps how many requests a route may have in flight at once.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConcurrencyLimitConfig {
+    /// `0` means unlimited.
+    #[serde(default)]
+    pub max_concurrent: usize,
+    #[serde(default = "default_concurrency_status")]
+    pub response_status: u16,
+}
+
+impl Default for ConcurrencyLimitConfig {
+    /// Never derive this: `#[serde(default = ...)]` only applies when parsing,
+    /// so a derived Default would leave `response_status` at 0 and fail the
+    /// config's own validation for every config built in Rust.
+    fn default() -> Self {
+        Self {
+            max_concurrent: 0,
+            response_status: default_concurrency_status(),
+        }
+    }
+}
+
+fn default_rate_limit_key() -> String {
+    "client_ip".to_string()
+}
+
+fn default_requests_per_second() -> u64 {
+    100
+}
+
+fn default_rate_limit_status() -> u16 {
+    429
+}
+
+fn default_rate_limit_ttl_ms() -> u64 {
+    60_000
+}
+
+fn default_rate_limit_max_entries() -> usize {
+    100_000
+}
+
+fn default_concurrency_status() -> u16 {
+    503
+}
+
+/// How a rate limit counts requests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RateLimitKey {
+    /// One bucket per client address.
+    ClientIp,
+    /// One bucket for the whole route.
+    Route,
+    /// One bucket per distinct value of a header.
+    Header(String),
+}
+
+impl RateLimitKey {
+    pub fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        if let Some(name) = raw.strip_prefix("header:") {
+            let name = name.trim();
+            if name.is_empty() || http::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
+                return None;
+            }
+            return Some(Self::Header(name.to_ascii_lowercase()));
+        }
+        match raw {
+            "client_ip" => Some(Self::ClientIp),
+            "route" => Some(Self::Route),
+            _ => None,
+        }
+    }
 }
 
 fn default_route_name() -> String {
@@ -797,8 +956,7 @@ mod tests {
             path_prefix: "/".to_string(),
             methods: Vec::new(),
             is_default: true,
-            request_headers: Default::default(),
-            response_headers: Default::default(),
+            ..Default::default()
         }
     }
 

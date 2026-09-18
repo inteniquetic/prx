@@ -258,6 +258,64 @@ upstream_h2 = "always"
 addr = "127.0.0.1:50051"
 ```
 
+### 3.4b2 `[route.rate_limit]` and `[route.concurrency_limit]`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `bool` | `false` | Turn rate limiting on for this route |
+| `key` | `string` | `"client_ip"` | `client_ip`, `route`, or `header:<Name>` |
+| `requests_per_second` | `number` | `100` | Sustained rate per key |
+| `burst` | `number` | = `requests_per_second` | How many may arrive at once |
+| `response_status` | `number` | `429` | Status used for rejections |
+| `retry_after` | `bool` | `true` | Send a `Retry-After` header |
+| `entry_ttl_ms` | `number` | `60000` | Forget a key after this long idle |
+| `max_entries` | `number` | `100000` | Hard cap on tracked keys |
+
+| `[route.concurrency_limit]` | Type | Default | Description |
+|---|---|---|---|
+| `max_concurrent` | `number` | `0` | Requests in flight allowed on this route; `0` is unlimited |
+| `response_status` | `number` | `503` | Status used when shedding |
+
+```toml
+[route.rate_limit]
+enabled = true
+key = "header:X-Api-Key"     # one allowance per API key
+requests_per_second = 100
+burst = 200
+
+[route.concurrency_limit]
+max_concurrent = 500          # never let one route occupy every worker
+```
+
+How it behaves:
+
+- A token bucket per key: `burst` controls how much a client may bank, and
+  `requests_per_second` the sustained rate. An idle key never banks more than
+  `burst`.
+- Rejections carry `Retry-After` with the seconds until one token is back.
+- Limits are checked before an upstream is chosen, so a rejected request costs
+  a hash and nothing else.
+- Buckets live in 64 shards, so unrelated keys do not share a lock, and nothing
+  is allocated per request.
+- Memory is bounded: once `max_entries` is reached, idle keys go first and then
+  the least recently seen ones, so a flood of unique keys cannot push out a
+  client that is actively being limited.
+- Requests missing the header named by `header:<Name>` share one bucket, so a
+  missing header cannot be used to escape the limit.
+- `client_ip` buckets by address and ignores the source port, otherwise a
+  client could reset its allowance by opening a new connection. Behind a CDN or
+  another proxy, every request arrives from that proxy's address, so use
+  `header:<Name>` with a header you control (see the header rules section about
+  `set` versus `add` for why the value must not be client-supplied).
+
+**A reload resets the counters.** Rate limit state lives in the config snapshot,
+so a client that was being limited gets a fresh allowance after a reload. That
+is a deliberate trade: config changes are rare, and carrying state across them
+would mean keying it by something other than the route it belongs to.
+
+Metrics: `prx_rate_limited_total{route,kind}` (`kind` is `rate` or
+`concurrency`) and `prx_limiter_entries{route}`.
+
 ### 3.4c Header rules
 
 Rules exist per route (`[route.request_headers]`, `[route.response_headers]`)
@@ -437,6 +495,10 @@ expected to sit idle; applying them would drop healthy websockets.
 - `only one route can be marked is_default = true`
 - `route '<name>' lists unsupported HTTP method '<method>'`
 - `route '<name>' has an invalid header name '<name>'`
+- `route '<name>' rate_limit.key '<key>' is invalid`
+- `route '<name>' rate_limit.requests_per_second must be > 0`
+- `route '<name>' rate_limit.response_status must be a 4xx or 5xx code`
+- `route '<name>' concurrency_limit.response_status must be a 4xx or 5xx code`
 - `service '<name>' retry_budget_ratio must be between 0.0 and 10.0`
 - `service '<name>' retry_budget_window_ms must be > 0`
 - `service '<name>' health_check.interval_ms must be > 0`

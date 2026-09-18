@@ -138,6 +138,34 @@ pub fn set_upstream_healthy(service: &str, upstream: &str, healthy: bool) {
         .set(if healthy { 1 } else { 0 });
 }
 
+static RATE_LIMITED_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_rate_limited_total",
+        "Requests rejected by a limit, grouped by route and which limit",
+        &["route", "kind"]
+    )
+    .expect("failed to register prx_rate_limited_total")
+});
+
+static LIMITER_ENTRIES: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "prx_limiter_entries",
+        "Keys currently tracked by a route's rate limiter",
+        &["route"]
+    )
+    .expect("failed to register prx_limiter_entries")
+});
+
+pub fn inc_rate_limited(route: &str, kind: &str) {
+    RATE_LIMITED_TOTAL.with_label_values(&[route, kind]).inc();
+}
+
+pub fn set_limiter_entries(route: &str, entries: usize) {
+    LIMITER_ENTRIES
+        .with_label_values(&[route])
+        .set(entries as i64);
+}
+
 pub fn inc_retry(route: &str, reason: &str) {
     RETRY_TOTAL.with_label_values(&[route, reason]).inc();
 }

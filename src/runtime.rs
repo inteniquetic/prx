@@ -13,8 +13,12 @@ use std::{
 use rand::Rng;
 
 use crate::{
-    config::{HealthCheckConfig, LbStrategy, PrxConfig, StickyConfig, UpstreamH2},
+    config::{
+        ConcurrencyLimitConfig, HealthCheckConfig, LbStrategy, PrxConfig, RateLimitKey,
+        StickyConfig, UpstreamH2,
+    },
     headers::CompiledHeaderRules,
+    limiter::{ConcurrencyLimiter, RateLimiter},
     router::{IndexedRoute, RouteIndex, RouteMatch, method_mask},
 };
 
@@ -144,6 +148,19 @@ pub struct RouteRuntime {
     /// Global rules merged with the route's own, compiled once per reload.
     pub request_headers: CompiledHeaderRules,
     pub response_headers: CompiledHeaderRules,
+    /// `None` when rate limiting is off for this route.
+    pub rate_limit: Option<RouteRateLimit>,
+    pub concurrency_limit: ConcurrencyLimitConfig,
+    pub concurrency: ConcurrencyLimiter,
+}
+
+/// A route's compiled rate limit.
+#[derive(Debug)]
+pub struct RouteRateLimit {
+    pub key: RateLimitKey,
+    pub limiter: RateLimiter,
+    pub response_status: u16,
+    pub retry_after: bool,
 }
 
 impl RouteRuntime {
@@ -171,6 +188,30 @@ impl RouteRuntime {
             &CompiledHeaderRules::compile(&config.response_headers),
         );
 
+        // Compiled once per reload: the request path only hashes a key and
+        // takes a token.
+        let rate_limit = config
+            .rate_limit
+            .enabled
+            .then(|| {
+                RateLimitKey::parse(&config.rate_limit.key).map(|key| RouteRateLimit {
+                    key,
+                    limiter: RateLimiter::new(
+                        config.rate_limit.requests_per_second,
+                        if config.rate_limit.burst == 0 {
+                            config.rate_limit.requests_per_second
+                        } else {
+                            config.rate_limit.burst
+                        },
+                        config.rate_limit.entry_ttl_ms,
+                        config.rate_limit.max_entries,
+                    ),
+                    response_status: config.rate_limit.response_status,
+                    retry_after: config.rate_limit.retry_after,
+                })
+            })
+            .flatten();
+
         Self {
             name: config.name.into(),
             host,
@@ -180,6 +221,9 @@ impl RouteRuntime {
             service_idx,
             request_headers,
             response_headers,
+            rate_limit,
+            concurrency_limit: config.concurrency_limit,
+            concurrency: ConcurrencyLimiter::default(),
         }
     }
 }
@@ -812,8 +856,7 @@ mod tests {
             path_prefix: path_prefix.to_string(),
             methods: Vec::new(),
             is_default,
-            request_headers: Default::default(),
-            response_headers: Default::default(),
+            ..Default::default()
         }
     }
 
