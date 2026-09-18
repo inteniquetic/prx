@@ -74,6 +74,21 @@ impl PrxConfig {
                 }
             }
 
+            if !(0.0..=10.0).contains(&service.retry_budget_ratio)
+                || service.retry_budget_ratio.is_nan()
+            {
+                bail!(
+                    "service '{}' retry_budget_ratio must be between 0.0 and 10.0",
+                    service.name
+                );
+            }
+            if service.retry_budget_window_ms == 0 {
+                bail!(
+                    "service '{}' retry_budget_window_ms must be > 0",
+                    service.name
+                );
+            }
+
             if service.circuit_breaker.enabled {
                 if service.circuit_breaker.consecutive_failures == 0 {
                     bail!(
@@ -307,6 +322,27 @@ pub struct ServiceConfig {
     pub max_retries: usize,
     #[serde(default)]
     pub retry_backoff_ms: u64,
+    /// Fraction of recent successful requests that may be spent on retries.
+    /// `0.0` disables the budget (retries are then limited only by
+    /// `max_retries`). Keeps a failing upstream from being hammered by the
+    /// retries of every in-flight request at once.
+    #[serde(default = "default_retry_budget_ratio")]
+    pub retry_budget_ratio: f64,
+    /// Requests below this count per window may always retry, so a service
+    /// that is idle or just started is not locked out by its own budget.
+    #[serde(default = "default_retry_budget_min")]
+    pub retry_budget_min_per_window: u64,
+    /// Window the retry budget is measured over.
+    #[serde(default = "default_retry_budget_window_ms")]
+    pub retry_budget_window_ms: u64,
+    /// Only retry requests whose method is idempotent once the request may
+    /// already have reached the upstream. Connect failures are always
+    /// retriable: nothing was sent yet.
+    #[serde(default = "default_true")]
+    pub retry_idempotent_only: bool,
+    /// Total time budget for a request including every retry. `0` disables it.
+    #[serde(default)]
+    pub request_timeout_ms: u64,
     #[serde(default)]
     pub circuit_breaker: CircuitBreakerConfig,
     /// Which HTTP version to speak to the upstreams of this service.
@@ -336,6 +372,52 @@ pub enum UpstreamH2 {
 
 fn default_service_name() -> String {
     "default".to_string()
+}
+
+impl Default for ServiceConfig {
+    fn default() -> Self {
+        Self {
+            name: default_service_name(),
+            lb: LbStrategy::default(),
+            upstream_h2: UpstreamH2::default(),
+            max_retries: 0,
+            retry_backoff_ms: 0,
+            retry_budget_ratio: default_retry_budget_ratio(),
+            retry_budget_min_per_window: default_retry_budget_min(),
+            retry_budget_window_ms: default_retry_budget_window_ms(),
+            retry_idempotent_only: true,
+            request_timeout_ms: 0,
+            circuit_breaker: CircuitBreakerConfig::default(),
+            upstreams: Vec::new(),
+        }
+    }
+}
+
+impl Default for RouteConfig {
+    fn default() -> Self {
+        Self {
+            name: default_route_name(),
+            service: String::new(),
+            host: None,
+            path_prefix: default_path_prefix(),
+            methods: Vec::new(),
+            is_default: false,
+            request_headers: HeaderRules::default(),
+            response_headers: HeaderRules::default(),
+        }
+    }
+}
+
+fn default_retry_budget_ratio() -> f64 {
+    0.2
+}
+
+fn default_retry_budget_min() -> u64 {
+    10
+}
+
+fn default_retry_budget_window_ms() -> u64 {
+    10_000
 }
 
 /// Header rules applied to a request or a response.
@@ -503,6 +585,7 @@ mod tests {
             retry_backoff_ms: 0,
             circuit_breaker: CircuitBreakerConfig::default(),
             upstreams: vec![valid_upstream("127.0.0.1:8081")],
+            ..Default::default()
         }
     }
 

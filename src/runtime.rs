@@ -186,6 +186,9 @@ pub struct ServiceRuntime {
     pub upstream_h2: UpstreamH2,
     pub max_retries: usize,
     pub retry_backoff_ms: u64,
+    pub retry_idempotent_only: bool,
+    pub request_timeout_ms: u64,
+    pub retry_budget: RetryBudget,
     pub circuit_breaker: CircuitBreakerRuntime,
     pub upstreams: Vec<UpstreamRuntime>,
     ring: Vec<usize>,
@@ -208,6 +211,13 @@ impl ServiceRuntime {
             upstream_h2: config.upstream_h2,
             max_retries: config.max_retries,
             retry_backoff_ms: config.retry_backoff_ms,
+            retry_idempotent_only: config.retry_idempotent_only,
+            request_timeout_ms: config.request_timeout_ms,
+            retry_budget: RetryBudget::new(
+                config.retry_budget_ratio,
+                config.retry_budget_min_per_window,
+                config.retry_budget_window_ms,
+            ),
             circuit_breaker,
             upstreams,
             ring,
@@ -284,6 +294,89 @@ impl ServiceRuntime {
     pub fn mark_upstream_success(&self, upstream_idx: usize) {
         if let Some(upstream) = self.upstreams.get(upstream_idx) {
             upstream.mark_success();
+        }
+    }
+}
+
+/// Caps how much extra load retries may add while an upstream is failing.
+///
+/// Without it, an upstream that starts failing gets `1 + max_retries` times its
+/// usual traffic at the worst possible moment. The budget is measured over a
+/// sliding window: retries are allowed while they stay under
+/// `ratio * successes`, with a small floor so an idle or freshly started
+/// service can still retry.
+#[derive(Debug)]
+pub struct RetryBudget {
+    ratio: f64,
+    min_per_window: u64,
+    window_ms: u64,
+    /// Start of the current window, in epoch milliseconds.
+    window_start_ms: AtomicU64,
+    successes: AtomicU64,
+    retries: AtomicU64,
+}
+
+impl RetryBudget {
+    fn new(ratio: f64, min_per_window: u64, window_ms: u64) -> Self {
+        Self {
+            ratio,
+            min_per_window,
+            window_ms: window_ms.max(1),
+            window_start_ms: AtomicU64::new(now_epoch_ms()),
+            successes: AtomicU64::new(0),
+            retries: AtomicU64::new(0),
+        }
+    }
+
+    /// Disabled budgets impose no limit beyond `max_retries`.
+    pub fn is_enabled(&self) -> bool {
+        self.ratio > 0.0
+    }
+
+    fn roll_window(&self) {
+        let now = now_epoch_ms();
+        let start = self.window_start_ms.load(Ordering::Relaxed);
+        if now.saturating_sub(start) < self.window_ms {
+            return;
+        }
+        // Whoever wins the swap resets the counters; the others just carry on.
+        if self
+            .window_start_ms
+            .compare_exchange(start, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            self.successes.store(0, Ordering::Relaxed);
+            self.retries.store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub fn record_success(&self) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.roll_window();
+        self.successes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Takes one retry from the budget. Returns false when the budget is spent.
+    pub fn try_acquire(&self) -> bool {
+        if !self.is_enabled() {
+            return true;
+        }
+        self.roll_window();
+
+        let successes = self.successes.load(Ordering::Relaxed);
+        let allowed = ((successes as f64) * self.ratio).floor() as u64;
+        let allowed = allowed.max(self.min_per_window);
+
+        let used = self.retries.fetch_add(1, Ordering::Relaxed);
+        if used < allowed {
+            true
+        } else {
+            // Give the token back so a later window is not starved by requests
+            // that were already denied.
+            self.retries.fetch_sub(1, Ordering::Relaxed);
+            false
         }
     }
 }
@@ -488,6 +581,7 @@ mod tests {
             retry_backoff_ms: 0,
             circuit_breaker: no_breaker(),
             upstreams,
+            ..Default::default()
         }
     }
 
@@ -614,6 +708,7 @@ mod tests {
             retry_backoff_ms: 0,
             circuit_breaker: breaker,
             upstreams: vec![upstream("127.0.0.1:9200"), upstream("127.0.0.1:9201")],
+            ..Default::default()
         };
         let runtime = runtime_from_parts(
             vec![svc],
@@ -646,6 +741,7 @@ mod tests {
             retry_backoff_ms: 0,
             circuit_breaker: breaker,
             upstreams: vec![upstream("127.0.0.1:9300")],
+            ..Default::default()
         };
         let runtime = runtime_from_parts(
             vec![svc],

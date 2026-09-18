@@ -13,7 +13,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -263,5 +263,158 @@ pub fn send_get_with_headers(port: u16, host: &str, path: &str, extra: &[&str]) 
     stream
         .read_to_string(&mut response)
         .expect("failed to read response");
+    response
+}
+
+/// Upstream that accepts the connection and then answers after a delay, for
+/// exercising request time budgets.
+pub struct SlowUpstream {
+    shutdown: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+    port: u16,
+}
+
+impl SlowUpstream {
+    pub fn spawn(port: u16, delay: Duration) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let stop = shutdown.clone();
+        let handle = thread::spawn(move || {
+            let listener =
+                TcpListener::bind(("127.0.0.1", port)).expect("failed to bind slow upstream");
+            listener
+                .set_nonblocking(true)
+                .expect("failed to set nonblocking slow listener");
+
+            while !stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let stop = stop.clone();
+                        thread::spawn(move || {
+                            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                            let mut buf = [0u8; 2048];
+                            let _ = stream.read(&mut buf);
+
+                            // Sleep in slices so shutdown does not have to wait
+                            // out the whole delay.
+                            let deadline = Instant::now() + delay;
+                            while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
+                                thread::sleep(Duration::from_millis(20));
+                            }
+
+                            let body = "slow";
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                                body.len(),
+                                body
+                            );
+                            let _ = stream.write_all(resp.as_bytes());
+                            let _ = stream.flush();
+                        });
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Self {
+            shutdown,
+            handle: Some(handle),
+            port,
+        }
+    }
+}
+
+impl Drop for SlowUpstream {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Counts how many requests reach it, always failing the connection, so a test
+/// can see exactly how many attempts prx made.
+pub struct CountingRefusedUpstream {
+    shutdown: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+    port: u16,
+    pub attempts: Arc<AtomicUsize>,
+}
+
+impl CountingRefusedUpstream {
+    pub fn spawn(port: u16) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let stop = shutdown.clone();
+        let counter = attempts.clone();
+        let handle = thread::spawn(move || {
+            let listener =
+                TcpListener::bind(("127.0.0.1", port)).expect("failed to bind counting upstream");
+            listener
+                .set_nonblocking(true)
+                .expect("failed to set nonblocking counting listener");
+
+            while !stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        counter.fetch_add(1, Ordering::Relaxed);
+                        // Drop without answering: the proxy sees the connection
+                        // close mid-request.
+                        drop(stream);
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Self {
+            shutdown,
+            handle: Some(handle),
+            port,
+            attempts,
+        }
+    }
+
+    pub fn attempts(&self) -> usize {
+        self.attempts.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for CountingRefusedUpstream {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Sends a request with a body, for testing that non-idempotent methods are
+/// not replayed.
+pub fn send_post(port: u16, host: &str, path: &str, body: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("failed to connect to prx");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("failed to set read timeout");
+    let req = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream
+        .write_all(req.as_bytes())
+        .expect("failed to write request");
+    stream.flush().expect("failed to flush request");
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
     response
 }

@@ -1,7 +1,7 @@
 # T107 — Request timeout + retry budget
 
 **Phase:** 1 · Data plane
-**Status:** todo
+**Status:** done
 **Size:** M (~1d)
 **Depends on:** —
 **Files:** `src/config.rs`, `src/proxy.rs`, `src/runtime.rs`
@@ -38,3 +38,37 @@
 ## Out of scope
 
 - Hedged requests (ส่งซ้ำก่อน timeout) — follow-up
+
+## ผลลัพธ์ที่ส่งมอบ
+
+- `[[service]] request_timeout_ms` — งบเวลารวมทั้ง request นับจากที่ prx รับเข้ามา
+  หมดแล้วคืน **504** ไม่เริ่ม attempt ใหม่ และ timeout ของแต่ละ attempt (connect/read/write)
+  ถูกหดให้ไม่เกินเวลาที่เหลือ
+- `retry_budget_ratio` / `retry_budget_min_per_window` / `retry_budget_window_ms` —
+  budget แบบ sliding window (`RetryBudget` ใน `src/runtime.rs`) ใช้ atomic ล้วน ไม่มี lock
+- `retry_idempotent_only` (default `true`) — แยกกรณี connect failure (ยังไม่ได้ส่งอะไร รีทรายได้ทุก method)
+  ออกจาก failure กลางคัน (รีทรายเฉพาะ method ที่ idempotent)
+- backoff มี jitter แบบ full jitter (`retry_backoff_ms` กลายเป็นเพดาน ไม่ใช่ค่าคงที่)
+- metrics ใหม่: `prx_retry_total{route,reason}`, `prx_retry_denied_total{route,reason}`,
+  `prx_request_timeout_total{route}`
+- `ServiceConfig`/`RouteConfig` มี `Default` แล้ว — การเพิ่ม field ใหม่ไม่ต้องไล่แก้ constructor ทุกที่อีก
+
+## บั๊กความปลอดภัยที่แก้ไปด้วย
+
+เดิม `should_retry()` ไม่ดู method เลย **POST ที่ล้มเหลวกลางคันจึงถูกส่งซ้ำได้**
+ถ้า upstream รับ request ไปแล้วแต่ตอบไม่ทัน ลูกค้าอาจถูกตัดเงินสองรอบ
+ตอนนี้ default คือไม่ส่งซ้ำ และมี e2e ยืนยัน (POST ไปถึง upstream ครั้งเดียว ส่วน GET ถูก retry)
+
+## Acceptance criteria
+
+- [x] e2e: upstream ตอบช้ากว่า `request_timeout_ms` → client ได้ 504 (และจบภายในงบ ไม่รอ 5 วินาที)
+- [x] เทสต์ budget: ยิงจนเกิน budget แล้วจำนวน attempt จริงต่ำกว่า `requests × (1 + max_retries)`
+- [x] POST ไม่ถูก retry เมื่อ `retry_idempotent_only = true` (unit + e2e)
+- [x] backoff มี jitter จริง
+
+## หมายเหตุขอบเขต
+
+- `retry_on = ["5xx", ...]` ยังไม่ได้ทำ — pingora คืน 5xx ของ upstream เป็น response ปกติ
+  การ retry ตรงนั้นต้องแตะ response path ซึ่งควรทำคู่กับ [T109](T109-micro-cache.md)/[T110](T110-compression.md)
+- `request_timeout_ms` ไม่ตัด response ที่กำลังไหลช้าๆ กลางคัน (ต้องรอ pingora เปิด hook)
+  per-read timeout ยังคุมกรณีนั้นอยู่

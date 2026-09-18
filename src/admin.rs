@@ -1073,6 +1073,7 @@ async fn create_service(State(state): State<AdminState>, body: Body) -> Response
                         idle_timeout_ms: u.idle_timeout_ms,
                     })
                     .collect(),
+                ..Default::default()
             };
 
             config.services.push(service);
@@ -1222,6 +1223,7 @@ async fn update_service(
                         idle_timeout_ms: u.idle_timeout_ms,
                     })
                     .collect(),
+                ..Default::default()
             };
 
             config.services[index] = service;

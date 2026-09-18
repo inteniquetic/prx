@@ -51,6 +51,45 @@ static CIRCUIT_OPEN_STATE: Lazy<IntGaugeVec> = Lazy::new(|| {
     .expect("failed to register prx_upstream_circuit_open")
 });
 
+static RETRY_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_retry_total",
+        "Retries attempted, grouped by route and reason",
+        &["route", "reason"]
+    )
+    .expect("failed to register prx_retry_total")
+});
+
+static RETRY_DENIED_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_retry_denied_total",
+        "Retries refused, grouped by route and why",
+        &["route", "reason"]
+    )
+    .expect("failed to register prx_retry_denied_total")
+});
+
+static REQUEST_TIMEOUT_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_request_timeout_total",
+        "Requests that ran out of their total time budget",
+        &["route"]
+    )
+    .expect("failed to register prx_request_timeout_total")
+});
+
+pub fn inc_retry(route: &str, reason: &str) {
+    RETRY_TOTAL.with_label_values(&[route, reason]).inc();
+}
+
+pub fn inc_retry_denied(route: &str, reason: &str) {
+    RETRY_DENIED_TOTAL.with_label_values(&[route, reason]).inc();
+}
+
+pub fn inc_request_timeout(route: &str) {
+    REQUEST_TIMEOUT_TOTAL.with_label_values(&[route]).inc();
+}
+
 pub fn observe_request(route: &str, status: u16, latency_ms: f64) {
     let status_label = status.to_string();
     REQUESTS_TOTAL

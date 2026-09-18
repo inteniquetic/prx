@@ -6,6 +6,7 @@ use std::{
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use bytes::Bytes;
+use http::Method;
 use pingora::prelude::*;
 use pingora::upstreams::peer::ALPN;
 use tracing::{debug, error, info, warn};
@@ -62,7 +63,44 @@ impl PrxProxy {
         }
     }
 
-    fn should_retry(&self, ctx: &mut RequestCtx) -> bool {
+    /// True when the request has used up the total budget its service allows.
+    fn deadline_exceeded(&self, ctx: &RequestCtx) -> bool {
+        let Some(snapshot) = &ctx.snapshot else {
+            return false;
+        };
+        let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx)) else {
+            return false;
+        };
+        let Some(service) = snapshot.service(route.service_idx) else {
+            return false;
+        };
+        service.request_timeout_ms > 0
+            && ctx.started_at.elapsed() >= Duration::from_millis(service.request_timeout_ms)
+    }
+
+    /// Reports a spent time budget as 504 rather than letting the underlying
+    /// read timeout surface as a 502: the upstream was reachable, prx is the
+    /// one that stopped waiting.
+    fn timeout_error(&self, ctx: &RequestCtx) -> Box<Error> {
+        if let Some(route) = ctx
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| ctx.route_idx.and_then(|idx| snapshot.route(idx)))
+        {
+            metrics::inc_request_timeout(route.name.as_ref());
+        }
+        Error::explain(
+            HTTPStatus(504),
+            "request exceeded the service request_timeout_ms",
+        )
+    }
+
+    /// Decides whether this request may be retried.
+    ///
+    /// `stage` separates a connect failure, where nothing reached the upstream
+    /// and any method can safely be replayed, from a failure mid-proxy, where
+    /// the request may already have been applied.
+    fn should_retry(&self, ctx: &mut RequestCtx, stage: RetryStage) -> bool {
         let Some(snapshot) = &ctx.snapshot else {
             return false;
         };
@@ -75,6 +113,7 @@ impl PrxProxy {
         let Some(service) = snapshot.service(route.service_idx) else {
             return false;
         };
+        let route_name = route.name.as_ref();
 
         if ctx.retries >= service.max_retries {
             return false;
@@ -83,6 +122,26 @@ impl PrxProxy {
             return false;
         }
 
+        // A request that already spent its budget must not start another
+        // attempt; the client is about to get a 504 either way.
+        if service.request_timeout_ms > 0
+            && ctx.started_at.elapsed() >= Duration::from_millis(service.request_timeout_ms)
+        {
+            metrics::inc_retry_denied(route_name, "deadline");
+            return false;
+        }
+
+        if stage == RetryStage::Proxy && service.retry_idempotent_only && !ctx.is_idempotent {
+            metrics::inc_retry_denied(route_name, "not_idempotent");
+            return false;
+        }
+
+        if !service.retry_budget.try_acquire() {
+            metrics::inc_retry_denied(route_name, "budget");
+            return false;
+        }
+
+        metrics::inc_retry(route_name, stage.as_str());
         ctx.retries += 1;
         true
     }
@@ -186,6 +245,33 @@ impl PrxProxy {
     }
 }
 
+/// Shortens a per-attempt timeout so it cannot outlive the request's total
+/// budget. `None` means the service has no total budget.
+fn clamp_to_budget(timeout: Duration, remaining: Option<Duration>) -> Duration {
+    match remaining {
+        Some(remaining) => timeout.min(remaining),
+        None => timeout,
+    }
+}
+
+/// Where a failure happened, which decides whether a replay is safe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryStage {
+    /// The connection to the upstream never came up: nothing was sent.
+    Connect,
+    /// The request was in flight when it failed.
+    Proxy,
+}
+
+impl RetryStage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Proxy => "proxy",
+        }
+    }
+}
+
 /// What `request_filter` decided while the request header was still borrowed.
 #[derive(Debug, Clone, Copy)]
 enum Decision {
@@ -211,6 +297,9 @@ pub struct RequestCtx {
     client_port: Option<u16>,
     /// Only generated when a header rule uses `$request_id`.
     request_id: Option<String>,
+    /// Whether the request method is safe to replay once it may have reached
+    /// the upstream.
+    is_idempotent: bool,
     upstream_addr: Option<String>,
 }
 
@@ -228,6 +317,7 @@ impl Default for RequestCtx {
             client_ip: None,
             client_port: None,
             request_id: None,
+            is_idempotent: true,
             upstream_addr: None,
         }
     }
@@ -256,6 +346,15 @@ impl ProxyHttp for PrxProxy {
             let req_header = session.req_header();
             let path = req_header.uri.path();
             ctx.is_upgrade = req_header.headers.contains_key("upgrade");
+            ctx.is_idempotent = matches!(
+                req_header.method,
+                Method::GET
+                    | Method::HEAD
+                    | Method::OPTIONS
+                    | Method::TRACE
+                    | Method::PUT
+                    | Method::DELETE
+            );
 
             if path == self.health_path {
                 Decision::Health
@@ -362,8 +461,31 @@ impl ProxyHttp for PrxProxy {
             );
         };
 
+        // A request with a total budget must not start an attempt it cannot
+        // finish, and each attempt is capped by whatever time is left.
+        let remaining = if service.request_timeout_ms > 0 {
+            let budget = Duration::from_millis(service.request_timeout_ms);
+            let elapsed = ctx.started_at.elapsed();
+            if elapsed >= budget {
+                metrics::inc_request_timeout(route.name.as_ref());
+                return Error::e_explain(
+                    HTTPStatus(504),
+                    format!(
+                        "request exceeded request_timeout_ms={} for service '{}'",
+                        service.request_timeout_ms, service.name
+                    ),
+                );
+            }
+            Some(budget - elapsed)
+        } else {
+            None
+        };
+
         if ctx.retries > 0 && service.retry_backoff_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(service.retry_backoff_ms)).await;
+            // Full jitter: a fixed backoff makes every request that failed at
+            // the same moment come back at the same moment.
+            let backoff = rand::random_range(0..=service.retry_backoff_ms);
+            tokio::time::sleep(Duration::from_millis(backoff)).await;
         }
 
         // Only the hash strategy needs a key, so the other strategies do not
@@ -410,7 +532,8 @@ impl ProxyHttp for PrxProxy {
         peer.options.verify_cert = upstream.verify_cert;
         peer.options.verify_hostname = upstream.verify_hostname;
         if let Some(ms) = upstream.connect_timeout_ms {
-            peer.options.connection_timeout = Some(Duration::from_millis(ms));
+            peer.options.connection_timeout =
+                Some(clamp_to_budget(Duration::from_millis(ms), remaining));
         }
         if let Some(ms) = upstream.total_connect_timeout_ms {
             peer.options.total_connection_timeout = Some(Duration::from_millis(ms));
@@ -421,10 +544,12 @@ impl ProxyHttp for PrxProxy {
         // would kill healthy connections (T115).
         if !ctx.is_upgrade {
             if let Some(ms) = upstream.read_timeout_ms {
-                peer.options.read_timeout = Some(Duration::from_millis(ms));
+                peer.options.read_timeout =
+                    Some(clamp_to_budget(Duration::from_millis(ms), remaining));
             }
             if let Some(ms) = upstream.write_timeout_ms {
-                peer.options.write_timeout = Some(Duration::from_millis(ms));
+                peer.options.write_timeout =
+                    Some(clamp_to_budget(Duration::from_millis(ms), remaining));
             }
             if let Some(ms) = upstream.idle_timeout_ms {
                 peer.options.idle_timeout = Some(Duration::from_millis(ms));
@@ -559,7 +684,10 @@ impl ProxyHttp for PrxProxy {
         mut e: Box<Error>,
     ) -> Box<Error> {
         self.record_upstream_failure(ctx, "connect");
-        e.set_retry(self.should_retry(ctx));
+        if self.deadline_exceeded(ctx) {
+            return self.timeout_error(ctx);
+        }
+        e.set_retry(self.should_retry(ctx, RetryStage::Connect));
         e
     }
 
@@ -577,7 +705,10 @@ impl ProxyHttp for PrxProxy {
             "proxying error"
         );
         self.record_upstream_failure(ctx, "proxy");
-        e.set_retry(self.should_retry(ctx));
+        if self.deadline_exceeded(ctx) {
+            return self.timeout_error(ctx);
+        }
+        e.set_retry(self.should_retry(ctx, RetryStage::Proxy));
         e
     }
 
@@ -666,6 +797,7 @@ mod tests {
             retry_backoff_ms: 0,
             circuit_breaker: CircuitBreakerConfig::default(),
             upstreams,
+            ..Default::default()
         }
     }
 
@@ -699,6 +831,131 @@ mod tests {
             "/healthz".to_string(),
             "/readyz".to_string(),
         )
+    }
+
+    fn runtime_with(service: ServiceConfig) -> Arc<RuntimeConfig> {
+        Arc::new(RuntimeConfig::from_config(PrxConfig {
+            server: ServerConfig::default(),
+            observability: ObservabilityConfig::default(),
+            headers: Default::default(),
+            services: vec![service],
+            routes: vec![route("default", "default")],
+        }))
+    }
+
+    fn ctx_for(runtime: &Arc<RuntimeConfig>) -> RequestCtx {
+        RequestCtx {
+            snapshot: Some(runtime.clone()),
+            route_idx: Some(0),
+            service_idx: Some(0),
+            ..RequestCtx::default()
+        }
+    }
+
+    /// T107: replaying a POST after the request may already have reached the
+    /// upstream can apply it twice.
+    #[test]
+    fn a_non_idempotent_request_is_not_replayed_after_a_proxy_error() {
+        let runtime = runtime_with(ServiceConfig {
+            max_retries: 3,
+            retry_idempotent_only: true,
+            retry_budget_ratio: 0.0,
+            upstreams: vec![upstream("127.0.0.1:9000"), upstream("127.0.0.1:9001")],
+            ..Default::default()
+        });
+        let proxy = build_proxy(runtime.clone());
+
+        let mut post = ctx_for(&runtime);
+        post.is_idempotent = false;
+        assert!(
+            !proxy.should_retry(&mut post, RetryStage::Proxy),
+            "a POST must not be replayed once it may have been applied"
+        );
+
+        // The same POST is safe to retry when the connection never came up.
+        assert!(proxy.should_retry(&mut post, RetryStage::Connect));
+
+        let mut get = ctx_for(&runtime);
+        get.is_idempotent = true;
+        assert!(proxy.should_retry(&mut get, RetryStage::Proxy));
+    }
+
+    /// T107: with the budget disabled the old behavior is preserved.
+    #[test]
+    fn retry_budget_can_be_turned_off() {
+        let runtime = runtime_with(ServiceConfig {
+            max_retries: 1,
+            retry_budget_ratio: 0.0,
+            upstreams: vec![upstream("127.0.0.1:9000"), upstream("127.0.0.1:9001")],
+            ..Default::default()
+        });
+        let proxy = build_proxy(runtime.clone());
+
+        let mut ctx = ctx_for(&runtime);
+        assert!(proxy.should_retry(&mut ctx, RetryStage::Connect));
+    }
+
+    /// T107: a failing upstream must not receive `max_retries` times the load.
+    #[test]
+    fn retry_budget_limits_a_storm_of_retries() {
+        let runtime = runtime_with(ServiceConfig {
+            max_retries: 3,
+            retry_budget_ratio: 0.1,
+            retry_budget_min_per_window: 5,
+            retry_budget_window_ms: 60_000,
+            upstreams: vec![upstream("127.0.0.1:9000"), upstream("127.0.0.1:9001")],
+            ..Default::default()
+        });
+        let proxy = build_proxy(runtime.clone());
+
+        // No successes recorded yet, so only the floor of 5 retries is allowed
+        // no matter how many requests ask for one.
+        let mut granted = 0;
+        for _ in 0..100 {
+            let mut ctx = ctx_for(&runtime);
+            if proxy.should_retry(&mut ctx, RetryStage::Connect) {
+                granted += 1;
+            }
+        }
+        assert_eq!(
+            granted, 5,
+            "the budget floor must cap retries at 5, got {granted}"
+        );
+
+        // 100 successes raise the allowance to 10% of them.
+        let service = runtime.service(0).expect("service 0 exists");
+        for _ in 0..100 {
+            service.retry_budget.record_success();
+        }
+        let mut granted_after = 0;
+        for _ in 0..100 {
+            let mut ctx = ctx_for(&runtime);
+            if proxy.should_retry(&mut ctx, RetryStage::Connect) {
+                granted_after += 1;
+            }
+        }
+        assert_eq!(
+            granted_after, 5,
+            "10% of 100 successes is 10 retries in total, 5 of which were already spent"
+        );
+    }
+
+    /// T107: once the total budget is gone, starting another attempt only
+    /// delays the 504 the client is going to get.
+    #[test]
+    fn a_request_past_its_deadline_is_not_retried() {
+        let runtime = runtime_with(ServiceConfig {
+            max_retries: 3,
+            request_timeout_ms: 1,
+            retry_budget_ratio: 0.0,
+            upstreams: vec![upstream("127.0.0.1:9000"), upstream("127.0.0.1:9001")],
+            ..Default::default()
+        });
+        let proxy = build_proxy(runtime.clone());
+
+        let mut ctx = ctx_for(&runtime);
+        ctx.started_at = Instant::now() - Duration::from_millis(50);
+        assert!(!proxy.should_retry(&mut ctx, RetryStage::Connect));
     }
 
     /// T103: a request is pinned to the snapshot it started with, so a reload
@@ -752,9 +1009,9 @@ mod tests {
             ..RequestCtx::default()
         };
 
-        assert!(proxy.should_retry(&mut ctx));
+        assert!(proxy.should_retry(&mut ctx, RetryStage::Connect));
         assert_eq!(ctx.retries, 1);
-        assert!(!proxy.should_retry(&mut ctx));
+        assert!(!proxy.should_retry(&mut ctx, RetryStage::Connect));
     }
 
     #[test]
@@ -770,7 +1027,7 @@ mod tests {
             ..RequestCtx::default()
         };
 
-        assert!(!proxy.should_retry(&mut ctx));
+        assert!(!proxy.should_retry(&mut ctx, RetryStage::Connect));
         assert_eq!(ctx.retries, 0);
     }
 }

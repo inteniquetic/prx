@@ -124,6 +124,51 @@ host does not fall through to a broader one.
 - a method prx does not know (for example `PROPFIND`) only matches routes that
   list no methods at all.
 
+### 3.4a `[[service]]` — retries and time budget
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `max_retries` | `number` | `0` | Extra attempts per request |
+| `retry_backoff_ms` | `number` | `0` | Upper bound of the wait before a retry |
+| `retry_idempotent_only` | `bool` | `true` | Only replay idempotent methods after a mid-flight failure |
+| `retry_budget_ratio` | `float` | `0.2` | Share of recent successes that may be spent on retries; `0.0` disables the budget |
+| `retry_budget_min_per_window` | `number` | `10` | Retries always allowed per window, so an idle service is not locked out |
+| `retry_budget_window_ms` | `number` | `10000` | Window the budget is measured over |
+| `request_timeout_ms` | `number` | `0` | Total budget for a request including retries; `0` disables it |
+
+**Backoff is jittered.** `retry_backoff_ms` is the upper bound, and the actual
+wait is picked uniformly below it. A fixed backoff would send every request
+that failed at the same moment back at the same moment.
+
+**Retry budget.** Without one, an upstream that starts failing receives
+`1 + max_retries` times its usual traffic exactly when it is least able to cope.
+The budget allows retries while they stay under
+`retry_budget_ratio * successes` in the current window, with
+`retry_budget_min_per_window` as a floor. Denied retries are counted in
+`prx_retry_denied_total{reason="budget"}`.
+
+**Idempotency.** A connect failure means nothing reached the upstream, so any
+method may be retried. Once the request may have been applied, only `GET`,
+`HEAD`, `OPTIONS`, `TRACE`, `PUT` and `DELETE` are replayed while
+`retry_idempotent_only = true`. Set it to `false` only if your upstream
+deduplicates writes itself.
+
+**Time budget.** `request_timeout_ms` is measured from the moment prx accepts
+the request. When it runs out the client gets `504`, no further attempt is
+started, and each attempt's connect/read/write timeouts are shortened so they
+cannot outlive the budget. It does not abort a response that is already
+streaming in slowly; per-read timeouts still govern that.
+
+```toml
+[[service]]
+name = "payments"
+max_retries = 2
+retry_backoff_ms = 50
+retry_idempotent_only = true    # never replay a POST that may have landed
+retry_budget_ratio = 0.1        # retries may add at most 10% load
+request_timeout_ms = 3000
+```
+
 ### 3.4b `[[service]]` — HTTP version to the upstream
 
 | Field | Type | Default | Required | Description |
@@ -267,6 +312,10 @@ expected to sit idle; applying them would drop healthy websockets.
 ### 4.4 Retry + Circuit breaker
 
 - Retry follows `max_retries` and does not select an upstream already tried within the same request.
+- A retry is also refused when the retry budget is spent, when the request's
+  time budget is gone, or when the method is not idempotent and the request may
+  already have reached the upstream. Each case is counted separately in
+  `prx_retry_denied_total{reason}`.
 - On connect/proxy failure, failures are counted to trigger the route circuit breaker policy.
 - If new config parsing/validation fails during reload, the previous config is kept.
 
@@ -283,6 +332,8 @@ expected to sit idle; applying them would drop healthy websockets.
 - `only one route can be marked is_default = true`
 - `route '<name>' lists unsupported HTTP method '<method>'`
 - `route '<name>' has an invalid header name '<name>'`
+- `service '<name>' retry_budget_ratio must be between 0.0 and 10.0`
+- `service '<name>' retry_budget_window_ms must be > 0`
 - `route '<name>' header '<name>' uses unknown variable '$<var>'`
 
 ## 6) Full Config Example (Production-style Baseline)
