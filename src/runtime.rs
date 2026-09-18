@@ -5,7 +5,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -13,7 +13,7 @@ use std::{
 use rand::Rng;
 
 use crate::{
-    config::{LbStrategy, PrxConfig, UpstreamH2},
+    config::{HealthCheckConfig, LbStrategy, PrxConfig, UpstreamH2},
     headers::CompiledHeaderRules,
     router::{IndexedRoute, RouteIndex, RouteMatch, method_mask},
 };
@@ -100,6 +100,11 @@ impl RuntimeConfig {
 
     pub fn service(&self, idx: usize) -> Option<&ServiceRuntime> {
         self.services.get(idx)
+    }
+
+    /// Number of services, so the health checker can walk them by index.
+    pub fn service_count(&self) -> usize {
+        self.services.len()
     }
 
     pub fn is_ready(&self) -> bool {
@@ -189,6 +194,7 @@ pub struct ServiceRuntime {
     pub retry_idempotent_only: bool,
     pub request_timeout_ms: u64,
     pub retry_budget: RetryBudget,
+    pub health_check: HealthCheckConfig,
     pub circuit_breaker: CircuitBreakerRuntime,
     pub upstreams: Vec<UpstreamRuntime>,
     ring: Vec<usize>,
@@ -218,6 +224,7 @@ impl ServiceRuntime {
                 config.retry_budget_min_per_window,
                 config.retry_budget_window_ms,
             ),
+            health_check: config.health_check,
             circuit_breaker,
             upstreams,
             ring,
@@ -397,10 +404,33 @@ pub struct UpstreamRuntime {
     state: Arc<UpstreamState>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct UpstreamState {
     consecutive_failures: AtomicUsize,
     open_until_epoch_ms: AtomicU64,
+    /// Active probe verdict. Starts healthy so that a reload never blackholes
+    /// traffic while the first probes are still in flight.
+    probe_healthy: AtomicBool,
+    probe_successes: AtomicUsize,
+    probe_failures: AtomicUsize,
+    /// Epoch milliseconds of the last probe, so the checker knows what is due.
+    last_probe_ms: AtomicU64,
+}
+
+impl Default for UpstreamState {
+    /// Never derive this: `probe_healthy` has to start `true`, otherwise every
+    /// upstream is considered down until its first probe lands, which would
+    /// blackhole traffic on startup and after every config reload.
+    fn default() -> Self {
+        Self {
+            consecutive_failures: AtomicUsize::new(0),
+            open_until_epoch_ms: AtomicU64::new(0),
+            probe_healthy: AtomicBool::new(true),
+            probe_successes: AtomicUsize::new(0),
+            probe_failures: AtomicUsize::new(0),
+            last_probe_ms: AtomicU64::new(0),
+        }
+    }
 }
 
 impl UpstreamRuntime {
@@ -431,6 +461,56 @@ impl UpstreamRuntime {
 
     fn is_available_at(&self, now_ms: u64) -> bool {
         self.state.open_until_epoch_ms.load(Ordering::Relaxed) <= now_ms
+            && self.state.probe_healthy.load(Ordering::Relaxed)
+    }
+
+    /// Whether the active probe currently considers this upstream usable.
+    pub fn is_probe_healthy(&self) -> bool {
+        self.state.probe_healthy.load(Ordering::Relaxed)
+    }
+
+    /// Epoch milliseconds of the last probe, or 0 when it has never run.
+    pub fn last_probe_ms(&self) -> u64 {
+        self.state.last_probe_ms.load(Ordering::Relaxed)
+    }
+
+    /// Records a probe result and returns `Some(healthy)` when the verdict
+    /// changed, so the caller can log and update metrics only on transitions.
+    pub fn record_probe(
+        &self,
+        success: bool,
+        healthy_threshold: u32,
+        unhealthy_threshold: u32,
+    ) -> Option<bool> {
+        self.state
+            .last_probe_ms
+            .store(now_epoch_ms(), Ordering::Relaxed);
+
+        if success {
+            self.state.probe_failures.store(0, Ordering::Relaxed);
+            let successes = self.state.probe_successes.fetch_add(1, Ordering::Relaxed) + 1;
+            if !self.state.probe_healthy.load(Ordering::Relaxed)
+                && successes >= healthy_threshold as usize
+            {
+                self.state.probe_healthy.store(true, Ordering::Relaxed);
+                // An upstream that passed its probes is given a clean slate so
+                // the passive breaker does not keep it out on old failures.
+                self.state.consecutive_failures.store(0, Ordering::Relaxed);
+                self.state.open_until_epoch_ms.store(0, Ordering::Relaxed);
+                return Some(true);
+            }
+            return None;
+        }
+
+        self.state.probe_successes.store(0, Ordering::Relaxed);
+        let failures = self.state.probe_failures.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.state.probe_healthy.load(Ordering::Relaxed)
+            && failures >= unhealthy_threshold as usize
+        {
+            self.state.probe_healthy.store(false, Ordering::Relaxed);
+            return Some(false);
+        }
+        None
     }
 
     fn mark_failure(&self, circuit_breaker: &CircuitBreakerRuntime) -> bool {

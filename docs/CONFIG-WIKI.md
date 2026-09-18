@@ -250,6 +250,51 @@ A header whose value needs a variable that is unavailable for this request is
 skipped rather than written with a hole in it. Unknown variables and invalid
 header names are rejected when the config loads.
 
+### 3.4d `[service.health_check]` — active probing
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `bool` | `false` | Turn the background prober on for this service |
+| `kind` | enum | `"tcp"` | `tcp` (connect and close) or `http` (GET and check the status) |
+| `path` | `string` | `"/healthz"` | Request path for `kind = "http"` |
+| `interval_ms` | `number` | `2000` | How often each upstream is probed |
+| `timeout_ms` | `number` | `1000` | Probe timeout; a timeout counts as a failure |
+| `healthy_threshold` | `number` | `2` | Consecutive successes before a down upstream is used again |
+| `unhealthy_threshold` | `number` | `3` | Consecutive failures before an upstream is taken out |
+| `expected_status` | array | `[200]` | Status codes that count as healthy for `kind = "http"` |
+
+```toml
+[[service]]
+name = "api"
+
+[service.health_check]
+enabled = true
+kind = "http"
+path = "/healthz"
+interval_ms = 2000
+unhealthy_threshold = 3
+```
+
+Without this, an upstream is only removed after real requests have failed
+against it (the circuit breaker), so users absorb the first errors of every
+outage, and it is let back in when a timer expires rather than because it
+recovered. With it:
+
+- a failing upstream is taken out before a request finds it;
+- an upstream that comes back has to pass `healthy_threshold` probes before it
+  receives traffic again, and passing them also clears the circuit breaker;
+- `ready_path` reports `503` while a service has no usable upstream;
+- the admin API and Web UI read this verdict instead of opening a TCP
+  connection per upstream on every refresh (`source: "active_probe"` in
+  `GET /web/health/routes`).
+
+Probes run on their own thread and runtime, so they never compete with request
+handling, and the checker reads the current config on each tick: a reload is
+picked up without restarting anything.
+
+Metrics: `prx_health_check_total{service,upstream,result}` and
+`prx_upstream_healthy{service,upstream}`.
+
 ### 3.5 `[route.circuit_breaker]`
 
 | Field | Type | Default | Required | Description |
@@ -334,6 +379,10 @@ expected to sit idle; applying them would drop healthy websockets.
 - `route '<name>' has an invalid header name '<name>'`
 - `service '<name>' retry_budget_ratio must be between 0.0 and 10.0`
 - `service '<name>' retry_budget_window_ms must be > 0`
+- `service '<name>' health_check.interval_ms must be > 0`
+- `service '<name>' health_check.timeout_ms must be > 0`
+- `service '<name>' health_check thresholds must be > 0`
+- `service '<name>' health_check.path must start with '/'`
 - `route '<name>' header '<name>' uses unknown variable '$<var>'`
 
 ## 6) Full Config Example (Production-style Baseline)

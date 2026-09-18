@@ -12,6 +12,7 @@
 - Per-route request/response header rules (`X-Forwarded-For`, `X-Real-IP`, security headers)
 - Route-level failover retry
 - Passive per-route circuit breaker for unhealthy upstreams
+- Active health checking that removes a failing upstream before a request finds it
 - Graceful reload support from Pingora runtime
 - Config-driven behavior via `Prx.toml`
 - Auto config reload when `Prx.toml` is saved

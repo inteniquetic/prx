@@ -1,7 +1,7 @@
 # T113 — Active health check prober
 
 **Phase:** 1 · Data plane
-**Status:** todo
+**Status:** done
 **Size:** M (~1d)
 **Depends on:** —
 **Files:** `src/health.rs` (ใหม่), `src/runtime.rs`, `src/config.rs`
@@ -49,3 +49,37 @@ expected_status = [200]
 ## Out of scope
 
 - Outlier detection แบบสถิติ (P2C/EWMA อยู่ใน T114)
+
+## ผลลัพธ์ที่ส่งมอบ
+
+- `src/health.rs` — prober แบบ task เดียวต่อทั้ง process อ่าน snapshot ปัจจุบันทุก tick (200ms)
+  แล้วยิง probe ของ upstream ที่ถึงกำหนดแบบขนาน
+  - รองรับ `kind = "tcp"` และ `kind = "http"` (เขียน HTTP/1.1 GET เองเพื่อไม่ต้องลาก client stack เข้ามา)
+  - รันบน thread + runtime ของตัวเอง เหมือน config watcher จึงไม่แย่ CPU กับการ handle request
+  - **reload ไม่ leak task** เพราะไม่มี task ต่อ upstream ให้ต้องเก็บกวาด
+- สถานะ probe อยู่ใน `UpstreamState` (atomic ล้วน) และถูกรวมเข้ากับ `is_available_at()`
+  → ทั้ง LB และ `/readyz` เห็นผลทันที
+- ผ่าน probe ครบ `healthy_threshold` แล้วจะ **ล้าง circuit breaker ให้ด้วย** (half-open ที่พิสูจน์แล้วจริง
+  ไม่ใช่ปล่อยกลับมาเพราะหมดเวลา)
+- admin API อ่านจาก prober แทนการเปิด TCP สดทุกครั้ง — payload มี `source: "active_probe"`
+  และ `last_probe_ms_ago` (ยืนยันด้วยการรันจริง)
+- metrics: `prx_health_check_total{service,upstream,result}`, `prx_upstream_healthy{service,upstream}`
+
+## บั๊กที่กันไว้ได้ตอนเขียน
+
+`UpstreamState` เดิม `#[derive(Default)]` ถ้าปล่อยไว้ `probe_healthy` จะ default เป็น `false`
+= upstream ทุกตัวถือว่าตายตั้งแต่ start และหลัง reload ทุกครั้ง traffic จะไม่วิ่งเลย
+เขียน `Default` เองพร้อม comment กำกับว่าห้าม derive
+
+## Acceptance criteria
+
+- [x] e2e: upstream เสีย → ถูกตัดออกก่อนที่ user request จะเจอ และหลังจากนั้นไม่มี request ไปโดนอีกเลย
+- [x] upstream กลับมา → รับ traffic อีกครั้งหลังผ่าน `healthy_threshold`
+- [x] `/readyz` สะท้อนสถานะ (200 → 503 → 200 ตาม upstream)
+- [x] reload ไม่ leak task (สถาปัตยกรรมไม่มี task ต่อ upstream)
+- [ ] วัดว่า prober ไม่ทำให้ CPU idle สูงขึ้นตอน 100 upstreams — ต้องใช้ harness ของ T001
+
+## หมายเหตุ
+
+สถานะ probe ไม่ถูกส่งต่อข้าม reload (config ใหม่ = state ใหม่ ซึ่งเริ่มที่ healthy)
+ตั้งใจให้เป็นแบบนี้เพื่อไม่ให้ reload ทำให้ traffic หยุดวิ่ง — prober จะตรวจซ้ำภายใน `interval_ms` แรก

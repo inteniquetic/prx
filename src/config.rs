@@ -89,6 +89,42 @@ impl PrxConfig {
                 );
             }
 
+            if service.health_check.enabled {
+                let hc = &service.health_check;
+                if hc.interval_ms == 0 {
+                    bail!(
+                        "service '{}' health_check.interval_ms must be > 0",
+                        service.name
+                    );
+                }
+                if hc.timeout_ms == 0 {
+                    bail!(
+                        "service '{}' health_check.timeout_ms must be > 0",
+                        service.name
+                    );
+                }
+                if hc.healthy_threshold == 0 || hc.unhealthy_threshold == 0 {
+                    bail!(
+                        "service '{}' health_check thresholds must be > 0",
+                        service.name
+                    );
+                }
+                if hc.kind == HealthCheckKind::Http {
+                    if !hc.path.starts_with('/') {
+                        bail!(
+                            "service '{}' health_check.path must start with '/'",
+                            service.name
+                        );
+                    }
+                    if hc.expected_status.is_empty() {
+                        bail!(
+                            "service '{}' health_check.expected_status must not be empty",
+                            service.name
+                        );
+                    }
+                }
+            }
+
             if service.circuit_breaker.enabled {
                 if service.circuit_breaker.consecutive_failures == 0 {
                     bail!(
@@ -345,11 +381,94 @@ pub struct ServiceConfig {
     pub request_timeout_ms: u64,
     #[serde(default)]
     pub circuit_breaker: CircuitBreakerConfig,
+    /// Probe upstreams in the background instead of waiting for a real request
+    /// to discover that one is down.
+    #[serde(default)]
+    pub health_check: HealthCheckConfig,
     /// Which HTTP version to speak to the upstreams of this service.
     #[serde(default)]
     pub upstream_h2: UpstreamH2,
     #[serde(rename = "upstream", default)]
     pub upstreams: Vec<UpstreamConfig>,
+}
+
+/// Background probing of a service's upstreams.
+///
+/// Passive detection (the circuit breaker) only removes an upstream after real
+/// requests have already failed, so users see the errors. An active probe finds
+/// the same failure before a request does, and proves an upstream is healthy
+/// again before sending traffic back to it.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HealthCheckConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub kind: HealthCheckKind,
+    /// Request path for `kind = "http"`.
+    #[serde(default = "default_health_check_path")]
+    pub path: String,
+    #[serde(default = "default_health_check_interval_ms")]
+    pub interval_ms: u64,
+    #[serde(default = "default_health_check_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Consecutive successes before a down upstream is used again.
+    #[serde(default = "default_healthy_threshold")]
+    pub healthy_threshold: u32,
+    /// Consecutive failures before an upstream is taken out.
+    #[serde(default = "default_unhealthy_threshold")]
+    pub unhealthy_threshold: u32,
+    /// Response codes that count as healthy for `kind = "http"`.
+    #[serde(default = "default_expected_status")]
+    pub expected_status: Vec<u16>,
+}
+
+impl Default for HealthCheckConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            kind: HealthCheckKind::default(),
+            path: default_health_check_path(),
+            interval_ms: default_health_check_interval_ms(),
+            timeout_ms: default_health_check_timeout_ms(),
+            healthy_threshold: default_healthy_threshold(),
+            unhealthy_threshold: default_unhealthy_threshold(),
+            expected_status: default_expected_status(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthCheckKind {
+    /// Open a TCP connection and close it again.
+    #[default]
+    Tcp,
+    /// Send a GET and check the status code.
+    Http,
+}
+
+fn default_health_check_path() -> String {
+    "/healthz".to_string()
+}
+
+fn default_health_check_interval_ms() -> u64 {
+    2_000
+}
+
+fn default_health_check_timeout_ms() -> u64 {
+    1_000
+}
+
+fn default_healthy_threshold() -> u32 {
+    2
+}
+
+fn default_unhealthy_threshold() -> u32 {
+    3
+}
+
+fn default_expected_status() -> Vec<u16> {
+    vec![200]
 }
 
 /// How prx talks to a service's upstreams.
@@ -388,6 +507,7 @@ impl Default for ServiceConfig {
             retry_idempotent_only: true,
             request_timeout_ms: 0,
             circuit_breaker: CircuitBreakerConfig::default(),
+            health_check: HealthCheckConfig::default(),
             upstreams: Vec::new(),
         }
     }

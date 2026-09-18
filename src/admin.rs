@@ -413,6 +413,11 @@ struct RouteHealthUpstreamPayload {
     healthy: bool,
     latency_ms: Option<u64>,
     error: Option<String>,
+    /// Where this verdict came from: the background prober, or a TCP connect
+    /// opened just to answer this request.
+    source: &'static str,
+    /// How long ago the prober last checked, when the verdict came from it.
+    last_probe_ms_ago: Option<u64>,
 }
 
 impl From<PrxConfig> for AdminConfigPayload {
@@ -515,6 +520,8 @@ async fn check_upstream_health(addr: String, timeout_ms: u64) -> RouteHealthUpst
             healthy: false,
             latency_ms: None,
             error: Some("empty_addr".to_string()),
+            source: "tcp_connect",
+            last_probe_ms_ago: None,
         };
     }
 
@@ -531,6 +538,8 @@ async fn check_upstream_health(addr: String, timeout_ms: u64) -> RouteHealthUpst
             healthy: true,
             latency_ms: Some(start.elapsed().as_millis() as u64),
             error: None,
+            source: "tcp_connect",
+            last_probe_ms_ago: None,
         },
         Ok(Err(err)) => RouteHealthUpstreamPayload {
             addr,
@@ -538,6 +547,8 @@ async fn check_upstream_health(addr: String, timeout_ms: u64) -> RouteHealthUpst
             healthy: false,
             latency_ms: None,
             error: Some(err.to_string()),
+            source: "tcp_connect",
+            last_probe_ms_ago: None,
         },
         Err(_) => RouteHealthUpstreamPayload {
             addr,
@@ -545,11 +556,42 @@ async fn check_upstream_health(addr: String, timeout_ms: u64) -> RouteHealthUpst
             healthy: false,
             latency_ms: None,
             error: Some("timeout".to_string()),
+            source: "tcp_connect",
+            last_probe_ms_ago: None,
         },
     }
 }
 
-async fn render_route_health_payload(config: PrxConfig, timeout_ms: u64) -> RouteHealthPayload {
+/// Verdicts the background prober already holds, keyed by upstream address.
+type ProbeVerdicts = std::collections::HashMap<String, (bool, u64)>;
+
+/// Collects what the active health checker knows, so the admin API can answer
+/// from it instead of opening a TCP connection per upstream on every page load.
+fn probe_verdicts(active_config: &Arc<ArcSwap<RuntimeConfig>>) -> ProbeVerdicts {
+    let snapshot = active_config.load();
+    let mut verdicts = ProbeVerdicts::new();
+    for idx in 0..snapshot.service_count() {
+        let Some(service) = snapshot.service(idx) else {
+            continue;
+        };
+        if !service.health_check.enabled {
+            continue;
+        }
+        for upstream in &service.upstreams {
+            verdicts.insert(
+                upstream.addr.clone(),
+                (upstream.is_probe_healthy(), upstream.last_probe_ms()),
+            );
+        }
+    }
+    verdicts
+}
+
+async fn render_route_health_payload(
+    config: PrxConfig,
+    timeout_ms: u64,
+    verdicts: &ProbeVerdicts,
+) -> RouteHealthPayload {
     // Build a service lookup map
     let service_map: std::collections::HashMap<String, _> = config
         .services
@@ -563,6 +605,23 @@ async fn render_route_health_payload(config: PrxConfig, timeout_ms: u64) -> Rout
 
         if let Some(service) = service_map.get(&route.service) {
             for upstream in &service.upstreams {
+                // Prefer what the background prober already knows: it reflects
+                // the verdict traffic is actually routed on, and it does not
+                // open a connection per upstream every time the UI refreshes.
+                if let Some((healthy, last_probe_ms)) = verdicts.get(&upstream.addr) {
+                    upstream_payloads.push(RouteHealthUpstreamPayload {
+                        addr: upstream.addr.clone(),
+                        timeout_ms: 0,
+                        healthy: *healthy,
+                        latency_ms: None,
+                        error: None,
+                        source: "active_probe",
+                        last_probe_ms_ago: (*last_probe_ms > 0)
+                            .then(|| now_epoch_ms().saturating_sub(*last_probe_ms)),
+                    });
+                    continue;
+                }
+
                 let per_upstream_timeout_ms = health_timeout_ms(upstream.connect_timeout_ms);
                 upstream_payloads.push(
                     check_upstream_health(upstream.addr.clone(), per_upstream_timeout_ms).await,
@@ -609,12 +668,13 @@ async fn get_route_health(
         }
     };
 
-    let payload = render_route_health_payload(config, timeout_ms).await;
+    let verdicts = probe_verdicts(&state.active_config);
+    let payload = render_route_health_payload(config, timeout_ms, &verdicts).await;
     json_response(StatusCode::OK, &payload)
 }
 
 async fn post_route_health(
-    State(_state): State<AdminState>,
+    State(state): State<AdminState>,
     Query(query): Query<RouteHealthQuery>,
     body: Body,
 ) -> Response<Body> {
@@ -656,7 +716,8 @@ async fn post_route_health(
         }
     };
 
-    let payload = render_route_health_payload(config, timeout_ms).await;
+    let verdicts = probe_verdicts(&state.active_config);
+    let payload = render_route_health_payload(config, timeout_ms, &verdicts).await;
     json_response(StatusCode::OK, &payload)
 }
 

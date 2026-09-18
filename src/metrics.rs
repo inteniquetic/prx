@@ -78,6 +78,36 @@ static REQUEST_TIMEOUT_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("failed to register prx_request_timeout_total")
 });
 
+static HEALTH_CHECK_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_health_check_total",
+        "Active health check probes, grouped by service/upstream/result",
+        &["service", "upstream", "result"]
+    )
+    .expect("failed to register prx_health_check_total")
+});
+
+static UPSTREAM_HEALTHY: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "prx_upstream_healthy",
+        "Whether the active health check considers an upstream usable (1=yes)",
+        &["service", "upstream"]
+    )
+    .expect("failed to register prx_upstream_healthy")
+});
+
+pub fn inc_health_check(service: &str, upstream: &str, result: &str) {
+    HEALTH_CHECK_TOTAL
+        .with_label_values(&[service, upstream, result])
+        .inc();
+}
+
+pub fn set_upstream_healthy(service: &str, upstream: &str, healthy: bool) {
+    UPSTREAM_HEALTHY
+        .with_label_values(&[service, upstream])
+        .set(if healthy { 1 } else { 0 });
+}
+
 pub fn inc_retry(route: &str, reason: &str) {
     RETRY_TOTAL.with_label_values(&[route, reason]).inc();
 }

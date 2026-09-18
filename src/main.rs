@@ -9,6 +9,7 @@ use tracing_subscriber::EnvFilter;
 use prx::{
     admin::{AdminAxumService, DEFAULT_ADMIN_LISTEN, bind_admin_listener},
     config::PrxConfig,
+    health::spawn_health_checker,
     proxy::PrxProxy,
     reload::spawn_config_watcher,
     runtime::RuntimeConfig,
@@ -107,7 +108,7 @@ fn run() -> anyhow::Result<()> {
     spawn_config_watcher(
         config_path.clone(),
         Duration::from_millis(app_config.server.config_reload_debounce_ms.max(50)),
-        runtime_config,
+        runtime_config.clone(),
     )
     .with_context(|| {
         format!(
@@ -115,6 +116,16 @@ fn run() -> anyhow::Result<()> {
             config_path.to_string_lossy()
         )
     })?;
+
+    if app_config
+        .services
+        .iter()
+        .any(|service| service.health_check.enabled)
+    {
+        spawn_health_checker(runtime_config.clone())
+            .context("failed to start the active health checker")?;
+        info!("active health checking is enabled");
+    }
 
     if let Some(metrics_addr) = &app_config.observability.prometheus_listen {
         let mut metrics_service = pingora::services::listening::Service::prometheus_http_service();
