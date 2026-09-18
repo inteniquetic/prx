@@ -31,6 +31,7 @@ use crate::{
 pub const ADMIN_CONFIG_PATH: &str = "/web/config";
 pub const ADMIN_ROUTE_HEALTH_PATH: &str = "/web/health/routes";
 pub const ADMIN_CACHE_PATH: &str = "/web/cache";
+pub const ADMIN_TLS_STATUS_PATH: &str = "/web/tls/status";
 pub const DEFAULT_ADMIN_LISTEN: &str = "127.0.0.1:9090";
 const MAX_ADMIN_CONFIG_BODY_BYTES: usize = 10 * 1024 * 1024;
 pub const ADMIN_SERVICES_PATH: &str = "/admin/services";
@@ -232,6 +233,9 @@ impl ConfigAdmin {
 struct AdminState {
     config_admin: ConfigAdmin,
     active_config: Arc<ArcSwap<RuntimeConfig>>,
+    acme_status: crate::acme::SharedStatus,
+    /// Present when a TLS listener is configured.
+    tls_resolver: Option<Arc<crate::tls::CertResolver>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -694,6 +698,53 @@ struct CacheRoutePayload {
     misses: u64,
     coalesced: u64,
     evictions: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct TlsStatusPayload {
+    acme: crate::acme::AcmeStatus,
+    /// Certificates the running listener would serve right now.
+    certificates: Vec<TlsCertStatusPayload>,
+}
+
+#[derive(Debug, Serialize)]
+struct TlsCertStatusPayload {
+    domain: String,
+    expires_epoch_s: i64,
+    expires_in_days: i64,
+}
+
+/// Reports what the TLS listener is actually serving, and how automatic
+/// renewal is going, so an expiring certificate is visible before it bites.
+async fn get_tls_status(State(state): State<AdminState>) -> Response<Body> {
+    let acme = state
+        .acme_status
+        .read()
+        .map(|status| status.clone())
+        .unwrap_or_default();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+
+    let certificates = state
+        .tls_resolver
+        .as_ref()
+        .map(|resolver| {
+            resolver
+                .domain_expiry()
+                .into_iter()
+                .map(|(domain, expires)| TlsCertStatusPayload {
+                    domain,
+                    expires_epoch_s: expires,
+                    expires_in_days: (expires - now) / 86_400,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    json_response(StatusCode::OK, &TlsStatusPayload { acme, certificates })
 }
 
 async fn get_cache_status(
@@ -1760,6 +1811,7 @@ fn build_router(state: AdminState) -> Router {
             get(get_route_health).post(post_route_health),
         )
         .route(ADMIN_CACHE_PATH, get(get_cache_status).delete(purge_cache))
+        .route(ADMIN_TLS_STATUS_PATH, get(get_tls_status))
         // Service CRUD endpoints
         .route(ADMIN_SERVICES_PATH, get(list_services).post(create_service))
         .route(
@@ -1795,6 +1847,8 @@ impl AdminAxumService {
         listener: TcpListener,
         config_path: PathBuf,
         active_config: Arc<ArcSwap<RuntimeConfig>>,
+        acme_status: crate::acme::SharedStatus,
+        tls_resolver: Option<Arc<crate::tls::CertResolver>>,
     ) -> Self {
         Self {
             name: "prx-admin-axum".to_string(),
@@ -1803,6 +1857,8 @@ impl AdminAxumService {
             state: AdminState {
                 config_admin: ConfigAdmin::new(config_path),
                 active_config,
+                acme_status,
+                tls_resolver,
             },
         }
     }

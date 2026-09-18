@@ -63,7 +63,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T109](T109-micro-cache.md) | In-memory micro-cache สำหรับ GET | L | T102 | ✅ done |
 | [T110](T110-compression.md) | gzip/brotli response compression | M | T106 | ✅ done |
 | [T111](T111-tls-perf-multicert.md) | TLS: session resumption, ALPN, multi-cert SNI | L | T104 | 🟡 multi-cert SNI done (TLS เคยพังทั้งหมด) |
-| [T112](T112-acme-auto-tls.md) | ACME auto TLS (Let's Encrypt) | L | T111 |
+| [T112](T112-acme-auto-tls.md) | ACME auto TLS (Let's Encrypt) | L | T111 | ✅ done (เทสต์กับ pebble จริง) |
 | [T113](T113-active-health-check.md) | Active health check prober (เสริม passive CB) | M | — | ✅ done |
 | [T114](T114-lb-least-conn-sticky.md) | LB: least_conn, P2C-EWMA, sticky session | M | T105 | ✅ done |
 | [T115](T115-ws-grpc-conformance.md) | เทสต์จริงของ WebSocket + gRPC streaming | M | — | ✅ done (เจอบั๊ก 2 ตัว) |
@@ -138,6 +138,12 @@ T106 เจออีกสองเรื่อง:
 |---|---|---|
 | **Web UI + admin API ตายตั้งแต่ start** — `admin_router()` ใช้ path syntax `:name` ของ axum 0.7 แต่ repo ใช้ axum 0.8 | router panic → thread admin ตาย (proxy ยังวิ่ง จึงไม่มีใครสังเกต) | ✅ แก้แล้ว |
 | **metrics หายเมื่อปิด access log** — `observe_request` อยู่ใต้ `if !access_log { return; }` | `/metrics` ว่างเปล่าใน production ที่ปิด access log | ✅ แก้แล้ว |
+
+T112 เจอเรื่องหนึ่งที่เทสต์จับได้:
+
+| สิ่งที่เจอ | ผลกระทบ | สถานะ |
+|---|---|---|
+| **`/.well-known/acme-challenge/` หลุดไป upstream** — เงื่อนไขเดิมเช็คว่า "มี challenge ค้างอยู่ไหม" แต่ระหว่าง order สอง order store ว่าง | token ที่ไม่รู้จักถูก proxy ไปหา backend แทนที่จะเป็น 404 | ✅ แก้แล้ว (เปิด ACME = prx เป็นเจ้าของ prefix เสมอ) |
 
 งานถัดไป: วัด proxy-vs-proxy จริงเมื่อมีเครื่องที่มี Docker (T002) แล้วไล่ T104/T105 ต่อ
 

@@ -1,10 +1,21 @@
 export type LbStrategy = 'round_robin' | 'random' | 'hash';
 
+export interface AcmeConfig {
+  enabled: boolean;
+  email: string[];
+  directory_url: string;
+  domains: string[];
+  storage_dir: string;
+  renew_before_days: number;
+  ca_root_path: string | null;
+}
+
 export interface TlsConfig {
   listen: string;
   cert_path: string;
   key_path: string;
   enable_h2: boolean;
+  acme?: AcmeConfig;
 }
 
 export interface UpstreamConfig {

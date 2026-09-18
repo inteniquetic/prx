@@ -4,6 +4,7 @@
 //! integration tests and benchmarks (`benches/`) can exercise the routing and
 //! configuration internals directly.
 
+pub mod acme;
 pub mod admin;
 pub mod cache;
 pub mod config;

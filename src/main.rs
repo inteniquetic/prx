@@ -3,17 +3,18 @@ use std::{env, path::PathBuf, sync::Arc, time::Duration};
 use anyhow::Context;
 use arc_swap::ArcSwap;
 use pingora::{apps::HttpServerOptions, listeners::tls::TlsSettings, prelude::*};
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use prx::{
+    acme::{AcmeStatus, ChallengeStore, load_stored_certificate, spawn_acme},
     admin::{AdminAxumService, DEFAULT_ADMIN_LISTEN, bind_admin_listener},
     config::PrxConfig,
     health::spawn_health_checker,
     proxy::PrxProxy,
     reload::spawn_config_watcher,
     runtime::RuntimeConfig,
-    tls::CertResolver,
+    tls::{CertResolver, ResolverHandle},
 };
 
 fn main() {
@@ -42,6 +43,11 @@ fn run() -> anyhow::Result<()> {
         app_config.clone(),
     )));
 
+    // Shared with the ACME task so the plaintext listener can answer HTTP-01
+    // challenges for the TLS listener's certificates.
+    let acme_challenges = Arc::new(ChallengeStore::new());
+    let acme_status: Arc<std::sync::RwLock<AcmeStatus>> = Arc::default();
+
     let mut proxy_service = http_proxy_service(
         &server.configuration,
         PrxProxy::new(
@@ -50,6 +56,7 @@ fn run() -> anyhow::Result<()> {
             app_config.server.health_path.clone(),
             app_config.server.ready_path.clone(),
             app_config.compression.clone(),
+            acme_challenges.clone(),
         ),
     );
 
@@ -72,18 +79,61 @@ fn run() -> anyhow::Result<()> {
         proxy_service.add_tcp(addr);
     }
 
+    let mut tls_resolver: Option<Arc<CertResolver>> = None;
     let tls_service = match &app_config.server.tls {
         Some(tls) => {
             // Certificates are loaded and checked here rather than during a
             // handshake: a bad path or a key that does not match its
             // certificate should stop startup, not break every client.
-            let resolver = CertResolver::load(&tls.all_certs())
-                .context("failed to load the configured TLS certificates")?;
+            let configured = tls.all_certs();
+            let resolver = Arc::new(if configured.is_empty() {
+                // Nothing on disk: ACME will install the first certificate.
+                CertResolver::empty()
+            } else {
+                CertResolver::load(&configured)
+                    .context("failed to load the configured TLS certificates")?
+            });
+
+            if tls.acme.enabled {
+                // From here on prx answers the challenge prefix itself.
+                acme_challenges.activate();
+
+                // A certificate from a previous run means this restart serves
+                // traffic immediately instead of waiting for a fresh order.
+                match load_stored_certificate(&tls.acme, &resolver) {
+                    Ok(true) => info!("loaded the stored ACME certificate"),
+                    Ok(false) => info!("no stored ACME certificate yet; one will be ordered"),
+                    Err(err) => warn!(error = %err, "could not load the stored ACME certificate"),
+                }
+
+                if let Ok(mut status) = acme_status.write() {
+                    status.enabled = true;
+                    status.directory_url = tls.acme.directory_url.clone();
+                    status.domains = tls.acme.domains.clone();
+                    status.staging = tls.acme.directory_url.contains("staging");
+                }
+
+                spawn_acme(
+                    tls.acme.clone(),
+                    resolver.clone(),
+                    acme_challenges.clone(),
+                    acme_status.clone(),
+                )
+                .context("failed to start the ACME task")?;
+                info!(
+                    domains = tls.acme.domains.join(",").as_str(),
+                    directory = tls.acme.directory_url.as_str(),
+                    "automatic certificates are enabled"
+                );
+            }
+
             resolver.report_expiry();
             let cert_count = resolver.len();
+            tls_resolver = Some(resolver.clone());
 
-            let mut tls_settings = TlsSettings::with_callbacks(Box::new(resolver))
-                .map_err(|err| anyhow::anyhow!("failed to initialize TLS settings: {err}"))?;
+            let mut tls_settings =
+                TlsSettings::with_callbacks(Box::new(ResolverHandle(resolver.clone())))
+                    .map_err(|err| anyhow::anyhow!("failed to initialize TLS settings: {err}"))?;
             if tls.enable_h2 {
                 tls_settings.enable_h2();
             }
@@ -98,6 +148,7 @@ fn run() -> anyhow::Result<()> {
                     app_config.server.health_path.clone(),
                     app_config.server.ready_path.clone(),
                     app_config.compression.clone(),
+                    acme_challenges.clone(),
                 ),
             );
             service.add_tls_with_settings(&tls.listen, None, tls_settings);
@@ -139,6 +190,8 @@ fn run() -> anyhow::Result<()> {
         admin_listener,
         config_path.clone(),
         runtime_config.clone(),
+        acme_status.clone(),
+        tls_resolver.clone(),
     ));
     spawn_config_watcher(
         config_path.clone(),

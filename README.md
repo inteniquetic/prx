@@ -176,4 +176,32 @@ does not match its certificate, stops the process rather than failing every
 handshake. `prx_tls_cert_expiry_seconds{domain}` reports how long each one has
 left.
 
+### Automatic certificates (ACME)
+
+Or let prx obtain and renew them itself. It answers the HTTP-01 challenge on
+its own plaintext listener and installs the issued certificate into the
+running TLS listener without a restart:
+
+```toml
+[server]
+listen = ["0.0.0.0:80"]
+
+[server.tls]
+listen = "0.0.0.0:443"
+
+[server.tls.acme]
+enabled = true
+email = ["ops@example.com"]
+domains = ["example.com", "www.example.com"]
+directory_url = "https://acme-v02.api.letsencrypt.org/directory"
+storage_dir = "/var/lib/prx/acme"
+```
+
+`directory_url` defaults to Let's Encrypt **staging**, so a misconfigured
+deployment cannot burn through the production rate limits; switch it once a
+staging run has issued successfully. If the ACME server is unreachable the
+certificate already in use keeps serving and the error is reported by
+`GET /web/tls/status` — a failing renewal never takes the proxy down. Only
+HTTP-01 is implemented, so wildcard domains are rejected at config load.
+
 See `docs/CONFIG-WIKI.md` for the full reference.

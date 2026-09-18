@@ -13,6 +13,17 @@ cert_path = "./certs/tls.crt"
 key_path = "./certs/tls.key"
 enable_h2 = true
 
+# Automatic certificates. Leave `directory_url` on staging until an order has
+# succeeded — production has strict rate limits. HTTP-01 is answered on the
+# plaintext listener above, so port 80 has to reach prx from the internet.
+# [server.tls.acme]
+# enabled = true
+# email = ["ops@example.com"]
+# domains = ["example.com", "www.example.com"]
+# directory_url = "https://acme-staging-v02.api.letsencrypt.org/directory"
+# storage_dir = "/var/lib/prx/acme"
+# renew_before_days = 30
+
 [observability]
 log_level = "info"
 access_log = true

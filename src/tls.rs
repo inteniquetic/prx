@@ -12,6 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, bail};
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use pingora::listeners::TlsAccept;
 use pingora::tls::{
@@ -39,13 +40,84 @@ pub struct LoadedCert {
     pub source: String,
 }
 
-/// Picks a certificate for a connection.
-pub struct CertResolver {
+/// The certificate set a connection is resolved against.
+#[derive(Default)]
+struct ResolverState {
     certs: Vec<Arc<LoadedCert>>,
     exact: HashMap<String, usize>,
-    /// `(suffix, index)` for `*.suffix` patterns.
+    /// `suffix -> index` for `*.suffix` patterns.
     wildcard: HashMap<String, usize>,
     default_idx: usize,
+}
+
+/// Picks a certificate for a connection.
+///
+/// The set is held in an `ArcSwap` so a renewed certificate can replace an
+/// expiring one while connections are being served: ACME renewal must not need
+/// a restart.
+pub struct CertResolver {
+    state: ArcSwap<ResolverState>,
+}
+
+impl ResolverState {
+    fn build(certs: Vec<(Arc<LoadedCert>, bool)>) -> Self {
+        let mut state = Self::default();
+        let mut default_idx = None;
+
+        for (loaded, is_default) in certs {
+            let idx = state.certs.len();
+            for domain in &loaded.domains {
+                let domain = domain.to_ascii_lowercase();
+                match domain.strip_prefix("*.") {
+                    Some(suffix) => {
+                        state.wildcard.insert(suffix.to_string(), idx);
+                    }
+                    None => {
+                        state.exact.insert(domain, idx);
+                    }
+                }
+            }
+            if is_default && default_idx.is_none() {
+                default_idx = Some(idx);
+            }
+            state.certs.push(loaded);
+        }
+
+        // Without an explicit default, the first certificate answers for
+        // clients that send no SNI or an unknown name; refusing the handshake
+        // instead would be a worse failure mode.
+        state.default_idx = default_idx.unwrap_or(0);
+        state
+    }
+
+    fn resolve(&self, server_name: Option<&str>) -> Option<&Arc<LoadedCert>> {
+        if self.certs.is_empty() {
+            return None;
+        }
+        let Some(name) = server_name else {
+            return self.certs.get(self.default_idx);
+        };
+        let name = name.trim().to_ascii_lowercase();
+
+        if let Some(idx) = self.exact.get(&name) {
+            return self.certs.get(*idx);
+        }
+
+        // `*.example.com` also covers `example.com`, and the longest suffix
+        // wins because labels are stripped one at a time.
+        let mut candidate = name.as_str();
+        loop {
+            if let Some(idx) = self.wildcard.get(candidate) {
+                return self.certs.get(*idx);
+            }
+            match candidate.find('.') {
+                Some(dot) => candidate = &candidate[dot + 1..],
+                None => break,
+            }
+        }
+
+        self.certs.get(self.default_idx)
+    }
 }
 
 impl CertResolver {
@@ -56,74 +128,56 @@ impl CertResolver {
         }
 
         let mut certs = Vec::with_capacity(configs.len());
-        let mut exact = HashMap::new();
-        let mut wildcard = HashMap::new();
-        let mut default_idx = None;
-
         for config in configs {
-            let loaded = Arc::new(load_cert(config)?);
-            let idx = certs.len();
-
-            for domain in &loaded.domains {
-                let domain = domain.to_ascii_lowercase();
-                match domain.strip_prefix("*.") {
-                    Some(suffix) => {
-                        wildcard.insert(suffix.to_string(), idx);
-                    }
-                    None => {
-                        exact.insert(domain, idx);
-                    }
-                }
-            }
-            if config.is_default && default_idx.is_none() {
-                default_idx = Some(idx);
-            }
-            certs.push(loaded);
+            certs.push((Arc::new(load_cert(config)?), config.is_default));
         }
 
         Ok(Self {
-            // Without an explicit default, the first certificate answers for
-            // clients that send no SNI or an unknown name; refusing the
-            // handshake instead would be a worse failure mode.
-            default_idx: default_idx.unwrap_or(0),
-            certs,
-            exact,
-            wildcard,
+            state: ArcSwap::from_pointee(ResolverState::build(certs)),
         })
     }
 
-    /// Resolves a server name to a certificate.
-    pub fn resolve(&self, server_name: Option<&str>) -> &Arc<LoadedCert> {
-        let Some(name) = server_name else {
-            return &self.certs[self.default_idx];
-        };
-        let name = name.trim().to_ascii_lowercase();
-
-        if let Some(idx) = self.exact.get(&name) {
-            return &self.certs[*idx];
+    /// An empty resolver, for a listener whose certificates will arrive from
+    /// ACME. It serves nothing until the first certificate is installed.
+    pub fn empty() -> Self {
+        Self {
+            state: ArcSwap::from_pointee(ResolverState::default()),
         }
+    }
 
-        // `*.example.com` also covers `example.com`, and the longest suffix
-        // wins because labels are stripped one at a time.
-        let mut candidate = name.as_str();
-        loop {
-            if let Some(idx) = self.wildcard.get(candidate) {
-                return &self.certs[*idx];
+    /// Installs or replaces a certificate for the domains it covers, without
+    /// interrupting connections in flight.
+    pub fn install(
+        &self,
+        cert_pem: &[u8],
+        key_pem: &[u8],
+        domains: Vec<String>,
+    ) -> anyhow::Result<()> {
+        let loaded = Arc::new(load_cert_from_pem(cert_pem, key_pem, domains, "acme")?);
+        let replacing: Vec<String> = loaded.domains.clone();
+
+        let current = self.state.load();
+        let mut certs: Vec<(Arc<LoadedCert>, bool)> = Vec::with_capacity(current.certs.len() + 1);
+        for (idx, cert) in current.certs.iter().enumerate() {
+            // Drop any certificate whose domains this one takes over.
+            if cert.domains.iter().all(|domain| replacing.contains(domain)) {
+                continue;
             }
-            match candidate.find('.') {
-                Some(dot) => candidate = &candidate[dot + 1..],
-                None => break,
-            }
+            certs.push((cert.clone(), idx == current.default_idx));
         }
+        let is_default = certs.is_empty();
+        certs.push((loaded, is_default));
 
-        &self.certs[self.default_idx]
+        self.state.store(Arc::new(ResolverState::build(certs)));
+        self.report_expiry();
+        Ok(())
     }
 
     /// Publishes how long each certificate has left, so expiry can be alerted
     /// on rather than discovered by users.
     pub fn report_expiry(&self) {
         let now = now_epoch_s();
-        for cert in &self.certs {
+        for cert in &self.state.load().certs {
             let remaining = cert.not_after_epoch_s - now;
             for domain in &cert.domains {
                 metrics::set_tls_cert_expiry(domain, remaining);
@@ -148,11 +202,36 @@ impl CertResolver {
     }
 
     pub fn len(&self) -> usize {
-        self.certs.len()
+        self.state.load().certs.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.certs.is_empty()
+        self.state.load().certs.is_empty()
+    }
+
+    /// Domains currently served, with the epoch second each expires at.
+    pub fn domain_expiry(&self) -> Vec<(String, i64)> {
+        let state = self.state.load();
+        state
+            .certs
+            .iter()
+            .flat_map(|cert| {
+                cert.domains
+                    .iter()
+                    .map(|domain| (domain.clone(), cert.not_after_epoch_s))
+            })
+            .collect()
+    }
+}
+
+/// Lets an `Arc<CertResolver>` be handed to pingora while the ACME task keeps
+/// its own handle for installing renewed certificates.
+pub struct ResolverHandle(pub Arc<CertResolver>);
+
+#[async_trait]
+impl TlsAccept for ResolverHandle {
+    async fn certificate_callback(&self, ssl: &mut SslRef) {
+        self.0.certificate_callback(ssl).await
     }
 }
 
@@ -160,7 +239,16 @@ impl CertResolver {
 impl TlsAccept for CertResolver {
     async fn certificate_callback(&self, ssl: &mut SslRef) {
         let server_name = ssl.servername(NameType::HOST_NAME).map(str::to_string);
-        let cert = self.resolve(server_name.as_deref());
+        let state = self.state.load();
+        let Some(cert) = state.resolve(server_name.as_deref()) else {
+            // No certificate yet (ACME has not issued one): let the handshake
+            // fail rather than presenting something wrong.
+            warn!(
+                server_name = server_name.as_deref().unwrap_or("-"),
+                "no TLS certificate is available yet"
+            );
+            return;
+        };
 
         if let Err(err) = ssl_use_certificate(ssl, &cert.leaf) {
             warn!(error = %err, "failed to install TLS certificate");
@@ -178,50 +266,55 @@ impl TlsAccept for CertResolver {
     }
 }
 
-/// Reads one certificate and its key, and refuses anything that would fail
-/// later during a handshake.
+/// Reads one certificate and its key from disk.
 fn load_cert(config: &TlsCertConfig) -> anyhow::Result<LoadedCert> {
     let cert_bytes = std::fs::read(&config.cert_path)
         .with_context(|| format!("failed to read certificate {}", config.cert_path))?;
     let key_bytes = std::fs::read(&config.key_path)
         .with_context(|| format!("failed to read private key {}", config.key_path))?;
 
-    let mut chain = X509::stack_from_pem(&cert_bytes)
-        .with_context(|| format!("{} is not a valid PEM certificate", config.cert_path))?;
+    load_cert_from_pem(
+        &cert_bytes,
+        &key_bytes,
+        config.domains.clone(),
+        &config.cert_path,
+    )
+    .with_context(|| format!("certificate {}", config.cert_path))
+}
+
+/// Parses a certificate and key, refusing anything that would fail later during
+/// a handshake.
+fn load_cert_from_pem(
+    cert_bytes: &[u8],
+    key_bytes: &[u8],
+    configured_domains: Vec<String>,
+    source: &str,
+) -> anyhow::Result<LoadedCert> {
+    let mut chain = X509::stack_from_pem(cert_bytes).context("certificate is not valid PEM")?;
     if chain.is_empty() {
-        bail!("{} contains no certificate", config.cert_path);
+        bail!("no certificate found in the PEM data");
     }
     let leaf = chain.remove(0);
 
-    let key = PKey::private_key_from_pem(&key_bytes)
-        .with_context(|| format!("{} is not a valid PEM private key", config.key_path))?;
+    let key = PKey::private_key_from_pem(key_bytes).context("private key is not valid PEM")?;
 
     // A key that does not match the certificate produces a handshake failure
     // for every client, so catch it at load time instead.
-    let public_key = leaf
-        .public_key()
-        .with_context(|| format!("{} has no usable public key", config.cert_path))?;
+    let public_key = leaf.public_key().context("no usable public key")?;
     if !key.public_eq(&public_key) {
-        bail!(
-            "private key {} does not match certificate {}",
-            config.key_path,
-            config.cert_path
-        );
+        bail!("private key does not match certificate");
     }
 
     let not_after_epoch_s = asn1_time_to_epoch_s(leaf.not_after().to_string().as_str())
         .unwrap_or_else(|| now_epoch_s() + 365 * 86_400);
 
-    let domains = if config.domains.is_empty() {
+    let domains = if configured_domains.is_empty() {
         domains_from_cert(&leaf)
     } else {
-        config.domains.clone()
+        configured_domains
     };
     if domains.is_empty() {
-        bail!(
-            "certificate {} lists no domains and none could be read from it",
-            config.cert_path
-        );
+        bail!("certificate lists no domains and none could be read from it");
     }
 
     Ok(LoadedCert {
@@ -230,7 +323,7 @@ fn load_cert(config: &TlsCertConfig) -> anyhow::Result<LoadedCert> {
         chain,
         key,
         not_after_epoch_s,
-        source: config.cert_path.clone(),
+        source: source.to_string(),
     })
 }
 
@@ -259,6 +352,10 @@ fn domains_from_cert(cert: &X509) -> Vec<String> {
 }
 
 /// Parses OpenSSL's `not_after` rendering (`Mon DD HH:MM:SS YYYY GMT`).
+pub fn parse_not_after(text: &str) -> Option<i64> {
+    asn1_time_to_epoch_s(text)
+}
+
 fn asn1_time_to_epoch_s(text: &str) -> Option<i64> {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",

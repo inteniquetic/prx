@@ -52,9 +52,10 @@ Validation:
 | Field | Type | Default | Required | Description |
 |---|---|---|---|---|
 | `listen` | `string` | - | Yes (if `server.tls` exists) | HTTPS listener, e.g. `0.0.0.0:8443` |
-| `cert_path` | `string` | - | Yes | Certificate path |
-| `key_path` | `string` | - | Yes | Private key path |
+| `cert_path` | `string` | - | Unless ACME is on | Certificate path |
+| `key_path` | `string` | - | Unless ACME is on | Private key path |
 | `enable_h2` | `bool` | `true` | No | Enable HTTP/2 on TLS listener |
+| `[server.tls.acme]` | table | - | No | Automatic certificates, see 3.3a1 |
 
 ### 3.3 `[observability]`
 
@@ -175,6 +176,88 @@ which `Cargo.toml` enables. Building needs `libssl-dev` and running needs
 `libssl3`; the Dockerfile installs both. Without that feature pingora compiles
 a stub whose handshake is `unimplemented!()`, so a TLS listener would accept
 connections and then panic the worker.
+
+### 3.3a1 `[server.tls.acme]` — automatic certificates
+
+Ordering, installing and renewing certificates over ACME (Let's Encrypt and
+anything that speaks the same protocol), so nobody has to touch a certificate
+file again.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `bool` | `false` | Turn automatic certificates on |
+| `domains` | `string[]` | - | Names to request a certificate for. Required when enabled |
+| `email` | `string[]` | `[]` | Contact addresses registered with the ACME account |
+| `directory_url` | `string` | Let's Encrypt **staging** | The ACME directory endpoint |
+| `storage_dir` | `string` | `./acme` | Where the account key and the issued certificate are kept |
+| `renew_before_days` | `u32` | `30` | Renew this many days before expiry (1-89) |
+| `ca_root_path` | `string` | - | PEM root that signs the ACME server's own TLS certificate. Only needed for a private CA (step-ca, Pebble) |
+
+```toml
+[server]
+# The HTTP-01 challenge is answered on this listener, so port 80 has to
+# reach prx from the internet.
+listen = ["0.0.0.0:80"]
+
+[server.tls]
+listen = "0.0.0.0:443"
+
+[server.tls.acme]
+enabled = true
+email = ["ops@example.com"]
+domains = ["example.com", "www.example.com"]
+directory_url = "https://acme-v02.api.letsencrypt.org/directory"
+storage_dir = "/var/lib/prx/acme"
+renew_before_days = 30
+```
+
+**`directory_url` defaults to staging on purpose.** Let's Encrypt's production
+endpoint has strict rate limits, and a misconfigured deployment would burn
+through them in a few restarts. Point it at production once a staging run has
+issued successfully; `/web/tls/status` reports `"staging": true` so a staging
+certificate is never mistaken for a real one.
+
+How it works:
+
+- prx answers `/.well-known/acme-challenge/<token>` on its **plaintext**
+  listener. That prefix belongs to prx whenever ACME is enabled, so an
+  unknown token is a `404` rather than something an upstream ever sees.
+  With ACME off, the path routes like any other.
+- The issued certificate is installed into the running TLS listener
+  **without a restart** — existing connections are untouched and the next
+  handshake uses the new certificate.
+- The certificate and the account key are written to `storage_dir` with
+  `0600` (the directory `0700`), and reloaded on the next start, so a restart
+  serves traffic immediately instead of waiting for a fresh order.
+- Renewal is checked every 12 hours. A failed order is retried with backoff
+  from 1 minute to 1 hour.
+
+Failure is survivable by design: if the ACME server is unreachable, the
+certificate already in use keeps serving and the error shows up in
+`GET /web/tls/status` rather than taking the proxy down.
+
+```json
+{
+  "acme": {
+    "enabled": true,
+    "directory_url": "https://acme-v02.api.letsencrypt.org/directory",
+    "domains": ["example.com"],
+    "staging": false,
+    "last_attempt_epoch_s": 1789751204,
+    "last_success_epoch_s": 1789751206,
+    "last_error": null,
+    "certificate_expiry_epoch_s": 1797527206
+  },
+  "certificates": [
+    { "domain": "example.com", "expires_epoch_s": 1797527206, "expires_in_days": 89 }
+  ]
+}
+```
+
+**Limits.** Only the HTTP-01 challenge is implemented, so wildcard domains are
+rejected at config load — those need DNS-01. `[[server.tls.cert]]` and ACME can
+be used together: files cover the domains you manage by hand, ACME covers the
+rest.
 
 ### 3.3b `[compression]`
 
@@ -631,6 +714,10 @@ expected to sit idle; applying them would drop healthy websockets.
 - `[server.tls] is configured but has no certificate`
 - `[server.tls] cert_path and key_path must be set together`
 - `only one [[server.tls.cert]] can be marked is_default = true`
+- `[server.tls.acme] needs at least one domain`
+- `[server.tls.acme] directory_url must not be empty`
+- `[server.tls.acme] renew_before_days must be between 1 and 89`
+- `[server.tls.acme] cannot use the http-01 challenge for the wildcard domain '...'`
 - `private key <path> does not match certificate <path>`
 - `compression.level must be between 1 and 11`
 - `route '<name>' cache.ttl_ms must be > 0`

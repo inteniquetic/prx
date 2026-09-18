@@ -36,11 +36,16 @@ export const validationIssues = derived(configStore, ($config) => {
     if (!$config.server.tls.listen.trim()) {
       issues.push('server.tls.listen ห้ามว่าง');
     }
-    if (!$config.server.tls.cert_path.trim()) {
-      issues.push('server.tls.cert_path ห้ามว่าง');
+    // ACME ออก cert ให้เอง จึงไม่ต้องมีไฟล์ cert/key
+    const acmeOn = $config.server.tls.acme?.enabled === true;
+    if (!acmeOn && !$config.server.tls.cert_path.trim()) {
+      issues.push('server.tls.cert_path ห้ามว่าง (หรือเปิด server.tls.acme)');
     }
-    if (!$config.server.tls.key_path.trim()) {
-      issues.push('server.tls.key_path ห้ามว่าง');
+    if (!acmeOn && !$config.server.tls.key_path.trim()) {
+      issues.push('server.tls.key_path ห้ามว่าง (หรือเปิด server.tls.acme)');
+    }
+    if (acmeOn && $config.server.tls.acme!.domains.length === 0) {
+      issues.push('server.tls.acme ต้องมีอย่างน้อย 1 domain');
     }
   }
 

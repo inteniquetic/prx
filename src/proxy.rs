@@ -13,6 +13,7 @@ use pingora::prelude::*;
 use pingora::upstreams::peer::ALPN;
 use tracing::{debug, error, info, warn};
 
+use crate::acme::{CHALLENGE_PREFIX, ChallengeStore};
 use crate::cache::{Lookup, is_cacheable_response, storable_headers};
 use crate::config::{LbStrategy, RateLimitKey, StickyMode, UpstreamH2};
 use crate::headers::HeaderContext;
@@ -26,6 +27,7 @@ use crate::runtime::{RuntimeConfig, hash_key, normalize_host};
 struct StaticNames {
     health: Arc<str>,
     ready: Arc<str>,
+    acme: Arc<str>,
     no_route: Arc<str>,
     method_not_allowed: Arc<str>,
     unknown: Arc<str>,
@@ -36,6 +38,7 @@ impl Default for StaticNames {
         Self {
             health: Arc::from("health"),
             ready: Arc::from("ready"),
+            acme: Arc::from("acme_challenge"),
             no_route: Arc::from("no_route"),
             method_not_allowed: Arc::from("method_not_allowed"),
             unknown: Arc::from("unknown"),
@@ -50,6 +53,8 @@ pub struct PrxProxy {
     ready_path: String,
     names: StaticNames,
     compression: crate::config::CompressionConfig,
+    /// Answers to in-flight ACME HTTP-01 challenges. Empty unless ACME is on.
+    acme_challenges: Arc<ChallengeStore>,
 }
 
 impl PrxProxy {
@@ -59,6 +64,7 @@ impl PrxProxy {
         health_path: String,
         ready_path: String,
         compression: crate::config::CompressionConfig,
+        acme_challenges: Arc<ChallengeStore>,
     ) -> Self {
         Self {
             active_config,
@@ -67,6 +73,7 @@ impl PrxProxy {
             ready_path,
             names: StaticNames::default(),
             compression,
+            acme_challenges,
         }
     }
 
@@ -462,10 +469,13 @@ impl RetryStage {
 }
 
 /// What `request_filter` decided while the request header was still borrowed.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Decision {
     Health,
     Ready,
+    /// An ACME HTTP-01 challenge with the answer to send back.
+    AcmeChallenge(String),
+    AcmeChallengeUnknown,
     Route(RouteMatch),
 }
 
@@ -576,7 +586,16 @@ impl ProxyHttp for PrxProxy {
                     | Method::DELETE
             );
 
-            if path == self.health_path {
+            if let Some(token) = path.strip_prefix(CHALLENGE_PREFIX)
+                && self.acme_challenges.is_active()
+            {
+                match self.acme_challenges.get(token) {
+                    Some(answer) => Decision::AcmeChallenge(answer),
+                    // An unknown token is a probe for someone else's
+                    // challenge, or a stale one.
+                    None => Decision::AcmeChallengeUnknown,
+                }
+            } else if path == self.health_path {
                 Decision::Health
             } else if path == self.ready_path {
                 Decision::Ready
@@ -592,6 +611,23 @@ impl ProxyHttp for PrxProxy {
         };
 
         match decision {
+            Decision::AcmeChallenge(answer) => {
+                ctx.route_name = Some(self.names.acme.clone());
+                let mut header = ResponseHeader::build(200, Some(2))?;
+                header.insert_header("content-type", "text/plain")?;
+                header.insert_header("content-length", answer.len().to_string())?;
+                session
+                    .write_response_header(Box::new(header), false)
+                    .await?;
+                session
+                    .write_response_body(Some(Bytes::from(answer)), true)
+                    .await?;
+                Ok(true)
+            }
+            Decision::AcmeChallengeUnknown => {
+                ctx.route_name = Some(self.names.acme.clone());
+                Self::respond_text(session, 404, "unknown_acme_challenge\n").await
+            }
             Decision::Health => {
                 ctx.route_name = Some(self.names.health.clone());
                 Self::respond_text(session, 200, "ok\n").await
@@ -1275,6 +1311,7 @@ mod tests {
             "/healthz".to_string(),
             "/readyz".to_string(),
             Default::default(),
+            Arc::new(ChallengeStore::new()),
         )
     }
 

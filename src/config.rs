@@ -44,11 +44,30 @@ impl PrxConfig {
 
         if let Some(tls) = &self.server.tls {
             let certs = tls.all_certs();
-            if certs.is_empty() {
+            if certs.is_empty() && !tls.acme.enabled {
                 bail!(
-                    "[server.tls] is configured but has no certificate: add [[server.tls.cert]] \
-                     or cert_path/key_path"
+                    "[server.tls] is configured but has no certificate: add [[server.tls.cert]], \
+                     cert_path/key_path, or enable [server.tls.acme]"
                 );
+            }
+            if tls.acme.enabled {
+                if tls.acme.domains.is_empty() {
+                    bail!("[server.tls.acme] needs at least one domain");
+                }
+                if tls.acme.directory_url.trim().is_empty() {
+                    bail!("[server.tls.acme] directory_url must not be empty");
+                }
+                if tls.acme.renew_before_days == 0 || tls.acme.renew_before_days > 89 {
+                    bail!("[server.tls.acme] renew_before_days must be between 1 and 89");
+                }
+                for domain in &tls.acme.domains {
+                    if domain.starts_with("*.") {
+                        bail!(
+                            "[server.tls.acme] cannot use the http-01 challenge for the wildcard \
+                             domain '{domain}'; wildcards need dns-01, which prx does not support yet"
+                        );
+                    }
+                }
             }
             if tls.cert_path.is_some() != tls.key_path.is_some() {
                 bail!("[server.tls] cert_path and key_path must be set together");
@@ -424,6 +443,63 @@ pub struct TlsConfig {
     /// Certificates to choose from by SNI.
     #[serde(rename = "cert", default)]
     pub certs: Vec<TlsCertConfig>,
+    /// Obtain and renew certificates automatically.
+    #[serde(default)]
+    pub acme: AcmeConfig,
+}
+
+/// Automatic certificates over ACME (Let's Encrypt and compatible servers).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AcmeConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Contact addresses registered with the ACME account.
+    #[serde(default)]
+    pub email: Vec<String>,
+    #[serde(default = "default_acme_directory")]
+    pub directory_url: String,
+    /// Domains to request a certificate for.
+    #[serde(default)]
+    pub domains: Vec<String>,
+    /// Where the account key and issued certificate are kept.
+    #[serde(default = "default_acme_storage")]
+    pub storage_dir: String,
+    /// Renew this many days before expiry.
+    #[serde(default = "default_renew_before_days")]
+    pub renew_before_days: u32,
+    /// PEM file with the CA that signs the ACME server's own TLS certificate.
+    /// Needed for a private ACME server (step-ca, Pebble); public providers
+    /// are trusted through the system roots.
+    #[serde(default)]
+    pub ca_root_path: Option<String>,
+}
+
+impl Default for AcmeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            email: Vec::new(),
+            directory_url: default_acme_directory(),
+            domains: Vec::new(),
+            storage_dir: default_acme_storage(),
+            renew_before_days: default_renew_before_days(),
+            ca_root_path: None,
+        }
+    }
+}
+
+fn default_acme_directory() -> String {
+    // Staging by default: the production endpoint has strict rate limits, and
+    // a misconfigured deployment should not burn through them.
+    "https://acme-staging-v02.api.letsencrypt.org/directory".to_string()
+}
+
+fn default_acme_storage() -> String {
+    "./acme".to_string()
+}
+
+fn default_renew_before_days() -> u32 {
+    30
 }
 
 impl TlsConfig {
