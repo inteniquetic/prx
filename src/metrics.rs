@@ -51,6 +51,186 @@ static CIRCUIT_OPEN_STATE: Lazy<IntGaugeVec> = Lazy::new(|| {
     .expect("failed to register prx_upstream_circuit_open")
 });
 
+static RETRY_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_retry_total",
+        "Retries attempted, grouped by route and reason",
+        &["route", "reason"]
+    )
+    .expect("failed to register prx_retry_total")
+});
+
+static RETRY_DENIED_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_retry_denied_total",
+        "Retries refused, grouped by route and why",
+        &["route", "reason"]
+    )
+    .expect("failed to register prx_retry_denied_total")
+});
+
+static REQUEST_TIMEOUT_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_request_timeout_total",
+        "Requests that ran out of their total time budget",
+        &["route"]
+    )
+    .expect("failed to register prx_request_timeout_total")
+});
+
+static HEALTH_CHECK_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_health_check_total",
+        "Active health check probes, grouped by service/upstream/result",
+        &["service", "upstream", "result"]
+    )
+    .expect("failed to register prx_health_check_total")
+});
+
+static UPSTREAM_HEALTHY: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "prx_upstream_healthy",
+        "Whether the active health check considers an upstream usable (1=yes)",
+        &["service", "upstream"]
+    )
+    .expect("failed to register prx_upstream_healthy")
+});
+
+static UPSTREAM_INFLIGHT: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "prx_upstream_inflight",
+        "Requests currently in flight per upstream",
+        &["service", "upstream"]
+    )
+    .expect("failed to register prx_upstream_inflight")
+});
+
+static UPSTREAM_EWMA_MS: Lazy<prometheus::GaugeVec> = Lazy::new(|| {
+    prometheus::register_gauge_vec!(
+        "prx_upstream_ewma_ms",
+        "Moving average latency per upstream, in milliseconds",
+        &["service", "upstream"]
+    )
+    .expect("failed to register prx_upstream_ewma_ms")
+});
+
+pub fn set_upstream_inflight(service: &str, upstream: &str, inflight: usize) {
+    UPSTREAM_INFLIGHT
+        .with_label_values(&[service, upstream])
+        .set(inflight as i64);
+}
+
+pub fn set_upstream_ewma_ms(service: &str, upstream: &str, ewma_ms: f64) {
+    UPSTREAM_EWMA_MS
+        .with_label_values(&[service, upstream])
+        .set(ewma_ms);
+}
+
+pub fn inc_health_check(service: &str, upstream: &str, result: &str) {
+    HEALTH_CHECK_TOTAL
+        .with_label_values(&[service, upstream, result])
+        .inc();
+}
+
+pub fn set_upstream_healthy(service: &str, upstream: &str, healthy: bool) {
+    UPSTREAM_HEALTHY
+        .with_label_values(&[service, upstream])
+        .set(if healthy { 1 } else { 0 });
+}
+
+static RATE_LIMITED_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_rate_limited_total",
+        "Requests rejected by a limit, grouped by route and which limit",
+        &["route", "kind"]
+    )
+    .expect("failed to register prx_rate_limited_total")
+});
+
+static LIMITER_ENTRIES: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "prx_limiter_entries",
+        "Keys currently tracked by a route's rate limiter",
+        &["route"]
+    )
+    .expect("failed to register prx_limiter_entries")
+});
+
+static CACHE_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_cache_total",
+        "Cache lookups by outcome (hit, miss, miss_follower)",
+        &["route", "result"]
+    )
+    .expect("failed to register prx_cache_total")
+});
+
+static CACHE_ENTRIES: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "prx_cache_entries",
+        "Responses currently stored per route",
+        &["route"]
+    )
+    .expect("failed to register prx_cache_entries")
+});
+
+static CACHE_BYTES: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "prx_cache_bytes",
+        "Bytes currently stored per route",
+        &["route"]
+    )
+    .expect("failed to register prx_cache_bytes")
+});
+
+static TLS_CERT_EXPIRY: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "prx_tls_cert_expiry_seconds",
+        "Seconds until a TLS certificate expires, per domain",
+        &["domain"]
+    )
+    .expect("failed to register prx_tls_cert_expiry_seconds")
+});
+
+pub fn set_tls_cert_expiry(domain: &str, seconds_remaining: i64) {
+    TLS_CERT_EXPIRY
+        .with_label_values(&[domain])
+        .set(seconds_remaining);
+}
+
+pub fn inc_cache(route: &str, result: &str) {
+    CACHE_TOTAL.with_label_values(&[route, result]).inc();
+}
+
+pub fn set_cache_size(route: &str, entries: usize, bytes: usize) {
+    CACHE_ENTRIES
+        .with_label_values(&[route])
+        .set(entries as i64);
+    CACHE_BYTES.with_label_values(&[route]).set(bytes as i64);
+}
+
+pub fn inc_rate_limited(route: &str, kind: &str) {
+    RATE_LIMITED_TOTAL.with_label_values(&[route, kind]).inc();
+}
+
+pub fn set_limiter_entries(route: &str, entries: usize) {
+    LIMITER_ENTRIES
+        .with_label_values(&[route])
+        .set(entries as i64);
+}
+
+pub fn inc_retry(route: &str, reason: &str) {
+    RETRY_TOTAL.with_label_values(&[route, reason]).inc();
+}
+
+pub fn inc_retry_denied(route: &str, reason: &str) {
+    RETRY_DENIED_TOTAL.with_label_values(&[route, reason]).inc();
+}
+
+pub fn inc_request_timeout(route: &str) {
+    REQUEST_TIMEOUT_TOTAL.with_label_values(&[route]).inc();
+}
+
 pub fn observe_request(route: &str, status: u16, latency_ms: f64) {
     let status_label = status.to_string();
     REQUESTS_TOTAL

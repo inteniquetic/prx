@@ -7,8 +7,10 @@ cargo fmt -- --check
 echo "[2/4] cargo clippy --all-targets -- -D warnings"
 cargo clippy --all-targets -- -D warnings
 
-echo "[3/4] cargo test --all-targets -- --test-threads=1"
-cargo test --all-targets -- --test-threads=1
+echo "[3/4] cargo test --lib --bins --tests -- --test-threads=1"
+# Benches are excluded on purpose: criterion uses its own harness and rejects
+# libtest flags such as --test-threads. They are covered by .github/workflows/perf.yml.
+cargo test --lib --bins --tests -- --test-threads=1
 
 echo "[4/4] cargo audit"
 if ! command -v cargo-audit >/dev/null 2>&1; then

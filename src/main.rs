@@ -1,24 +1,20 @@
-mod admin;
-mod config;
-mod metrics;
-mod proxy;
-mod reload;
-mod runtime;
-
 use std::{env, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use arc_swap::ArcSwap;
-use pingora::{listeners::tls::TlsSettings, prelude::*};
-use tracing::info;
+use pingora::{apps::HttpServerOptions, listeners::tls::TlsSettings, prelude::*};
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-use crate::{
+use prx::{
+    acme::{AcmeStatus, ChallengeStore, load_stored_certificate, spawn_acme},
     admin::{AdminAxumService, DEFAULT_ADMIN_LISTEN, bind_admin_listener},
     config::PrxConfig,
+    health::spawn_health_checker,
     proxy::PrxProxy,
     reload::spawn_config_watcher,
     runtime::RuntimeConfig,
+    tls::{CertResolver, ResolverHandle},
 };
 
 fn main() {
@@ -47,6 +43,11 @@ fn run() -> anyhow::Result<()> {
         app_config.clone(),
     )));
 
+    // Shared with the ACME task so the plaintext listener can answer HTTP-01
+    // challenges for the TLS listener's certificates.
+    let acme_challenges = Arc::new(ChallengeStore::new());
+    let acme_status: Arc<std::sync::RwLock<AcmeStatus>> = Arc::default();
+
     let mut proxy_service = http_proxy_service(
         &server.configuration,
         PrxProxy::new(
@@ -54,26 +55,112 @@ fn run() -> anyhow::Result<()> {
             app_config.observability.access_log,
             app_config.server.health_path.clone(),
             app_config.server.ready_path.clone(),
+            app_config.compression.clone(),
+            acme_challenges.clone(),
         ),
     );
+
+    if app_config.server.h2c {
+        // Pingora peeks for the h2 preface and falls back to HTTP/1.1, so this
+        // costs nothing for HTTP/1.1 clients and is what cleartext gRPC needs.
+        //
+        // It must not be set on the TLS service: a TLS stream cannot be peeked,
+        // so pingora would treat every connection as h2 even when ALPN settled
+        // on http/1.1, and HTTP/1.1 clients would get an h2 frame as their
+        // response body.
+        if let Some(app) = proxy_service.app_logic_mut() {
+            let mut options = HttpServerOptions::default();
+            options.h2c = true;
+            app.server_options = Some(options);
+        }
+    }
 
     for addr in &app_config.server.listen {
         proxy_service.add_tcp(addr);
     }
 
-    if let Some(tls) = &app_config.server.tls {
-        let mut tls_settings = TlsSettings::intermediate(&tls.cert_path, &tls.key_path)
-            .with_context(|| {
-                format!(
-                    "failed to initialize TLS settings using cert={} key={}",
-                    tls.cert_path, tls.key_path
+    let mut tls_resolver: Option<Arc<CertResolver>> = None;
+    let tls_service = match &app_config.server.tls {
+        Some(tls) => {
+            // Certificates are loaded and checked here rather than during a
+            // handshake: a bad path or a key that does not match its
+            // certificate should stop startup, not break every client.
+            let configured = tls.all_certs();
+            let resolver = Arc::new(if configured.is_empty() {
+                // Nothing on disk: ACME will install the first certificate.
+                CertResolver::empty()
+            } else {
+                CertResolver::load(&configured)
+                    .context("failed to load the configured TLS certificates")?
+            });
+
+            if tls.acme.enabled {
+                // From here on prx answers the challenge prefix itself.
+                acme_challenges.activate();
+
+                // A certificate from a previous run means this restart serves
+                // traffic immediately instead of waiting for a fresh order.
+                match load_stored_certificate(&tls.acme, &resolver) {
+                    Ok(true) => info!("loaded the stored ACME certificate"),
+                    Ok(false) => info!("no stored ACME certificate yet; one will be ordered"),
+                    Err(err) => warn!(error = %err, "could not load the stored ACME certificate"),
+                }
+
+                if let Ok(mut status) = acme_status.write() {
+                    status.enabled = true;
+                    status.directory_url = tls.acme.directory_url.clone();
+                    status.domains = tls.acme.domains.clone();
+                    status.staging = tls.acme.directory_url.contains("staging");
+                }
+
+                spawn_acme(
+                    tls.acme.clone(),
+                    resolver.clone(),
+                    acme_challenges.clone(),
+                    acme_status.clone(),
                 )
-            })?;
-        if tls.enable_h2 {
-            tls_settings.enable_h2();
+                .context("failed to start the ACME task")?;
+                info!(
+                    domains = tls.acme.domains.join(",").as_str(),
+                    directory = tls.acme.directory_url.as_str(),
+                    "automatic certificates are enabled"
+                );
+            }
+
+            resolver.report_expiry();
+            let cert_count = resolver.len();
+            tls_resolver = Some(resolver.clone());
+
+            let mut tls_settings =
+                TlsSettings::with_callbacks(Box::new(ResolverHandle(resolver.clone())))
+                    .map_err(|err| anyhow::anyhow!("failed to initialize TLS settings: {err}"))?;
+            if tls.enable_h2 {
+                tls_settings.enable_h2();
+            }
+
+            // A separate service, so the h2c option above never applies to a
+            // TLS listener.
+            let mut service = http_proxy_service(
+                &server.configuration,
+                PrxProxy::new(
+                    runtime_config.clone(),
+                    app_config.observability.access_log,
+                    app_config.server.health_path.clone(),
+                    app_config.server.ready_path.clone(),
+                    app_config.compression.clone(),
+                    acme_challenges.clone(),
+                ),
+            );
+            service.add_tls_with_settings(&tls.listen, None, tls_settings);
+            info!(
+                listen = tls.listen.as_str(),
+                certificates = cert_count,
+                "TLS listener is enabled"
+            );
+            Some(service)
         }
-        proxy_service.add_tls_with_settings(&tls.listen, None, tls_settings);
-    }
+        None => None,
+    };
 
     let proxy_listen = app_config.server.listen.join(", ");
     let tls_listen = app_config
@@ -83,6 +170,9 @@ fn run() -> anyhow::Result<()> {
         .map(|tls| tls.listen.as_str())
         .unwrap_or("-");
     server.add_service(proxy_service);
+    if let Some(tls_service) = tls_service {
+        server.add_service(tls_service);
+    }
     info!(
         listen = proxy_listen.as_str(),
         tls_listen, "proxy server listeners are enabled"
@@ -100,11 +190,13 @@ fn run() -> anyhow::Result<()> {
         admin_listener,
         config_path.clone(),
         runtime_config.clone(),
+        acme_status.clone(),
+        tls_resolver.clone(),
     ));
     spawn_config_watcher(
         config_path.clone(),
         Duration::from_millis(app_config.server.config_reload_debounce_ms.max(50)),
-        runtime_config,
+        runtime_config.clone(),
     )
     .with_context(|| {
         format!(
@@ -112,6 +204,16 @@ fn run() -> anyhow::Result<()> {
             config_path.to_string_lossy()
         )
     })?;
+
+    if app_config
+        .services
+        .iter()
+        .any(|service| service.health_check.enabled)
+    {
+        spawn_health_checker(runtime_config.clone())
+            .context("failed to start the active health checker")?;
+        info!("active health checking is enabled");
+    }
 
     if let Some(metrics_addr) = &app_config.observability.prometheus_listen {
         let mut metrics_service = pingora::services::listening::Service::prometheus_http_service();

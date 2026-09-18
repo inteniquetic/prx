@@ -1,0 +1,89 @@
+# Benchmark harness for T001: prx vs nginx vs haproxy on identical workloads.
+#
+# Only one proxy target runs at a time (compose profiles) so the targets never
+# compete for CPU. scripts/bench.sh handles starting the right profile.
+#
+#   docker compose --profile prx     up -d --build
+#   docker compose --profile nginx   up -d
+#   docker compose --profile haproxy up -d
+#
+# CPU pinning: backends and proxy get disjoint cpusets so a fast backend cannot
+# steal cycles from the proxy under test. Override with BENCH_PROXY_CPUS /
+# BENCH_BACKEND_CPUS if your machine has a different topology.
+
+x-backend: &backend
+  build:
+    context: ./backend
+  environment:
+    LISTEN: "0.0.0.0:8000"
+    WORKERS: "2"
+  cpuset: "${BENCH_BACKEND_CPUS:-2,3}"
+  networks: [bench]
+
+services:
+  backend1:
+    <<: *backend
+    container_name: bench-backend1
+
+  backend2:
+    <<: *backend
+    container_name: bench-backend2
+
+  prx:
+    profiles: ["prx"]
+    container_name: bench-prx
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["-c", "/etc/prx/Prx.toml"]
+    environment:
+      PRX_CONFIG: "/etc/prx/Prx.toml"
+      PRX_ADMIN_LISTEN: "127.0.0.1:9091"
+    volumes:
+      - ./configs/prx.toml:/etc/prx/Prx.toml:ro
+    ports:
+      - "18080:8080"
+      - "19090:9090"
+    cpuset: "${BENCH_PROXY_CPUS:-0,1}"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    depends_on: [backend1, backend2]
+    networks: [bench]
+
+  nginx:
+    profiles: ["nginx"]
+    container_name: bench-nginx
+    image: nginx:1.27-alpine
+    volumes:
+      - ./configs/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "18080:8080"
+    cpuset: "${BENCH_PROXY_CPUS:-0,1}"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    depends_on: [backend1, backend2]
+    networks: [bench]
+
+  haproxy:
+    profiles: ["haproxy"]
+    container_name: bench-haproxy
+    image: haproxy:3.0-alpine
+    volumes:
+      - ./configs/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "18080:8080"
+    cpuset: "${BENCH_PROXY_CPUS:-0,1}"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    depends_on: [backend1, backend2]
+    networks: [bench]
+
+networks:
+  bench:
+    driver: bridge

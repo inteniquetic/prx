@@ -1,0 +1,52 @@
+# prx config for the benchmark harness.
+#
+# Kept deliberately equivalent to bench/configs/nginx.conf and
+# bench/configs/haproxy.cfg: same two upstreams, same round-robin policy,
+# no retries, no circuit breaker, access log off. Anything that differs
+# between the three files invalidates the comparison.
+
+[server]
+listen = ["0.0.0.0:8080"]
+health_path = "/healthz"
+ready_path = "/readyz"
+threads = 4
+grace_period_seconds = 1
+graceful_shutdown_timeout_seconds = 5
+
+[observability]
+log_level = "error"
+access_log = false
+prometheus_listen = "0.0.0.0:9090"
+
+[[service]]
+name = "bench"
+lb = "round_robin"
+max_retries = 0
+retry_backoff_ms = 0
+
+[service.circuit_breaker]
+enabled = false
+
+[[service.upstream]]
+addr = "backend1:8000"
+tls = false
+weight = 1
+connect_timeout_ms = 1000
+read_timeout_ms = 5000
+write_timeout_ms = 5000
+idle_timeout_ms = 60000
+
+[[service.upstream]]
+addr = "backend2:8000"
+tls = false
+weight = 1
+connect_timeout_ms = 1000
+read_timeout_ms = 5000
+write_timeout_ms = 5000
+idle_timeout_ms = 60000
+
+[[route]]
+name = "bench"
+service = "bench"
+path_prefix = "/"
+is_default = true

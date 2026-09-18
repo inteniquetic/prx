@@ -1,2 +1,5 @@
 /target
 node_modules/
+bench/backend/target
+bench/results/*.json
+!bench/results/baseline/

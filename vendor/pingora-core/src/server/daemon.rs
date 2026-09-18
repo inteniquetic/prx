@@ -88,16 +88,12 @@ fn lookup_group(name: &str) -> nix::unistd::Gid {
 fn init_supplementary_groups(user: &User) {
     let user_cstr = CString::new(user.name.as_str())
         .unwrap_or_else(|e| panic!("failed to create cstring for user {}: {e}", user.name));
-    let base_group: libc::c_int = user
-        .gid
-        .as_raw()
-        .try_into()
-        .unwrap_or_else(|_| panic!("gid {} does not fit libc::c_int", user.gid.as_raw()));
+    // The second parameter of initgroups() is gid_t (u32) on Linux and c_int
+    // (i32) on macOS, so cast to whatever the platform signature asks for
+    // instead of hard-coding one of them.
+    let base_group = user.gid.as_raw();
     let ret = unsafe {
-        libc::initgroups(
-            user_cstr.as_ptr() as *const libc::c_char,
-            base_group,
-        )
+        libc::initgroups(user_cstr.as_ptr() as *const libc::c_char, base_group as _)
     };
     if ret != 0 {
         panic!(

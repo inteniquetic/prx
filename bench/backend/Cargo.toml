@@ -1,0 +1,18 @@
+[package]
+name = "prx-bench-backend"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Detached from the prx package on purpose: the harness backend must not affect
+# the proxy's own dependency graph, lockfile or cargo audit surface.
+[workspace]
+
+[dependencies]
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "io-util", "time"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

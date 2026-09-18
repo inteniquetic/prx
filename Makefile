@@ -5,7 +5,8 @@ PRX_CONFIG ?= ./Prx.toml
 
 .DEFAULT_GOAL := help
 
-.PHONY: help run run-release build build-release check fmt fmt-check clippy test audit gate ci clean
+.PHONY: help run run-release build build-release check fmt fmt-check clippy test audit gate ci clean \
+        bench bench-all bench-compare bench-micro profile
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort
@@ -34,8 +35,8 @@ fmt-check: ## Verify formatting
 clippy: ## Run clippy with warnings as errors
 	$(CARGO) clippy --all-targets -- -D warnings
 
-test: ## Run all tests
-	$(CARGO) test --all-targets -- --test-threads=1
+test: ## Run all tests (benches excluded: criterion has its own harness)
+	$(CARGO) test --lib --bins --tests -- --test-threads=1
 
 audit: ## Run cargo audit (installs cargo-audit if missing)
 	@if ! command -v cargo-audit >/dev/null 2>&1; then \
@@ -47,6 +48,21 @@ gate: ## Run full release gate
 	bash scripts/release-gate.sh
 
 ci: gate ## Alias for gate
+
+bench: ## Run one benchmark scenario (TARGET=prx|nginx|haproxy SCENARIO=h1-keepalive)
+	bash scripts/bench.sh $(or $(TARGET),prx) $(or $(SCENARIO),h1-keepalive)
+
+bench-all: ## Run a scenario against prx, nginx and haproxy, then compare
+	bash scripts/bench.sh --all $(or $(SCENARIO),h1-keepalive)
+
+bench-compare: ## Print the comparison table for a scenario already measured
+	bash scripts/bench-compare.sh $(or $(SCENARIO),h1-keepalive)
+
+bench-micro: ## Run criterion micro-benchmarks (no docker required)
+	$(CARGO) bench --bench routing --bench config
+
+profile: ## Record a flamegraph of the proxy under load (see docs/PROFILING.md)
+	bash scripts/profile.sh $(or $(SCENARIO),h1-keepalive)
 
 clean: ## Clean build artifacts
 	$(CARGO) clean

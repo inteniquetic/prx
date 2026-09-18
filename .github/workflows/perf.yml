@@ -1,0 +1,88 @@
+name: perf
+
+# T004 perf gate.
+#
+# Runs off the normal CI path on purpose: GitHub's shared runners are noisy, so
+# this catches large regressions only and never blocks a PR by default. Add the
+# `perf` label to a PR to run the micro-benchmark gate on it.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, synchronize]
+
+jobs:
+  micro:
+    # Only on demand: nightly, manual, or a PR explicitly labelled `perf`.
+    if: >
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'perf')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run micro-benchmarks
+        run: cargo bench --bench routing --bench config -- --warm-up-time 1 --measurement-time 3
+
+      - name: Export results
+        run: python3 scripts/bench-micro-export.py --out bench/results/micro-bench-current.json
+
+      - name: Compare against committed baseline
+        run: scripts/perf-gate.sh micro
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: micro-bench-${{ github.sha }}
+          path: bench/results/micro-bench-current.json
+          retention-days: 30
+
+  macro:
+    # The full harness needs docker and a quiet machine. It is nightly-only and
+    # informational until it runs on a dedicated runner: shared runners cannot
+    # produce trustworthy proxy-vs-proxy numbers (see bench/README.md).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install load generator
+        run: |
+          curl -fsSL https://github.com/hatoo/oha/releases/latest/download/oha-linux-amd64 -o /usr/local/bin/oha
+          chmod +x /usr/local/bin/oha
+          oha --version
+
+      - name: Run harness (prx only)
+        env:
+          DURATION: "30"
+          WARMUP: "5"
+          BENCH_PROXY_CPUS: "0,1"
+          BENCH_BACKEND_CPUS: "0,1"
+        run: scripts/bench.sh prx h1-keepalive
+
+      - name: Compare against baseline
+        run: scripts/perf-gate.sh macro h1-keepalive || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-${{ github.sha }}
+          path: bench/results/*.json
+          retention-days: 30
