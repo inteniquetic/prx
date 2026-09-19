@@ -35,6 +35,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | 2 | Control plane | Admin API ปลอดภัย, config มีประวัติ/rollback, มี schema ให้ UI ใช้ | 7 |
 | 3 | Web UI | Svelte 5 + shadcn-svelte, modern, ใช้ง่าย | 10 |
 | 4 | Observability & Ops | metrics, tracing, packaging, docs | 5 |
+| 5 | [Plugin & WAF](../PLUGIN-WAF-PLAN.md) | เสียบความสามารถใหม่ได้โดยไม่แก้ hot path + WAF ที่ CRS ใช้ได้ | 10 |
 
 ## Task list
 
@@ -105,6 +106,24 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T404](T404-packaging-deploy.md) | Docker slim, systemd unit, Helm chart | M | T310 |
 | [T405](T405-docs-and-benchmark-publication.md) | เอกสารสถาปัตยกรรม + เผยแพร่ผล benchmark | M | T004 |
 
+### Phase 5 — Plugin & WAF
+
+แผนเต็มพร้อมเหตุผลของการตัดสินใจอยู่ที่ [`docs/PLUGIN-WAF-PLAN.md`](../PLUGIN-WAF-PLAN.md)
+— เฟสนี้แยกจาก roadmap เดิม เดินขนานกับ Phase 0–4 ได้
+
+| ID | Task | Size | Depends | สถานะ |
+|---|---|---|---|---|
+| [T501](T501-plugin-core.md) | Plugin trait, registry, chain ที่คอมไพล์ตอน reload | L | — | todo |
+| [T502](T502-builtins-as-plugins.md) | ย้าย header/rate limit/concurrency/cache/compression มาเป็น plugin | M | T501 | todo |
+| [T503](T503-body-inspection.md) | `request_body_filter` + buffering แบบมีเพดานสองชั้น | L | T501 | todo |
+| [T504](T504-waf-engine-spike.md) | **Spike: วัด CRS compat แล้วเลือก engine** — ประตูตัดสินของเฟส | M | T501 | todo |
+| [T505](T505-seclang-parser.md) | SecLang parser → rule model ที่คอมไพล์แล้ว | L | T504 | รอผล T504 |
+| [T506](T506-waf-operators.md) | Operators, transformations, variable extraction | L | T505 | รอผล T504 |
+| [T507](T507-crs-anomaly-scoring.md) | CRS: anomaly scoring, paranoia level, exclusion | L | T506 | รอผล T504 |
+| [T508](T508-waf-performance.md) | Prefilter, RegexSet, perf gate พร้อมตัวเลข | M | T507 | รอผล T504 |
+| [T509](T509-waf-webui-audit.md) | หน้า WAF ใน Web UI + audit + ปรับ false positive | M | T507 | รอผล T504 |
+| [T510](T510-proxy-wasm-tier.md) | proxy-wasm ABI — ทางให้คนนอกเขียน plugin และแผนสำรองของ WAF | L | T501 | todo (ทางเลือก) |
+
 ## ผลจาก Phase 0 (วัดแล้ว)
 
 micro-benchmark รันแล้ว ผลเต็มอยู่ใน [`docs/BENCHMARKS.md`](../BENCHMARKS.md) สรุปสิ่งที่เจอ:
@@ -159,6 +178,7 @@ T112 เจอเรื่องหนึ่งที่เทสต์จับ
 - **M1 — "พิสูจน์ว่าเร็วจริง"** : T001–T004, T101–T105 → ได้ตัวเลขเทียบ nginx/haproxy ที่ reproduce ได้
 - **M2 — "UI สวย ใช้ง่าย"** : T201, T203, T205, T301–T307 → แก้ config ผ่านเว็บได้เต็มรูปแบบ
 - **M3 — "Production ready"** : T106–T115, T202/T204/T206, T308–T310, T401–T405
+- **M4 — "ขยายได้ และมี WAF"** : T501–T510 → ดู [milestone W1–W4 ในแผนแยก](../PLUGIN-WAF-PLAN.md#6-ลำดับงาน)
 
 ## Definition of Done (ทุก task)
 
