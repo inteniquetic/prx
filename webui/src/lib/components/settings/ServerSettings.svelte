@@ -14,6 +14,7 @@
   import { Switch } from '$lib/components/ui/switch';
   import { draftConfig, editDraft } from '$lib/stores/configDraft';
   import SettingRow from './SettingRow.svelte';
+  import { t } from '$lib/i18n';
 
   const server = $derived($draftConfig?.server ?? null);
 
@@ -54,17 +55,16 @@
 
 {#if server}
   <div class="max-w-4xl">
-    <p class="mb-4 rounded-xl border border-border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
-      prx reads this section once, when it starts. Applying a change here writes the file and
-      leaves the running proxy as it is until it is restarted — which is what the marks below
-      mean. Routes, services and their limits are different: those take effect on the next
-      reload.
+    <p
+      class="mb-4 rounded-xl border border-border bg-muted/40 px-4 py-3 text-xs text-muted-foreground"
+    >
+      {$t('settings.restartNotice')}
     </p>
 
     <section class="rounded-2xl border border-border/80 bg-card/80 px-6">
       <SettingRow
-        label="Listen addresses"
-        description="Where plaintext HTTP is served. One line each, host:port."
+        label={$t('server.listen.label')}
+        description={$t('server.listen.help')}
         path="server.listen"
         restart
       >
@@ -73,14 +73,14 @@
             <div class="flex gap-2">
               <Input
                 value={address}
-                aria-label={`Listen address ${index + 1}`}
+                aria-label={$t('server.listen.item', { index: index + 1 })}
                 onchange={(event) =>
                   updateListen(index, (event.currentTarget as HTMLInputElement).value)}
               />
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label={`Remove ${address}`}
+                aria-label={$t('server.listen.remove', { address })}
                 disabled={server.listen.length <= 1}
                 onclick={() => removeListen(index)}
               >
@@ -93,7 +93,7 @@
             <Input
               bind:value={newListen}
               placeholder="0.0.0.0:8081"
-              aria-label="New listen address"
+              aria-label={$t('server.listen.new')}
               onkeydown={(event) => {
                 if (event.key === 'Enter') {
                   event.preventDefault();
@@ -103,15 +103,15 @@
             />
             <Button variant="outline" size="sm" onclick={addListen} disabled={!newListen.trim()}>
               <PlusIcon class="size-4" aria-hidden="true" />
-              Add
+              {$t('common.add')}
             </Button>
           </div>
         </div>
       </SettingRow>
 
       <SettingRow
-        label="Health path"
-        description="Answers 200 as soon as the process is up."
+        label={$t('server.healthPath.label')}
+        description={$t('server.healthPath.help')}
         path="server.health_path"
         restart
         id="server-health-path"
@@ -125,8 +125,8 @@
       </SettingRow>
 
       <SettingRow
-        label="Ready path"
-        description="Answers 200 once a config is loaded. Must differ from the health path."
+        label={$t('server.readyPath.label')}
+        description={$t('server.readyPath.help')}
         path="server.ready_path"
         restart
         id="server-ready-path"
@@ -140,8 +140,8 @@
       </SettingRow>
 
       <SettingRow
-        label="Worker threads"
-        description="Blank follows the machine's CPU count, which is the right answer unless prx shares the box."
+        label={$t('server.threads.label')}
+        description={$t('server.threads.help')}
         path="server.threads"
         restart
         id="server-threads"
@@ -150,7 +150,7 @@
           id="server-threads"
           type="number"
           min="1"
-          placeholder="one per CPU"
+          placeholder={$t('server.threads.placeholder')}
           value={server.threads ?? ''}
           onchange={(event) =>
             set('server.threads', numberOrNull((event.currentTarget as HTMLInputElement).value))}
@@ -158,8 +158,8 @@
       </SettingRow>
 
       <SettingRow
-        label="HTTP/2 over cleartext"
-        description="Accept h2c on the plaintext listeners. gRPC clients that do not use TLS need it; prx falls back to HTTP/1.1 per connection."
+        label={$t('server.h2c.label')}
+        description={$t('server.h2c.help')}
         path="server.h2c"
         restart
         id="server-h2c"
@@ -172,8 +172,8 @@
       </SettingRow>
 
       <SettingRow
-        label="Grace period"
-        description="Seconds to keep serving existing connections after a shutdown signal."
+        label={$t('server.grace.label')}
+        description={$t('server.grace.help')}
         path="server.grace_period_seconds"
         restart
         id="server-grace"
@@ -182,7 +182,7 @@
           id="server-grace"
           type="number"
           min="0"
-          placeholder="pingora default"
+          placeholder={$t('server.pingoraDefault')}
           value={server.grace_period_seconds ?? ''}
           onchange={(event) =>
             set(
@@ -193,8 +193,8 @@
       </SettingRow>
 
       <SettingRow
-        label="Shutdown timeout"
-        description="Seconds before the remaining connections are cut."
+        label={$t('server.shutdown.label')}
+        description={$t('server.shutdown.help')}
         path="server.graceful_shutdown_timeout_seconds"
         restart
         id="server-shutdown"
@@ -203,7 +203,7 @@
           id="server-shutdown"
           type="number"
           min="0"
-          placeholder="pingora default"
+          placeholder={$t('server.pingoraDefault')}
           value={server.graceful_shutdown_timeout_seconds ?? ''}
           onchange={(event) =>
             set(
@@ -214,8 +214,8 @@
       </SettingRow>
 
       <SettingRow
-        label="Reload debounce"
-        description="How long the file watcher waits after a write before reloading, so an editor that saves twice does not reload twice."
+        label={$t('server.debounce.label')}
+        description={$t('server.debounce.help')}
         path="server.config_reload_debounce_ms"
         restart
         id="server-debounce"
@@ -235,7 +235,5 @@
     </section>
   </div>
 {:else}
-  <p class="text-sm text-muted-foreground">
-    The draft has to parse before these fields can be shown. Fix the errors in the TOML tab.
-  </p>
+  <p class="text-sm text-muted-foreground">{$t('settings.needsValidDraft')}</p>
 {/if}

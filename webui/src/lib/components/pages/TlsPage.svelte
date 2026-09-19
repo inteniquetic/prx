@@ -9,6 +9,7 @@
    */
   import DraftBar from '../config/DraftBar.svelte';
   import TlsSettings from '../settings/TlsSettings.svelte';
+  import { t } from '$lib/i18n';
 
   let { onapplied }: { onapplied?: () => void } = $props();
 </script>
@@ -18,10 +19,8 @@
     class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-6"
   >
     <div class="min-w-0">
-      <h1 class="truncate text-xl font-semibold">TLS</h1>
-      <p class="mt-0.5 text-sm text-muted-foreground">
-        Certificates, SNI and automatic renewal
-      </p>
+      <h1 class="truncate text-xl font-semibold">{$t('tlsPage.title')}</h1>
+      <p class="mt-0.5 text-sm text-muted-foreground">{$t('tlsPage.subtitle')}</p>
     </div>
   </header>
 

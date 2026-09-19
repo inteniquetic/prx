@@ -18,6 +18,7 @@
   import { Button } from '$lib/components/ui/button';
   import type { LiveStatus } from '$lib/stores/stats';
   import { cn } from '$lib/utils';
+  import { t } from '$lib/i18n';
 
   let {
     state,
@@ -51,22 +52,22 @@
   );
 
   const headline = $derived.by(() => {
-    if (connection === 'offline') return 'Lost contact with the admin API';
-    if (connection === 'reconnecting') return 'Reconnecting to the admin API…';
-    if (state === 'down') return 'Traffic is failing';
-    if (state === 'degraded') return 'Running degraded';
-    if (state === 'unknown') return 'Waiting for the first samples';
-    return 'Everything is healthy';
+    if (connection === 'offline') return $t('banner.offline');
+    if (connection === 'reconnecting') return $t('banner.reconnecting');
+    if (state === 'down') return $t('banner.down');
+    if (state === 'degraded') return $t('banner.degraded');
+    if (state === 'unknown') return $t('banner.unknown');
+    return $t('banner.ok');
   });
 
   const detail = $derived.by(() => {
     if (disconnected) {
       return connectionError
-        ? `These numbers stopped updating: ${connectionError}`
-        : 'These numbers are the last ones that arrived, not what is happening now.';
+        ? $t('banner.detail.error', { error: connectionError })
+        : $t('banner.detail.stale');
     }
     if (connection === 'polling') {
-      return 'The live stream is unavailable, so this page is asking every couple of seconds instead.';
+      return $t('banner.detail.polling');
     }
     return null;
   });

@@ -314,19 +314,19 @@ const normalizeTls = (input: Partial<TlsConfig>): TlsConfig => {
 
 export const normalizePrxConfig = (input: ConfigInput): PrxConfig => {
   const defaults = createDefaultConfig();
+  // `[[service]]` in the file arrives as `service`; `?format=json` calls the
+  // same thing `services`. Either may be absent, and absent is not the same as
+  // a starter service: a proxy with nothing in it has to look like one, or the
+  // empty states never show and the setup wizard never offers itself (T309).
   const serviceSource =
-    Array.isArray(input.services) && input.services.length > 0
-      ? input.services
-      : Array.isArray(input.service) && input.service.length > 0
-        ? input.service
-        : defaults.services;
+    (Array.isArray(input.services) ? input.services : undefined) ??
+    (Array.isArray(input.service) ? input.service : undefined) ??
+    defaults.services;
 
   const routeSource =
-    Array.isArray(input.routes) && input.routes.length > 0
-      ? input.routes
-      : Array.isArray(input.route) && input.route.length > 0
-        ? input.route
-        : defaults.routes;
+    (Array.isArray(input.routes) ? input.routes : undefined) ??
+    (Array.isArray(input.route) ? input.route : undefined) ??
+    defaults.routes;
 
   return {
     server: {

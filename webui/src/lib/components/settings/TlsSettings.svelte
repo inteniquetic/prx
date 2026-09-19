@@ -25,6 +25,7 @@
   import { loadTlsStatus, requestAcmeRenew, type TlsStatus } from '$lib/api/configText';
   import { draftConfig, editDraft } from '$lib/stores/configDraft';
   import SettingRow from './SettingRow.svelte';
+  import { formatDate, formatDateTime, locale, plural, t } from '$lib/i18n';
 
   const tls = $derived($draftConfig?.server.tls ?? null);
   const acme = $derived(tls?.acme ?? null);
@@ -96,7 +97,7 @@
     renewing = true;
     try {
       await requestAcmeRenew();
-      toast.success('Certificate order requested — watch the ACME status for the result');
+      toast.success($t('tls.acme.ordered'));
       // The order takes a few seconds at best; one refresh shortly after tends
       // to catch the attempt, and the button can always be pressed again.
       window.setTimeout(() => void refreshStatus(), 3000);
@@ -111,13 +112,13 @@
     days < 0 ? 'destructive' : days < 30 ? 'warning' : 'success';
 
   const expiryLabel = (days: number): string => {
-    if (days < 0) return `expired ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago`;
-    if (days === 0) return 'expires today';
-    return `${days} day${days === 1 ? '' : 's'} left`;
+    if (days < 0) return $plural('tls.expiry.expired', Math.abs(days));
+    if (days === 0) return $t('tls.expiry.today');
+    return $plural('tls.expiry.left', days);
   };
 
   const whenever = (epochSeconds: number | null): string =>
-    epochSeconds ? new Date(epochSeconds * 1000).toLocaleString() : 'never';
+    epochSeconds ? formatDateTime(epochSeconds * 1000, $locale) : $t('common.never');
 </script>
 
 <div class="max-w-4xl space-y-6">
@@ -125,17 +126,15 @@
   <section class="rounded-2xl border border-border/80 bg-card/80 p-6" data-slot="tls-status">
     <div class="mb-4 flex items-start justify-between gap-4">
       <div>
-        <h3 class="flex items-center gap-2 text-sm font-semibold text-foreground">
+        <h2 class="flex items-center gap-2 text-sm font-semibold text-foreground">
           <ShieldCheckIcon class="size-4 text-primary" aria-hidden="true" />
-          Certificates in use
-        </h3>
-        <p class="mt-1 text-xs text-muted-foreground">
-          Read from the running proxy, not from the draft below.
-        </p>
+          {$t('tls.status.title')}
+        </h2>
+        <p class="mt-1 text-xs text-muted-foreground">{$t('tls.status.help')}</p>
       </div>
       <Button variant="outline" size="sm" onclick={refreshStatus} disabled={loadingStatus}>
         <RefreshCwIcon class="size-4" aria-hidden="true" />
-        {loadingStatus ? 'Checking…' : 'Refresh'}
+        {loadingStatus ? $t('common.checking') : $t('common.refresh')}
       </Button>
     </div>
 
@@ -148,7 +147,9 @@
             <span class="font-mono text-sm text-foreground">{cert.domain}</span>
             <span class="flex items-center gap-3">
               <span class="text-xs text-muted-foreground">
-                until {new Date(cert.expires_epoch_s * 1000).toLocaleDateString()}
+                {$t('tls.status.until', {
+                  date: formatDate(cert.expires_epoch_s * 1000, $locale)
+                })}
               </span>
               <Badge variant={expiryTone(cert.expires_in_days)}>
                 {expiryLabel(cert.expires_in_days)}
@@ -158,17 +159,15 @@
         {/each}
       </ul>
     {:else}
-      <p class="text-sm text-muted-foreground">
-        This proxy is not serving TLS. Turn on the listener below, apply, and restart prx.
-      </p>
+      <p class="text-sm text-muted-foreground">{$t('tls.status.none')}</p>
     {/if}
   </section>
 
   {#if tls === null}
     <section class="rounded-2xl border border-border/80 bg-card/80 px-6">
       <SettingRow
-        label="TLS listener"
-        description="Adds [server.tls] with a listener and a certificate to fill in."
+        label={$t('tls.listener.label')}
+        description={$t('tls.listener.helpOff')}
         path="server.tls"
         restart
         id="tls-enabled"
@@ -179,8 +178,8 @@
   {:else}
     <section class="rounded-2xl border border-border/80 bg-card/80 px-6">
       <SettingRow
-        label="TLS listener"
-        description="Turning this off removes [server.tls] from the config, certificates and ACME with it."
+        label={$t('tls.listener.label')}
+        description={$t('tls.listener.helpOn')}
         path="server.tls"
         restart
         id="tls-enabled"
@@ -188,7 +187,12 @@
         <Switch id="tls-enabled" checked={true} onCheckedChange={enableTls} />
       </SettingRow>
 
-      <SettingRow label="Listen address" path="server.tls.listen" restart id="tls-listen">
+      <SettingRow
+        label={$t('tls.listen.label')}
+        path="server.tls.listen"
+        restart
+        id="tls-listen"
+      >
         <Input
           id="tls-listen"
           value={tls.listen}
@@ -198,8 +202,8 @@
       </SettingRow>
 
       <SettingRow
-        label="HTTP/2"
-        description="Offer h2 through ALPN. Clients that ask for HTTP/1.1 still get it."
+        label={$t('tls.h2.label')}
+        description={$t('tls.h2.help')}
         path="server.tls.enable_h2"
         restart
         id="tls-h2"
@@ -212,8 +216,8 @@
       </SettingRow>
 
       <SettingRow
-        label="Certificate"
-        description="The single-certificate form. Leave both blank when the certificates below, or ACME, provide them."
+        label={$t('tls.cert.label')}
+        description={$t('tls.cert.help')}
         path="server.tls.cert_path"
         restart
         id="tls-cert-path"
@@ -230,7 +234,7 @@
           />
           <Input
             placeholder="./certs/tls.key"
-            aria-label="Private key path"
+            aria-label={$t('tls.cert.keyAria')}
             value={tls.key_path}
             onchange={(event) => {
               const next = (event.currentTarget as HTMLInputElement).value.trim();
@@ -245,25 +249,20 @@
     <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
       <div class="mb-4 flex items-start justify-between gap-4">
         <div>
-          <h3 class="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <h2 class="flex items-center gap-2 text-sm font-semibold text-foreground">
             <KeyRoundIcon class="size-4 text-primary" aria-hidden="true" />
-            Certificates by name
-          </h3>
-          <p class="mt-1 text-xs text-muted-foreground">
-            <code class="font-mono">[[server.tls.cert]]</code> — picked by SNI. Leave the
-            domains blank to read the names out of the certificate itself.
-          </p>
+            {$t('tls.sni.title')}
+          </h2>
+          <p class="mt-1 text-xs text-muted-foreground">{$t('tls.sni.help')}</p>
         </div>
         <Button variant="outline" size="sm" onclick={addCert}>
           <PlusIcon class="size-4" aria-hidden="true" />
-          Add
+          {$t('common.add')}
         </Button>
       </div>
 
       {#if tls.certs.length === 0}
-        <p class="text-sm text-muted-foreground">
-          None. The single certificate above is served to every client.
-        </p>
+        <p class="text-sm text-muted-foreground">{$t('tls.sni.none')}</p>
       {:else}
         <ul class="space-y-3">
           {#each tls.certs as cert, index (index)}
@@ -279,12 +278,12 @@
                       onCheckedChange={(checked) =>
                         set(`server.tls.cert[${index}].is_default`, checked || null)}
                     />
-                    default
+                    {$t('common.default')}
                   </label>
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    aria-label={`Remove certificate ${index + 1}`}
+                    aria-label={$t('tls.sni.remove', { index: index + 1 })}
                     onclick={() =>
                       void editDraft([
                         { path: `server.tls.cert[${index}]`, action: 'remove' }
@@ -298,7 +297,7 @@
               <div class="grid gap-2 sm:grid-cols-3">
                 <Input
                   placeholder="example.com, *.example.com"
-                  aria-label={`Domains for certificate ${index + 1}`}
+                  aria-label={$t('tls.sni.domainsAria', { index: index + 1 })}
                   value={cert.domains.join(', ')}
                   onchange={(event) =>
                     set(
@@ -308,7 +307,7 @@
                 />
                 <Input
                   placeholder="/etc/prx/example.crt"
-                  aria-label={`Certificate path ${index + 1}`}
+                  aria-label={$t('tls.sni.certAria', { index: index + 1 })}
                   value={cert.cert_path}
                   onchange={(event) =>
                     set(
@@ -318,7 +317,7 @@
                 />
                 <Input
                   placeholder="/etc/prx/example.key"
-                  aria-label={`Key path ${index + 1}`}
+                  aria-label={$t('tls.sni.keyAria', { index: index + 1 })}
                   value={cert.key_path}
                   onchange={(event) =>
                     set(
@@ -337,8 +336,8 @@
     {#if acme}
       <section class="rounded-2xl border border-border/80 bg-card/80 px-6" data-slot="acme">
         <SettingRow
-          label="Automatic certificates"
-          description="prx orders and renews certificates over ACME and answers the HTTP-01 challenge on its plaintext listener, so port 80 has to reach it from the internet."
+          label={$t('tls.acme.label')}
+          description={$t('tls.acme.help')}
           path="server.tls.acme.enabled"
           restart
           id="acme-enabled"
@@ -352,8 +351,8 @@
 
         {#if acme.enabled}
           <SettingRow
-            label="Provider"
-            description="Stay on staging until an order has succeeded — production has strict rate limits."
+            label={$t('tls.acme.provider')}
+            description={$t('tls.acme.providerHelp')}
             path="server.tls.acme.directory_url"
             restart
             id="acme-directory"
@@ -374,25 +373,25 @@
               >
                 <Select.Trigger id="acme-directory" class="w-full sm:w-72">
                   {acme.directory_url === LETS_ENCRYPT
-                    ? "Let's Encrypt (production)"
+                    ? $t('tls.acme.production')
                     : acme.directory_url === LETS_ENCRYPT_STAGING
-                      ? "Let's Encrypt (staging)"
-                      : 'Custom directory'}
+                      ? $t('tls.acme.staging')
+                      : $t('tls.acme.custom')}
                 </Select.Trigger>
                 <Select.Content>
-                  <Select.Item value="staging" label="Let's Encrypt (staging)">
-                    Let's Encrypt (staging)
+                  <Select.Item value="staging" label={$t('tls.acme.staging')}>
+                    {$t('tls.acme.staging')}
                   </Select.Item>
-                  <Select.Item value="production" label="Let's Encrypt (production)">
-                    Let's Encrypt (production)
+                  <Select.Item value="production" label={$t('tls.acme.production')}>
+                    {$t('tls.acme.production')}
                   </Select.Item>
-                  <Select.Item value="custom" label="Custom directory">
-                    Custom directory
+                  <Select.Item value="custom" label={$t('tls.acme.custom')}>
+                    {$t('tls.acme.custom')}
                   </Select.Item>
                 </Select.Content>
               </Select.Root>
               <Input
-                aria-label="ACME directory URL"
+                aria-label={$t('tls.acme.directoryAria')}
                 value={acme.directory_url}
                 onchange={(event) =>
                   set(
@@ -404,8 +403,8 @@
           </SettingRow>
 
           <SettingRow
-            label="Domains"
-            description="Comma separated. Wildcards need DNS-01, which prx does not support."
+            label={$t('tls.acme.domains')}
+            description={$t('tls.acme.domainsHelp')}
             path="server.tls.acme.domains"
             restart
             id="acme-domains"
@@ -423,8 +422,8 @@
           </SettingRow>
 
           <SettingRow
-            label="Contact email"
-            description="Registered with the ACME account; expiry warnings go here."
+            label={$t('tls.acme.email')}
+            description={$t('tls.acme.emailHelp')}
             path="server.tls.acme.email"
             restart
             id="acme-email"
@@ -439,8 +438,8 @@
           </SettingRow>
 
           <SettingRow
-            label="Storage directory"
-            description="Account key and issued certificates. prx locks it down to its own user."
+            label={$t('tls.acme.storage')}
+            description={$t('tls.acme.storageHelp')}
             path="server.tls.acme.storage_dir"
             restart
             id="acme-storage"
@@ -457,8 +456,8 @@
           </SettingRow>
 
           <SettingRow
-            label="Renew before"
-            description="Days before expiry to order a new certificate. Between 1 and 89."
+            label={$t('tls.acme.renewDays')}
+            description={$t('tls.acme.renewDaysHelp')}
             path="server.tls.acme.renew_before_days"
             restart
             id="acme-renew-days"
@@ -483,24 +482,28 @@
         <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
           <div class="mb-3 flex items-start justify-between gap-4">
             <div>
-              <h3 class="text-sm font-semibold text-foreground">ACME on the running proxy</h3>
+              <h2 class="text-sm font-semibold text-foreground">
+                {$t('tls.acme.running.title')}
+              </h2>
               <p class="mt-1 text-xs text-muted-foreground">
-                {status.acme.staging ? 'Staging directory' : 'Production directory'} ·
-                {status.acme.domains.join(', ') || 'no domains'}
+                {status.acme.staging
+                  ? $t('tls.acme.running.staging')
+                  : $t('tls.acme.running.production')} ·
+                {status.acme.domains.join(', ') || $t('tls.acme.running.noDomains')}
               </p>
             </div>
             <Button variant="outline" size="sm" onclick={renewNow} disabled={renewing}>
-              {renewing ? 'Asking…' : 'Order a certificate now'}
+              {renewing ? $t('tls.acme.ordering') : $t('tls.acme.orderNow')}
             </Button>
           </div>
 
           <dl class="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2">
             <div class="flex justify-between gap-4 sm:block">
-              <dt class="text-muted-foreground">Last attempt</dt>
+              <dt class="text-muted-foreground">{$t('tls.acme.lastAttempt')}</dt>
               <dd class="text-foreground">{whenever(status.acme.last_attempt_epoch_s)}</dd>
             </div>
             <div class="flex justify-between gap-4 sm:block">
-              <dt class="text-muted-foreground">Last success</dt>
+              <dt class="text-muted-foreground">{$t('tls.acme.lastSuccess')}</dt>
               <dd class="text-foreground">{whenever(status.acme.last_success_epoch_s)}</dd>
             </div>
           </dl>
@@ -510,7 +513,7 @@
               class="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-foreground"
               role="alert"
             >
-              Last order failed: {status.acme.last_error}
+              {$t('tls.acme.lastError', { error: status.acme.last_error })}
             </p>
           {/if}
         </section>
@@ -521,9 +524,9 @@
 
 <ConfirmDialog
   bind:open={confirmDisableTls}
-  title="Remove the TLS listener?"
-  description="[server.tls] goes out of the draft, with its certificates and ACME settings. Once applied and restarted, this proxy serves plaintext only."
-  confirmLabel="Remove TLS"
+  title={$t('tls.confirmRemove.title')}
+  description={$t('tls.confirmRemove.body')}
+  confirmLabel={$t('tls.confirmRemove.confirm')}
   variant="destructive"
   onconfirm={() => {
     void editDraft([{ path: 'server.tls', action: 'remove' }]);

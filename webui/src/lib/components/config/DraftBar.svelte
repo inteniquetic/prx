@@ -42,6 +42,7 @@
   } from '$lib/stores/configDraft';
   import ConflictDialog from './ConflictDialog.svelte';
   import ReviewDialog from './ReviewDialog.svelte';
+  import { formatDateTime, locale, plural, t } from '$lib/i18n';
 
   let {
     /** Called after a successful apply, e.g. to refresh other views. */
@@ -59,7 +60,7 @@
 
   const errorCount = $derived($report?.errors.length ?? 0);
   const warningCount = $derived($report?.warnings.length ?? 0);
-  const restoredLabel = $derived($restoredAt ? new Date($restoredAt).toLocaleString() : '');
+  const restoredLabel = $derived($restoredAt ? formatDateTime($restoredAt, $locale) : '');
 
   let lastReviewRequest = $state(0);
   $effect(() => {
@@ -71,14 +72,14 @@
 
   export async function openReview() {
     if (!$isDirty) {
-      toast.message('Nothing to apply — the draft matches the running config');
+      toast.message($t('draft.toast.nothing'));
       return;
     }
     // Whatever is on screen is checked before the review opens, so the diff is
     // never reviewed against a stale verdict.
     await validateNow();
     if (($report?.errors.length ?? 0) > 0) {
-      toast.error('Fix the errors before applying');
+      toast.error($t('draft.toast.fixErrors'));
       return;
     }
     showReview = true;
@@ -89,7 +90,7 @@
 
     if (result.status === 'applied') {
       showReview = false;
-      toast.success('Config applied');
+      toast.success($t('draft.toast.applied'));
       onapplied?.();
       return;
     }
@@ -115,14 +116,14 @@
   async function takeTheirs() {
     conflict = null;
     await loadBase({ discardDraft: true });
-    toast.message('Loaded the config the proxy is running');
+    toast.message($t('draft.toast.tookTheirs'));
   }
 
   async function reload() {
     const wasDirty = $isDirty;
     await loadBase({ discardDraft: !wasDirty });
     if (wasDirty) {
-      toast.message('Reloaded — your draft is still here, now compared against the new config');
+      toast.message($t('draft.toast.reloaded'));
     }
   }
 </script>
@@ -163,10 +164,11 @@
     >
       <HistoryIcon class="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
       <p class="flex-1 text-sm text-foreground">
-        Draft restored from {restoredLabel}. It has not been applied — the proxy is still
-        running the config on the left of the diff.
+        {$t('draft.restored', { when: restoredLabel })}
       </p>
-      <Button variant="ghost" size="sm" onclick={() => (confirmRevert = true)}>Discard</Button>
+      <Button variant="ghost" size="sm" onclick={() => (confirmRevert = true)}>
+        {$t('draft.discard')}
+      </Button>
     </div>
   {/if}
 
@@ -176,11 +178,8 @@
       role="alert"
     >
       <TriangleAlertIcon class="mt-0.5 size-4 shrink-0 text-warning-emphasis" aria-hidden="true" />
-      <p class="flex-1 text-sm text-foreground">
-        The config file changed somewhere else since this draft started. Applying now would
-        write over it — reload to see what changed first.
-      </p>
-      <Button variant="outline" size="sm" onclick={reload}>Reload</Button>
+      <p class="flex-1 text-sm text-foreground">{$t('draft.external')}</p>
+      <Button variant="outline" size="sm" onclick={reload}>{$t('common.reload')}</Button>
     </div>
   {/if}
 
@@ -188,21 +187,19 @@
     <div class="flex items-center gap-2 text-sm">
       {#if $validating}
         <LoaderIcon class="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
-        <span class="text-muted-foreground">Checking…</span>
+        <span class="text-muted-foreground">{$t('common.checking')}</span>
       {:else if errorCount > 0}
         <CircleAlertIcon class="size-4 text-destructive-emphasis" aria-hidden="true" />
         <span class="font-medium text-destructive-emphasis">
-          {errorCount} error{errorCount === 1 ? '' : 's'}
+          {$plural('draft.errors', errorCount)}
         </span>
       {:else}
         <CircleCheckIcon class="size-4 text-success-emphasis" aria-hidden="true" />
-        <span class="font-medium text-success-emphasis">Valid</span>
+        <span class="font-medium text-success-emphasis">{$t('draft.valid')}</span>
       {/if}
       {#if warningCount > 0}
         <span class="text-muted-foreground">·</span>
-        <span class="text-warning-emphasis">
-          {warningCount} warning{warningCount === 1 ? '' : 's'}
-        </span>
+        <span class="text-warning-emphasis">{$plural('draft.warnings', warningCount)}</span>
       {/if}
       {#if $isDirty}
         <span class="text-muted-foreground">·</span>
@@ -210,21 +207,21 @@
           <span class="text-success-emphasis">+{$stats.added}</span>
           <span class="text-destructive-emphasis">−{$stats.removed}</span>
         </span>
-        <span class="text-xs text-muted-foreground">not applied yet</span>
+        <span class="text-xs text-muted-foreground">{$t('draft.notApplied')}</span>
       {/if}
     </div>
 
     <div class="ms-auto flex items-center gap-2">
       <Button variant="outline" size="sm" onclick={reload} disabled={$loading}>
-        {$loading ? 'Loading…' : 'Reload'}
+        {$loading ? $t('common.loading') : $t('common.reload')}
       </Button>
       <Button variant="ghost" size="sm" onclick={() => (confirmRevert = true)} disabled={!$isDirty}>
         <RotateCcwIcon class="size-4" aria-hidden="true" />
-        Revert
+        {$t('draft.revert')}
       </Button>
       <Button size="sm" onclick={openReview} disabled={!$isDirty || errorCount > 0}>
         <UploadIcon class="size-4" aria-hidden="true" />
-        Review &amp; apply
+        {$t('draft.review')}
       </Button>
     </div>
   </div>
@@ -244,9 +241,9 @@
 
 <ConfirmDialog
   bind:open={confirmRevert}
-  title="Discard this draft?"
-  description="Everything goes back to the config the proxy is running — both the fields changed in these forms and anything typed into the editor. This cannot be undone."
-  confirmLabel="Discard draft"
+  title={$t('draft.confirmRevert.title')}
+  description={$t('draft.confirmRevert.body')}
+  confirmLabel={$t('draft.confirmRevert.confirm')}
   variant="destructive"
   onconfirm={() => {
     revertDraft();

@@ -14,6 +14,7 @@
   import type { ConfigDiagnostic } from '$lib/api/configText';
   import { diffOps, draft, report, setDraft } from '$lib/stores/configDraft';
   import TomlEditor from './TomlEditor.svelte';
+  import { t } from '$lib/i18n';
 
   let editor: { revealLine: (line: number) => void } | null = $state(null);
 
@@ -30,11 +31,8 @@
 
 <div class="space-y-4">
   <div class="flex items-center justify-between gap-2">
-    <p class="text-xs text-muted-foreground">
-      The file the proxy is running, comments and all. Changes made in the other tabs show up
-      here too.
-    </p>
-    <CopyButton text={$draft} label="Copy TOML" showLabel size="sm" variant="outline" />
+    <p class="text-xs text-muted-foreground">{$t('editor.description')}</p>
+    <CopyButton text={$draft} label={$t('editor.copy')} showLabel size="sm" variant="outline" />
   </div>
 
   <div class="h-[60vh] min-h-[24rem]">
@@ -59,7 +57,7 @@
   {#if diagnostics.length > 0}
     <section class="rounded-xl border border-border bg-card/60">
       <h3 class="border-b border-border px-4 py-2 text-sm font-semibold text-foreground">
-        Problems
+        {$t('editor.problems')}
       </h3>
       <ul class="divide-y divide-border/70">
         {#each diagnostics as diagnostic, index (index)}
@@ -86,8 +84,16 @@
                   <span class="block text-xs text-muted-foreground">{diagnostic.hint}</span>
                 {/if}
                 <span class="block font-mono text-[11px] text-muted-foreground">
-                  line {diagnostic.line}{diagnostic.path ? ` · ${diagnostic.path}` : ''} ·
-                  {diagnostic.code}
+                  {diagnostic.path
+                    ? $t('editor.problemMetaPath', {
+                        line: diagnostic.line,
+                        path: diagnostic.path,
+                        code: diagnostic.code
+                      })
+                    : $t('editor.problemMeta', {
+                        line: diagnostic.line,
+                        code: diagnostic.code
+                      })}
                 </span>
               </span>
             </button>

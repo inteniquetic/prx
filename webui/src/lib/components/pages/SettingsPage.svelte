@@ -22,6 +22,7 @@
   import { normalizePrxConfig } from '$lib/configNormalize';
   import { draftConfig, setDraft } from '$lib/stores/configDraft';
   import type { PrxConfig } from '$lib/types/config';
+  import { t } from '$lib/i18n';
 
   let {
     /** Bumped by the shell to open the review from the command palette. */
@@ -34,13 +35,7 @@
 
   type SettingsTab = 'server' | 'tls' | 'observability' | 'admin' | 'toml';
 
-  const tabs: { id: SettingsTab; label: string }[] = [
-    { id: 'server', label: 'Server' },
-    { id: 'tls', label: 'TLS' },
-    { id: 'observability', label: 'Observability' },
-    { id: 'admin', label: 'Admin API' },
-    { id: 'toml', label: 'TOML' }
-  ];
+  const tabs: SettingsTab[] = ['server', 'tls', 'observability', 'admin', 'toml'];
 
   let activeTab: SettingsTab = $state('server');
   let importInput: HTMLInputElement | null = $state(null);
@@ -75,9 +70,13 @@
       const parsed = JSON.parse(await file.text()) as Partial<PrxConfig>;
       setDraft(encodeToml(normalizePrxConfig(parsed)));
       activeTab = 'toml';
-      toast.message('Imported into the draft — review the diff before applying');
+      toast.message($t('settings.importToast'));
     } catch (error) {
-      toast.error(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
+      toast.error(
+        $t('settings.importFailed', {
+          error: error instanceof Error ? error.message : String(error)
+        })
+      );
     } finally {
       input.value = '';
     }
@@ -96,28 +95,25 @@
     class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-6"
   >
     <div class="min-w-0">
-      <h1 class="truncate text-xl font-semibold">Settings</h1>
-      <p class="mt-0.5 text-sm text-muted-foreground">
-        The server, its certificates and what it logs — every change goes through the same
-        diff as the file itself
-      </p>
+      <h1 class="truncate text-xl font-semibold">{$t('settings.title')}</h1>
+      <p class="mt-0.5 text-sm text-muted-foreground">{$t('settings.subtitle')}</p>
     </div>
 
     <div class="flex shrink-0 flex-wrap items-center gap-2">
       <Button variant="outline" size="sm" onclick={exportJson} disabled={!config}>
         <DownloadIcon aria-hidden="true" />
-        <span class="hidden sm:inline">Export JSON</span>
+        <span class="hidden sm:inline">{$t('settings.exportJson')}</span>
       </Button>
       <Button variant="outline" size="sm" onclick={() => importInput?.click()}>
         <UploadIcon aria-hidden="true" />
-        <span class="hidden sm:inline">Import JSON</span>
+        <span class="hidden sm:inline">{$t('settings.importJson')}</span>
       </Button>
       <input
         bind:this={importInput}
         type="file"
         accept=".json,application/json"
         class="hidden"
-        aria-label="Import a config as JSON"
+        aria-label={$t('settings.importAria')}
         onchange={importJson}
       />
     </div>
@@ -128,16 +124,16 @@
 
     <nav
       class="mt-4 flex gap-0 overflow-x-auto border-b border-border/80"
-      aria-label="Settings sections"
+      aria-label={$t('settings.sections')}
     >
-      {#each tabs as tab (tab.id)}
+      {#each tabs as tab (tab)}
         <button
           type="button"
-          class={tabClass(tab.id)}
-          aria-current={activeTab === tab.id ? 'page' : undefined}
-          onclick={() => (activeTab = tab.id)}
+          class={tabClass(tab)}
+          aria-current={activeTab === tab ? 'page' : undefined}
+          onclick={() => (activeTab = tab)}
         >
-          {tab.label}
+          {$t(`settings.tab.${tab}`)}
         </button>
       {/each}
     </nav>

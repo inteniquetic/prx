@@ -20,7 +20,10 @@
     "dashboard:check": "node scripts/dashboard-check.mjs",
     "diff:check": "node scripts/diff-check.mjs",
     "config:check": "node scripts/config-check.mjs",
-    "settings:check": "node scripts/settings-check.mjs"
+    "settings:check": "node scripts/settings-check.mjs",
+    "i18n:check": "node scripts/i18n-check.mjs",
+    "a11y:check": "node scripts/a11y-check.mjs",
+    "ux:check": "node scripts/ux-check.mjs"
   },
   "devDependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -38,6 +41,7 @@
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^20.17.23",
     "autoprefixer": "^10.4.21",
+    "axe-core": "^4.13.0",
     "bits-ui": "^2.19.2",
     "clsx": "^2.1.1",
     "playwright": "^1.63.0",

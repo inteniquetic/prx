@@ -5,6 +5,7 @@
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
   import type { HeaderRules } from '$lib/types/config';
+  import { t } from '$lib/i18n';
 
   let {
     rules = $bindable(),
@@ -56,7 +57,7 @@
         <Input
           {disabled}
           class="font-mono text-xs"
-          placeholder="X-Header-Name"
+          placeholder={$t('headerRules.xHeaderName')}
           aria-label={`${kind} ${direction} header name ${i + 1}`}
           bind:value={pair.key}
           oninput={commit}
@@ -64,7 +65,7 @@
         <Input
           {disabled}
           class="font-mono text-xs"
-          placeholder="value"
+          placeholder={$t('headerRules.value')}
           aria-label={`${kind} ${direction} header value ${i + 1}`}
           bind:value={pair.value}
           oninput={commit}
@@ -73,7 +74,7 @@
           variant="ghost"
           size="icon-sm"
           {disabled}
-          aria-label={`Remove ${kind} rule ${i + 1}`}
+          aria-label={$t('headerRules.removeRule', { kind, index: i + 1 })}
           onclick={() => {
             pairs.splice(i, 1);
             commit();
@@ -95,7 +96,7 @@
         }}
       >
         <PlusIcon aria-hidden="true" />
-        Add a rule
+        {$t('headerRules.add')}
       </Button>
     </div>
   </div>
@@ -117,16 +118,16 @@
 
   <div class="grid gap-1.5">
     <Label for={`${direction}-remove`} class="text-xs uppercase tracking-wide text-muted-foreground">
-      Remove
+      {$t('headerRules.remove')}
     </Label>
     <Input
       id={`${direction}-remove`}
       {disabled}
       class="font-mono text-xs"
-      placeholder="X-Internal-Token, X-Debug"
+      placeholder={$t('headerRules.xInternalTokenX')}
       bind:value={removeText}
       oninput={commit}
     />
-    <p class="text-xs text-muted-foreground">Comma separated.</p>
+    <p class="text-xs text-muted-foreground">{$t('headerRules.commaSeparated')}</p>
   </div>
 </div>

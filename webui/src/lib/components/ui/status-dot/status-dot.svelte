@@ -14,40 +14,40 @@
    */
   export const STATUS_META: Record<
     UpstreamStatus,
-    { label: string; dot: string; icon: string; text: string }
+    { key: string; dot: string; icon: string; text: string }
   > = {
     healthy: {
-      label: 'Healthy',
+      key: 'status.healthy',
       dot: 'bg-success',
       icon: 'text-success-emphasis',
       text: 'text-success-emphasis'
     },
     degraded: {
-      label: 'Degraded',
+      key: 'status.degraded',
       dot: 'bg-warning',
       icon: 'text-warning-emphasis',
       text: 'text-warning-emphasis'
     },
     down: {
-      label: 'Down',
+      key: 'status.down',
       dot: 'bg-destructive',
       icon: 'text-destructive-emphasis',
       text: 'text-destructive-emphasis'
     },
     'circuit-open': {
-      label: 'Circuit open',
+      key: 'status.circuit-open',
       dot: 'bg-circuit',
       icon: 'text-circuit-emphasis',
       text: 'text-circuit-emphasis'
     },
     disabled: {
-      label: 'Disabled',
+      key: 'status.disabled',
       dot: 'bg-muted-foreground',
       icon: 'text-muted-foreground',
       text: 'text-muted-foreground'
     },
     unknown: {
-      label: 'Unknown',
+      key: 'status.unknown',
       dot: 'bg-muted-foreground',
       icon: 'text-muted-foreground',
       text: 'text-muted-foreground'
@@ -63,6 +63,7 @@
   import CircleSlashIcon from '@lucide/svelte/icons/circle-slash';
   import CircleHelpIcon from '@lucide/svelte/icons/circle-help';
   import * as Tooltip from '../tooltip';
+  import { t } from '$lib/i18n';
   import { cn } from '$lib/utils';
 
   let {
@@ -100,7 +101,8 @@
               ? CircleSlashIcon
               : CircleHelpIcon
   );
-  const spoken = $derived(reason ? `${meta.label}: ${reason}` : meta.label);
+  const label = $derived($t(meta.key));
+  const spoken = $derived(reason ? `${label}: ${reason}` : label);
 </script>
 
 {#snippet marker()}
@@ -108,7 +110,7 @@
        triangle, a cross, a struck-through bolt. -->
   <Icon class={cn('size-4 shrink-0', meta.icon)} aria-hidden="true" />
   {#if showLabel}
-    <span aria-hidden="true">{meta.label}</span>
+    <span aria-hidden="true">{label}</span>
   {/if}
   <span class="sr-only">{spoken}</span>
 {/snippet}

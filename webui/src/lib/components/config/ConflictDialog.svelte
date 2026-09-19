@@ -11,6 +11,7 @@
   import { Button } from '$lib/components/ui/button';
   import { diffText } from '$lib/configDiff';
   import DiffView from './DiffView.svelte';
+  import { t } from '$lib/i18n';
 
   let {
     open = $bindable(false),
@@ -43,21 +44,18 @@
   const myChanges = $derived(diffText(baseToml, draftToml));
   const whatApplyingWouldDo = $derived(diffText(currentToml, draftToml));
 
-  const tabs: { id: Side; label: string }[] = [
-    { id: 'theirs', label: 'Their change' },
-    { id: 'mine', label: 'Your change' },
-    { id: 'result', label: 'What Apply would do' }
+  const tabs: { id: Side; key: string }[] = [
+    { id: 'theirs', key: 'conflict.tab.theirs' },
+    { id: 'mine', key: 'conflict.tab.mine' },
+    { id: 'result', key: 'conflict.tab.result' }
   ];
 </script>
 
 <Dialog.Root bind:open onOpenChange={(next) => !next && oncancel()}>
   <Dialog.Content class="sm:max-w-4xl">
     <Dialog.Header>
-      <Dialog.Title>The config changed while you were editing</Dialog.Title>
-      <Dialog.Description>
-        Someone else applied a config after this draft was loaded — another tab, the Routes
-        page, or an edit to the file itself. Nothing has been written.
-      </Dialog.Description>
+      <Dialog.Title>{$t('conflict.title')}</Dialog.Title>
+      <Dialog.Description>{$t('conflict.body')}</Dialog.Description>
     </Dialog.Header>
 
     <div class="flex gap-1 border-b border-border">
@@ -72,7 +70,7 @@
           onclick={() => (side = tab.id)}
           aria-pressed={side === tab.id}
         >
-          {tab.label}
+          {$t(tab.key)}
         </button>
       {/each}
     </div>
@@ -80,37 +78,34 @@
     {#if side === 'theirs'}
       <DiffView
         ops={theirChanges}
-        beforeLabel="What you started from"
-        afterLabel="What the proxy is running now"
+        beforeLabel={$t('conflict.label.base')}
+        afterLabel={$t('conflict.label.current')}
         mode="split"
       />
     {:else if side === 'mine'}
       <DiffView
         ops={myChanges}
-        beforeLabel="What you started from"
-        afterLabel="Your draft"
+        beforeLabel={$t('conflict.label.base')}
+        afterLabel={$t('conflict.label.mine')}
         mode="split"
       />
     {:else}
       <DiffView
         ops={whatApplyingWouldDo}
-        beforeLabel="Running now"
-        afterLabel="After applying your draft"
+        beforeLabel={$t('conflict.label.runningNow')}
+        afterLabel={$t('conflict.label.afterApply')}
         mode="split"
       />
-      <p class="text-xs text-muted-foreground">
-        Applying keeps every line of your draft, including the lines that would undo their
-        change.
-      </p>
+      <p class="text-xs text-muted-foreground">{$t('conflict.note')}</p>
     {/if}
 
     <Dialog.Footer>
-      <Button variant="ghost" onclick={oncancel} disabled={applying}>Cancel</Button>
+      <Button variant="ghost" onclick={oncancel} disabled={applying}>{$t('common.cancel')}</Button>
       <Button variant="outline" onclick={ontakeTheirs} disabled={applying}>
-        Discard mine, edit theirs
+        {$t('conflict.takeTheirs')}
       </Button>
       <Button onclick={onkeepMine} disabled={applying}>
-        {applying ? 'Applying…' : 'Apply mine over theirs'}
+        {applying ? $t('common.applying') : $t('conflict.keepMine')}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>

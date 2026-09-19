@@ -13,6 +13,7 @@
 
 <script lang="ts">
   import { cn } from '$lib/utils';
+  import { t } from '$lib/i18n';
 
   let {
     title,
@@ -203,7 +204,7 @@
 >
   <figcaption class="flex flex-wrap items-baseline justify-between gap-2">
     <div>
-      <h3 class="text-sm font-semibold">{title}</h3>
+      <h2 class="text-sm font-semibold">{title}</h2>
       {#if description}
         <p class="text-xs text-muted-foreground">{description}</p>
       {/if}
@@ -348,7 +349,7 @@
         <button
           type="button"
           class="absolute inset-0 cursor-default rounded-md focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-          aria-label="{title}. {summary}. Use the arrow keys to read earlier samples."
+          aria-label={$t('dashboard.chart.aria', { title, summary })}
           onpointermove={onPointerMove}
           onpointerleave={() => (hovered = null)}
           onkeydown={onKeyDown}
@@ -359,7 +360,7 @@
           <div
             class="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground"
           >
-            Waiting for the first samples…
+            {$t('dashboard.chart.waiting')}
           </div>
         {/if}
 

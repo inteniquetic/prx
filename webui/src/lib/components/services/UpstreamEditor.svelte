@@ -18,6 +18,7 @@
   import { formatLatency } from '$lib/format';
   import { createDefaultUpstream, type UpstreamConfig } from '$lib/types/config';
   import type { FieldErrors } from '$lib/serviceValidation';
+  import { t } from '$lib/i18n';
 
   let {
     upstreams = $bindable(),
@@ -58,17 +59,20 @@
   };
 
   const dotReason = (upstream: UpstreamConfig): string => {
-    if (!upstream.enabled) return 'Drained: still configured, taking no traffic.';
+    if (!upstream.enabled) return $t('upstreamEditor.reason.drained');
     const live = status[upstream.addr];
-    if (!live) return 'The proxy has not reported on this upstream yet.';
+    if (!live) return $t('upstreamEditor.reason.unknown');
     if (live.circuit_open) {
       const left = live.circuit_reopens_in_ms;
-      return `Circuit open after ${live.consecutive_failures} consecutive failures${
-        left ? `, retrying in ${Math.ceil(left / 1000)}s` : ''
-      }.`;
+      return left
+        ? $t('upstreamEditor.reason.circuitRetry', {
+            failures: live.consecutive_failures,
+            seconds: Math.ceil(left / 1000)
+          })
+        : $t('upstreamEditor.reason.circuit', { failures: live.consecutive_failures });
     }
-    if (!live.probe_healthy) return 'The last health probe failed.';
-    return 'Probes are passing and the circuit is closed.';
+    if (!live.probe_healthy) return $t('upstreamEditor.reason.down');
+    return $t('upstreamEditor.reason.healthy');
   };
 
   async function runTest(addr: string) {
@@ -81,8 +85,10 @@
         [addr]: {
           healthy: result.healthy,
           detail: result.healthy
-            ? `Connected in ${formatLatency(result.latency_ms ?? 0)}`
-            : (result.error ?? 'Could not connect')
+            ? $t('upstreamEditor.test.connected', {
+                latency: formatLatency(result.latency_ms ?? 0)
+              })
+            : (result.error ?? $t('upstreamEditor.test.failed'))
         }
       };
     } catch (err) {
@@ -113,11 +119,13 @@
     <Table.Root>
       <Table.Header>
         <Table.Row>
-          <Table.Head>Address</Table.Head>
-          <Table.Head class="w-56">Weight &amp; share</Table.Head>
-          <Table.Head>State</Table.Head>
-          <Table.Head class="text-right">In flight</Table.Head>
-          <Table.Head class="w-10"><span class="sr-only">Actions</span></Table.Head>
+          <Table.Head>{$t('upstreamEditor.address')}</Table.Head>
+          <Table.Head class="w-56">{$t('upstreamEditor.weight')}</Table.Head>
+          <Table.Head>{$t('upstreamEditor.state')}</Table.Head>
+          <Table.Head class="text-right">{$t('upstreamEditor.inflight')}</Table.Head>
+          <Table.Head class="w-10">
+            <span class="sr-only">{$t('upstreamEditor.actions')}</span>
+          </Table.Head>
         </Table.Row>
       </Table.Header>
       <Table.Body>
@@ -130,7 +138,7 @@
                 <Input
                   {disabled}
                   class="font-mono text-xs"
-                  aria-label={`Upstream ${index + 1} address`}
+                  aria-label={$t('upstreamEditor.addressAria', { index: index + 1 })}
                   aria-invalid={(errors[`upstreams.${index}.addr`] ?? []).length > 0
                     ? 'true'
                     : undefined}
@@ -145,7 +153,7 @@
                       {disabled}
                       checked={upstream.tls}
                       onCheckedChange={(checked) => (upstream.tls = checked)}
-                      aria-label={`TLS to upstream ${index + 1}`}
+                      aria-label={$t('upstreamEditor.tlsAria', { index: index + 1 })}
                     />
                     TLS
                   </label>
@@ -153,8 +161,8 @@
                     <Input
                       {disabled}
                       class="h-7 max-w-40 font-mono text-xs"
-                      placeholder="sni"
-                      aria-label={`SNI for upstream ${index + 1}`}
+                      placeholder={$t('upstreamEditor.sni')}
+                      aria-label={$t('upstreamEditor.sniAria', { index: index + 1 })}
                       bind:value={upstream.sni}
                     />
                   {/if}
@@ -187,19 +195,23 @@
                     {disabled}
                     value={Math.min(20, Math.max(1, upstream.weight))}
                     onValueChange={(value: number) => (upstream.weight = value)}
-                    aria-label={`Weight for upstream ${index + 1}`}
+                    aria-label={$t('upstreamEditor.weightAria', { index: index + 1 })}
                     class="w-28"
                   />
                   <span class="w-8 text-right text-xs tabular-nums">{upstream.weight}</span>
                 </div>
                 <p class="text-xs text-muted-foreground tabular-nums">
                   {#if upstream.enabled}
-                    {(shares[index] * 100).toFixed(1)}% of requests
+                    {$t('upstreamEditor.share', { percent: (shares[index] * 100).toFixed(1) })}
                     {#if live && Math.abs(live.share - shares[index]) > 0.005}
-                      <span class="text-warning-emphasis"> · {(live.share * 100).toFixed(1)}% until applied</span>
+                      <span class="text-warning-emphasis">
+                        {$t('upstreamEditor.shareUntilApplied', {
+                          percent: (live.share * 100).toFixed(1)
+                        })}
+                      </span>
                     {/if}
                   {:else}
-                    drained
+                    {$t('upstreamEditor.drained')}
                   {/if}
                 </p>
                 <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -207,9 +219,9 @@
                     {disabled}
                     checked={!upstream.enabled}
                     onCheckedChange={(checked) => (upstream.enabled = !checked)}
-                    aria-label={`Drain upstream ${index + 1}`}
+                    aria-label={$t('upstreamEditor.drainAria', { index: index + 1 })}
                   />
-                  Drain
+                  {$t('upstreamEditor.drain')}
                 </label>
               </div>
             </Table.Cell>
@@ -224,7 +236,9 @@
                 />
                 {#if live?.circuit_open && live.circuit_reopens_in_ms}
                   <Badge variant="warning" class="w-fit tabular-nums">
-                    retry in {Math.ceil(live.circuit_reopens_in_ms / 1000)}s
+                    {$t('upstreamEditor.retryIn', {
+                      seconds: Math.ceil(live.circuit_reopens_in_ms / 1000)
+                    })}
                   </Badge>
                 {/if}
                 {#if live && live.ewma_us > 0}
@@ -245,7 +259,7 @@
                   variant="ghost"
                   size="icon-sm"
                   disabled={disabled || testing === upstream.addr}
-                  aria-label={`Test upstream ${index + 1}`}
+                  aria-label={$t('upstreamEditor.testAria', { index: index + 1 })}
                   onclick={() => runTest(upstream.addr)}
                 >
                   <PlugIcon aria-hidden="true" />
@@ -254,7 +268,7 @@
                   variant="ghost"
                   size="icon-sm"
                   disabled={disabled || upstreams.length <= 1}
-                  aria-label={`Remove upstream ${index + 1}`}
+                  aria-label={$t('upstreamEditor.removeAria', { index: index + 1 })}
                   onclick={() => removeUpstream(index)}
                 >
                   <Trash2Icon aria-hidden="true" />
@@ -270,13 +284,10 @@
   <div>
     <Button variant="outline" size="sm" {disabled} onclick={addUpstream}>
       <PlusIcon aria-hidden="true" />
-      Add upstream
+      {$t('upstreamEditor.add')}
     </Button>
   </div>
 
-  <p class="text-xs text-muted-foreground">
-    Draining keeps an upstream configured and still probed, but out of the balancer. Weight 0 is
-    not a drain: the balancer clamps weights to at least 1.
-  </p>
-  <Label class="sr-only">Upstreams</Label>
+  <p class="text-xs text-muted-foreground">{$t('upstreamEditor.note')}</p>
+  <Label class="sr-only">{$t('upstreamEditor.label')}</Label>
 </div>

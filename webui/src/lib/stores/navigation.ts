@@ -20,7 +20,8 @@ export type NavPage = 'dashboard' | 'routes' | 'services' | 'tls' | 'settings' |
 
 export interface NavItem {
   id: NavPage;
-  label: string;
+  /** i18n key; the label itself lives in the dictionaries (T309). */
+  labelKey: string;
   icon: Component;
   path: string;
   /** Sidebar grouping. */
@@ -34,8 +35,8 @@ export interface NavItem {
 /** A count the sidebar shows next to a menu entry. */
 export interface NavBadge {
   count: number;
-  /** Read out after the number, e.g. "upstreams down". */
-  label: string;
+  /** i18n key read out after the number, e.g. "upstreams down". */
+  labelKey: string;
   tone: 'destructive' | 'warning';
 }
 
@@ -49,25 +50,38 @@ export interface RouteLocation {
 export const navItems: NavItem[] = [
   {
     id: 'dashboard',
-    label: 'Dashboard',
+    labelKey: 'nav.dashboard',
     icon: LayoutDashboardIcon,
     path: '/',
     section: 'overview'
   },
-  { id: 'routes', label: 'Routes', icon: RouteIcon, path: '/routes', section: 'traffic', detail: true },
+  {
+    id: 'routes',
+    labelKey: 'nav.routes',
+    icon: RouteIcon,
+    path: '/routes',
+    section: 'traffic',
+    detail: true
+  },
   {
     id: 'services',
-    label: 'Services',
+    labelKey: 'nav.services',
     icon: ServerIcon,
     path: '/services',
     section: 'traffic',
     detail: true
   },
-  { id: 'tls', label: 'TLS', icon: ShieldCheckIcon, path: '/tls', section: 'operations' },
-  { id: 'settings', label: 'Settings', icon: SettingsIcon, path: '/settings', section: 'operations' },
+  { id: 'tls', labelKey: 'nav.tls', icon: ShieldCheckIcon, path: '/tls', section: 'operations' },
+  {
+    id: 'settings',
+    labelKey: 'nav.settings',
+    icon: SettingsIcon,
+    path: '/settings',
+    section: 'operations'
+  },
   {
     id: 'audit',
-    label: 'Audit',
+    labelKey: 'nav.audit',
     icon: ScrollTextIcon,
     path: '/audit',
     section: 'operations',
@@ -75,10 +89,10 @@ export const navItems: NavItem[] = [
   }
 ];
 
-export const navSections: { id: NavItem['section']; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'traffic', label: 'Traffic' },
-  { id: 'operations', label: 'Operations' }
+export const navSections: { id: NavItem['section']; labelKey: string }[] = [
+  { id: 'overview', labelKey: 'nav.section.overview' },
+  { id: 'traffic', labelKey: 'nav.section.traffic' },
+  { id: 'operations', labelKey: 'nav.section.operations' }
 ];
 
 const DEFAULT_PAGE: NavPage = 'dashboard';

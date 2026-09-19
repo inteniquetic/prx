@@ -14,6 +14,7 @@
     type NavPage
   } from '$lib/stores/navigation';
   import { cn } from '$lib/utils';
+  import { t } from '$lib/i18n';
 
   let {
     /** Counts shown next to a menu entry, e.g. upstreams that are down. */
@@ -51,7 +52,7 @@
     )}
   >
     <item.icon class="size-4 shrink-0" aria-hidden="true" />
-    <span class={cn('flex-1 truncate', collapsed && 'sr-only')}>{item.label}</span>
+    <span class={cn('flex-1 truncate', collapsed && 'sr-only')}>{$t(item.labelKey)}</span>
 
     {#if badge && badge.count > 0}
       <Badge
@@ -59,7 +60,7 @@
         class={cn('tabular-nums', collapsed && 'absolute right-1 top-1 px-1 py-0 text-[10px]')}
       >
         {badge.count}
-        <span class="sr-only">{badge.label}</span>
+        <span class="sr-only">{$t(badge.labelKey)}</span>
       </Badge>
     {:else if item.pending && !collapsed}
       <!-- Says the page is a placeholder before anyone clicks it. -->
@@ -68,7 +69,10 @@
   </a>
 {/snippet}
 
-<nav class="flex flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden px-2 py-4" aria-label="Main">
+<nav
+  class="flex flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden px-2 py-4"
+  aria-label={$t('nav.main')}
+>
   {#each navSections as section (section.id)}
     {@const items = navItems.filter((item) => item.section === section.id)}
     {#if items.length > 0}
@@ -81,7 +85,7 @@
             collapsed && 'sr-only'
           )}
         >
-          {section.label}
+          {$t(section.labelKey)}
         </p>
 
         {#each items as item (item.id)}
@@ -95,7 +99,9 @@
                 {/snippet}
               </Tooltip.Trigger>
               <Tooltip.Content side="right">
-                {item.label}{badge && badge.count > 0 ? ` — ${badge.count} ${badge.label}` : ''}
+                {$t(item.labelKey)}{badge && badge.count > 0
+                  ? ` — ${badge.count} ${$t(badge.labelKey)}`
+                  : ''}
               </Tooltip.Content>
             </Tooltip.Root>
           {:else}

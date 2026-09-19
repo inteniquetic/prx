@@ -13,6 +13,7 @@
   import PowerIcon from '@lucide/svelte/icons/power';
 
   import { Label } from '$lib/components/ui/label';
+  import { t } from '$lib/i18n';
 
   let {
     label,
@@ -45,10 +46,10 @@
     {#if restart}
       <span
         class="ms-2 inline-flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-warning-emphasis"
-        title="prx reads this once at startup"
+        title={$t('settings.restartTitle')}
       >
         <PowerIcon class="size-2.5" aria-hidden="true" />
-        needs a restart
+        {$t('settings.restartBadge')}
       </span>
     {/if}
     {#if description}

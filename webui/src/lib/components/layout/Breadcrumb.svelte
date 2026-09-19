@@ -1,12 +1,13 @@
 <script lang="ts">
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import { isPlainClick, location, navItems, navigate, pathFor } from '$lib/stores/navigation';
+  import { t } from '$lib/i18n';
 
   const item = $derived(navItems.find((entry) => entry.id === $location.page));
   const name = $derived($location.name);
 </script>
 
-<nav aria-label="Breadcrumb" class="min-w-0">
+<nav aria-label={$t('nav.breadcrumb')} class="min-w-0">
   <ol class="flex min-w-0 items-center gap-1.5 text-sm">
     <li class="shrink-0">
       <a
@@ -37,10 +38,10 @@
               navigate(item.id);
             }}
           >
-            {item.label}
+            {$t(item.labelKey)}
           </a>
         {:else}
-          <span aria-current="page" class="font-medium">{item.label}</span>
+          <span aria-current="page" class="font-medium">{$t(item.labelKey)}</span>
         {/if}
       </li>
     {/if}

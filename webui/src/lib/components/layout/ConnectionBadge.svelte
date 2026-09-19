@@ -6,25 +6,30 @@
   import * as Tooltip from '$lib/components/ui/tooltip';
   import { connection, type ConnectionStatus } from '$lib/stores/connection';
   import { cn } from '$lib/utils';
+  import { t } from '$lib/i18n';
 
   let { collapsed = false }: { collapsed?: boolean } = $props();
 
   // Shape and word first, colour second — same rule as StatusDot.
-  const META: Record<ConnectionStatus, { label: string; icon: typeof WifiIcon; class: string }> = {
-    connecting: { label: 'Connecting', icon: PlugZapIcon, class: 'text-muted-foreground' },
-    online: { label: 'Online', icon: WifiIcon, class: 'text-success-emphasis' },
-    reconnecting: { label: 'Reconnecting', icon: RefreshCwIcon, class: 'text-warning-emphasis' },
-    offline: { label: 'Offline', icon: CloudOffIcon, class: 'text-destructive-emphasis' }
+  const META: Record<ConnectionStatus, { key: string; icon: typeof WifiIcon; class: string }> = {
+    connecting: { key: 'connection.connecting', icon: PlugZapIcon, class: 'text-muted-foreground' },
+    online: { key: 'connection.online', icon: WifiIcon, class: 'text-success-emphasis' },
+    reconnecting: {
+      key: 'connection.reconnecting',
+      icon: RefreshCwIcon,
+      class: 'text-warning-emphasis'
+    },
+    offline: { key: 'connection.offline', icon: CloudOffIcon, class: 'text-destructive-emphasis' }
   };
 
   const state = $derived($connection);
   const meta = $derived(META[state.status]);
   const detail = $derived(
     state.status === 'online'
-      ? 'The admin API answered the last request.'
+      ? $t('connection.detail.online')
       : state.lastError
-        ? `Admin API: ${state.lastError}`
-        : 'Waiting for the admin API.'
+        ? $t('connection.detail.error', { error: state.lastError })
+        : $t('connection.detail.waiting')
   );
 </script>
 
@@ -36,8 +41,8 @@
     )}
   >
     <meta.icon class={cn('size-4 shrink-0', state.status === 'reconnecting' && 'animate-spin')} aria-hidden="true" />
-    <span class={cn(collapsed && 'sr-only')}>{meta.label}</span>
-    <span class="sr-only">— admin API</span>
+    <span class={cn(collapsed && 'sr-only')}>{$t(meta.key)}</span>
+    <span class="sr-only">{$t('connection.suffix')}</span>
   </Tooltip.Trigger>
   <Tooltip.Content side="right">{detail}</Tooltip.Content>
 </Tooltip.Root>

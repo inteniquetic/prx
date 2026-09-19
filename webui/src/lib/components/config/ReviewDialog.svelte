@@ -12,6 +12,7 @@
   import type { ConfigDiagnostic } from '$lib/api/configText';
   import ChangeSummaryList from './ChangeSummary.svelte';
   import DiffView from './DiffView.svelte';
+  import { plural, t } from '$lib/i18n';
 
   let {
     ops,
@@ -38,16 +39,16 @@
   class="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-4"
   role="dialog"
   aria-modal="true"
-  aria-label="Review config changes"
+  aria-label={$t('review.aria')}
 >
   <div
     class="flex max-h-[90vh] w-full max-w-5xl flex-col gap-4 overflow-auto rounded-2xl border border-border bg-card p-6 shadow-lg"
   >
     <div class="flex items-start justify-between gap-4">
       <div>
-        <h2 class="text-lg font-semibold text-foreground">Review before applying</h2>
+        <h2 class="text-lg font-semibold text-foreground">{$t('review.title')}</h2>
         <p class="mt-1 text-sm text-muted-foreground">
-          {summary?.headline ?? 'No changes'}
+          {summary?.headline ?? $t('review.noChanges')}
           <span class="mx-1 text-border">·</span>
           <span class="font-mono text-xs">
             <span class="text-success-emphasis">+{stats.added}</span>
@@ -64,7 +65,7 @@
           onclick={() => (mode = 'unified')}
           aria-pressed={mode === 'unified'}
         >
-          Unified
+          {$t('review.unified')}
         </button>
         <button
           type="button"
@@ -74,7 +75,7 @@
           onclick={() => (mode = 'split')}
           aria-pressed={mode === 'split'}
         >
-          Side by side
+          {$t('review.split')}
         </button>
       </div>
     </div>
@@ -82,13 +83,12 @@
     {#if warnings.length > 0}
       <div class="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3">
         <p class="text-sm font-medium text-foreground">
-          {warnings.length} warning{warnings.length === 1 ? '' : 's'} — these do not stop the
-          apply
+          {$plural('review.warnings', warnings.length)}
         </p>
         <ul class="mt-1 space-y-0.5">
           {#each warnings as warning, index (index)}
             <li class="text-xs text-muted-foreground">
-              line {warning.line}: {warning.message}
+              {$t('review.lineWarning', { line: warning.line, message: warning.message })}
             </li>
           {/each}
         </ul>
@@ -100,9 +100,9 @@
     <DiffView {ops} {mode} />
 
     <div class="flex items-center justify-end gap-2">
-      <Button variant="ghost" onclick={oncancel} disabled={applying}>Cancel</Button>
+      <Button variant="ghost" onclick={oncancel} disabled={applying}>{$t('common.cancel')}</Button>
       <Button onclick={onapply} disabled={applying}>
-        {applying ? 'Applying…' : 'Apply to the proxy'}
+        {applying ? $t('common.applying') : $t('review.apply')}
       </Button>
     </div>
   </div>
