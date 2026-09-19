@@ -1632,18 +1632,31 @@ async fn get_config(
     with_etag(text_response(StatusCode::OK, text.into_bytes()), &etag)
 }
 
-/// The body of a config request, or the response to send instead.
-async fn read_config_body(body: Body) -> Result<String, Response<Body>> {
+/// Why a request body could not be read, as a status and the line to send.
+///
+/// Not a `Response` — one of those is 128 bytes and would ride in the `Err`
+/// arm of every call, which `clippy::result_large_err` is right to object to.
+/// Deciding *what* went wrong and rendering it are also two different jobs.
+struct BodyRejection(StatusCode, String);
+
+impl From<BodyRejection> for Response<Body> {
+    fn from(BodyRejection(status, message): BodyRejection) -> Self {
+        text_response(status, message)
+    }
+}
+
+/// The body of a config request, or why it could not be read.
+async fn read_config_body(body: Body) -> Result<String, BodyRejection> {
     let bytes = match body::to_bytes(body, MAX_ADMIN_CONFIG_BODY_BYTES).await {
         Ok(bytes) => bytes,
         Err(err) => {
             if err.to_string().to_ascii_lowercase().contains("limit") {
-                return Err(text_response(
+                return Err(BodyRejection(
                     StatusCode::PAYLOAD_TOO_LARGE,
-                    b"request_body_too_large\n".to_vec(),
+                    "request_body_too_large\n".to_string(),
                 ));
             }
-            return Err(text_response(
+            return Err(BodyRejection(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("failed_to_read_request_body: {err:#}\n"),
             ));
@@ -1651,17 +1664,17 @@ async fn read_config_body(body: Body) -> Result<String, Response<Body>> {
     };
 
     if bytes.is_empty() {
-        return Err(text_response(
+        return Err(BodyRejection(
             StatusCode::BAD_REQUEST,
-            b"request_body_is_empty\n".to_vec(),
+            "request_body_is_empty\n".to_string(),
         ));
     }
 
     match std::str::from_utf8(&bytes) {
         Ok(text) => Ok(text.to_string()),
-        Err(_) => Err(text_response(
+        Err(_) => Err(BodyRejection(
             StatusCode::BAD_REQUEST,
-            b"invalid_utf8_body\n".to_vec(),
+            "invalid_utf8_body\n".to_string(),
         )),
     }
 }
@@ -1685,7 +1698,7 @@ struct ValidateResponse {
 async fn post_config_validate(State(state): State<AdminState>, body: Body) -> Response<Body> {
     let text = match read_config_body(body).await {
         Ok(text) => text,
-        Err(response) => return response,
+        Err(rejection) => return rejection.into(),
     };
 
     let (report, config) = validate::validate_text(&text);
@@ -1726,7 +1739,7 @@ struct EditResponse {
 async fn post_config_edit(body: Body) -> Response<Body> {
     let text = match read_config_body(body).await {
         Ok(text) => text,
-        Err(response) => return response,
+        Err(rejection) => return rejection.into(),
     };
 
     let request: EditRequest = match serde_json::from_str(&text) {
@@ -1792,7 +1805,7 @@ async fn put_config(
 ) -> Response<Body> {
     let text = match read_config_body(body).await {
         Ok(text) => text,
-        Err(response) => return response,
+        Err(rejection) => return rejection.into(),
     };
 
     let current = state.config_admin.read_config_text().unwrap_or_default();
