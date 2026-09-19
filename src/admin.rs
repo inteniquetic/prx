@@ -25,8 +25,8 @@ use tracing::{error, info};
 
 use crate::{
     config::{
-        CacheConfig, ConcurrencyLimitConfig, HeaderRules, LbStrategy, PrxConfig, RateLimitConfig,
-        RouteConfig,
+        CacheConfig, ConcurrencyLimitConfig, HeaderRules, HealthCheckConfig, LbStrategy, PrxConfig,
+        RateLimitConfig, RouteConfig, ServiceConfig, StickyConfig, UpstreamConfig, UpstreamH2,
     },
     router::RouteMatch,
     runtime::RuntimeConfig,
@@ -43,6 +43,8 @@ pub const ADMIN_SERVICES_NAME_PATH: &str = "/admin/services/{name}";
 pub const ADMIN_ROUTES_PATH: &str = "/admin/routes";
 pub const ADMIN_ROUTES_NAME_PATH: &str = "/admin/routes/{name}";
 pub const ADMIN_ROUTE_TEST_PATH: &str = "/web/routes/test";
+pub const ADMIN_SERVICE_STATUS_PATH: &str = "/web/services/status";
+pub const ADMIN_UPSTREAM_TEST_PATH: &str = "/web/upstreams/test";
 const WEBUI_INDEX_PATH: &str = "index.html";
 static WEBUI_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/webui/dist");
 
@@ -300,14 +302,56 @@ struct AdminObservabilityPayload {
     prometheus_listen: String,
 }
 
+/// A service exactly as the config holds it.
+///
+/// Same reasoning as `AdminRoutePayload`: the UI is the only editor most people
+/// will use, so a payload that leaves out health checks, session affinity or
+/// retry budgets turns "edit this service" into "lose them".
 #[derive(Debug, Serialize)]
 struct AdminServicePayload {
     name: String,
     lb: String,
     max_retries: usize,
     retry_backoff_ms: u64,
+    retry_budget_ratio: f64,
+    retry_budget_min_per_window: u64,
+    retry_budget_window_ms: u64,
+    retry_idempotent_only: bool,
+    request_timeout_ms: u64,
+    upstream_h2: UpstreamH2,
     circuit_breaker: AdminCircuitBreakerPayload,
+    health_check: HealthCheckConfig,
+    sticky: StickyConfig,
     upstreams: Vec<AdminUpstreamPayload>,
+}
+
+impl AdminServicePayload {
+    fn from_config(service: &ServiceConfig) -> Self {
+        Self {
+            name: service.name.clone(),
+            lb: lb_to_string(service.lb.clone()).to_string(),
+            max_retries: service.max_retries,
+            retry_backoff_ms: service.retry_backoff_ms,
+            retry_budget_ratio: service.retry_budget_ratio,
+            retry_budget_min_per_window: service.retry_budget_min_per_window,
+            retry_budget_window_ms: service.retry_budget_window_ms,
+            retry_idempotent_only: service.retry_idempotent_only,
+            request_timeout_ms: service.request_timeout_ms,
+            upstream_h2: service.upstream_h2,
+            circuit_breaker: AdminCircuitBreakerPayload {
+                enabled: service.circuit_breaker.enabled,
+                consecutive_failures: service.circuit_breaker.consecutive_failures,
+                open_ms: service.circuit_breaker.open_ms,
+            },
+            health_check: service.health_check.clone(),
+            sticky: service.sticky.clone(),
+            upstreams: service
+                .upstreams
+                .iter()
+                .map(AdminUpstreamPayload::from_config)
+                .collect(),
+        }
+    }
 }
 
 /// A route exactly as the config holds it.
@@ -361,6 +405,7 @@ struct AdminCircuitBreakerPayload {
 #[derive(Debug, Serialize)]
 struct AdminUpstreamPayload {
     addr: String,
+    enabled: bool,
     tls: bool,
     sni: String,
     weight: u16,
@@ -373,6 +418,25 @@ struct AdminUpstreamPayload {
     idle_timeout_ms: Option<u64>,
 }
 
+impl AdminUpstreamPayload {
+    fn from_config(upstream: &UpstreamConfig) -> Self {
+        Self {
+            addr: upstream.addr.clone(),
+            enabled: upstream.enabled,
+            tls: upstream.tls,
+            sni: upstream.sni.clone().unwrap_or_default(),
+            weight: upstream.weight,
+            verify_cert: upstream.verify_cert,
+            verify_hostname: upstream.verify_hostname,
+            connect_timeout_ms: upstream.connect_timeout_ms,
+            total_connect_timeout_ms: upstream.total_connect_timeout_ms,
+            read_timeout_ms: upstream.read_timeout_ms,
+            write_timeout_ms: upstream.write_timeout_ms,
+            idle_timeout_ms: upstream.idle_timeout_ms,
+        }
+    }
+}
+
 // Request payloads for Service CRUD
 #[derive(Debug, Deserialize)]
 struct ServiceRequestPayload {
@@ -383,8 +447,26 @@ struct ServiceRequestPayload {
     pub max_retries: Option<usize>,
     #[serde(default)]
     pub retry_backoff_ms: Option<u64>,
+    // Absent means "leave this as it is" on an update, and "take the default"
+    // on a create — an older client cannot erase a block it has no field for.
+    #[serde(default)]
+    pub retry_budget_ratio: Option<f64>,
+    #[serde(default)]
+    pub retry_budget_min_per_window: Option<u64>,
+    #[serde(default)]
+    pub retry_budget_window_ms: Option<u64>,
+    #[serde(default)]
+    pub retry_idempotent_only: Option<bool>,
+    #[serde(default)]
+    pub request_timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub upstream_h2: Option<UpstreamH2>,
     #[serde(default)]
     pub circuit_breaker: Option<CircuitBreakerRequestPayload>,
+    #[serde(default)]
+    pub health_check: Option<HealthCheckConfig>,
+    #[serde(default)]
+    pub sticky: Option<StickyConfig>,
     #[serde(default)]
     pub upstreams: Vec<UpstreamRequestPayload>,
 }
@@ -402,6 +484,8 @@ struct CircuitBreakerRequestPayload {
 #[derive(Debug, Deserialize)]
 struct UpstreamRequestPayload {
     pub addr: String,
+    #[serde(default)]
+    pub enabled: Option<bool>,
     #[serde(default)]
     pub tls: Option<bool>,
     #[serde(default)]
@@ -452,6 +536,54 @@ struct RouteRequestPayload {
     pub concurrency_limit: Option<ConcurrencyLimitConfig>,
     #[serde(default)]
     pub cache: Option<CacheConfig>,
+}
+
+/// Live state of every service, as the running proxy sees it right now.
+///
+/// The config says what was asked for; this says what is happening. The page
+/// that shows circuit breakers and probe verdicts needs the second one, and it
+/// has to come from the same snapshot traffic is being routed on.
+#[derive(Debug, Serialize)]
+struct ServiceStatusPayload {
+    checked_at_epoch_ms: u64,
+    services: Vec<ServiceStatusEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct ServiceStatusEntry {
+    name: String,
+    lb: String,
+    /// Whether the background prober is running for this service at all.
+    health_check_enabled: bool,
+    circuit_breaker_enabled: bool,
+    upstreams: Vec<UpstreamStatusEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct UpstreamStatusEntry {
+    addr: String,
+    /// False when the upstream is drained: still configured, taking no traffic.
+    enabled: bool,
+    weight: u16,
+    /// Share of the selection ring, read from the ring itself.
+    share: f64,
+    available: bool,
+    circuit_open: bool,
+    /// Milliseconds until the breaker closes again, when it is open.
+    circuit_reopens_in_ms: Option<u64>,
+    consecutive_failures: usize,
+    probe_healthy: bool,
+    last_probe_ms_ago: Option<u64>,
+    inflight: usize,
+    ewma_us: u64,
+}
+
+/// One upstream, probed on demand.
+#[derive(Debug, Deserialize)]
+struct UpstreamTestRequest {
+    addr: String,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
 }
 
 /// "If a request like this arrived, where would it go?"
@@ -609,34 +741,7 @@ impl From<PrxConfig> for AdminConfigPayload {
         let services = config
             .services
             .iter()
-            .map(|service| AdminServicePayload {
-                name: service.name.clone(),
-                lb: lb_to_string(service.lb.clone()).to_string(),
-                max_retries: service.max_retries,
-                retry_backoff_ms: service.retry_backoff_ms,
-                circuit_breaker: AdminCircuitBreakerPayload {
-                    enabled: service.circuit_breaker.enabled,
-                    consecutive_failures: service.circuit_breaker.consecutive_failures,
-                    open_ms: service.circuit_breaker.open_ms,
-                },
-                upstreams: service
-                    .upstreams
-                    .iter()
-                    .map(|upstream| AdminUpstreamPayload {
-                        addr: upstream.addr.clone(),
-                        tls: upstream.tls,
-                        sni: upstream.sni.clone().unwrap_or_default(),
-                        weight: upstream.weight,
-                        verify_cert: upstream.verify_cert,
-                        verify_hostname: upstream.verify_hostname,
-                        connect_timeout_ms: upstream.connect_timeout_ms,
-                        total_connect_timeout_ms: upstream.total_connect_timeout_ms,
-                        read_timeout_ms: upstream.read_timeout_ms,
-                        write_timeout_ms: upstream.write_timeout_ms,
-                        idle_timeout_ms: upstream.idle_timeout_ms,
-                    })
-                    .collect(),
-            })
+            .map(AdminServicePayload::from_config)
             .collect();
 
         let routes = config
@@ -1005,6 +1110,91 @@ async fn post_route_health(
     let verdicts = probe_verdicts(&state.active_config);
     let payload = render_route_health_payload(config, timeout_ms, &verdicts).await;
     json_response(StatusCode::OK, &payload)
+}
+
+/// `GET /web/services/status` — live per-upstream state from the running config.
+async fn get_service_status(State(state): State<AdminState>) -> Response<Body> {
+    let snapshot = state.active_config.load();
+
+    let mut services = Vec::with_capacity(snapshot.service_count());
+    for idx in 0..snapshot.service_count() {
+        let Some(service) = snapshot.service(idx) else {
+            continue;
+        };
+
+        let shares = service.selection_share();
+        let upstreams = service
+            .upstreams
+            .iter()
+            .enumerate()
+            .map(|(upstream_idx, upstream)| UpstreamStatusEntry {
+                addr: upstream.addr.clone(),
+                enabled: upstream.enabled,
+                weight: upstream.weight,
+                share: shares.get(upstream_idx).copied().unwrap_or(0.0),
+                available: upstream.enabled && !upstream.is_circuit_open(),
+                circuit_open: upstream.is_circuit_open(),
+                circuit_reopens_in_ms: upstream.circuit_reopens_in_ms(),
+                consecutive_failures: upstream.consecutive_failures(),
+                probe_healthy: upstream.is_probe_healthy(),
+                last_probe_ms_ago: (upstream.last_probe_ms() > 0)
+                    .then(|| now_epoch_ms().saturating_sub(upstream.last_probe_ms())),
+                inflight: upstream.inflight(),
+                ewma_us: upstream.ewma_us(),
+            })
+            .collect();
+
+        services.push(ServiceStatusEntry {
+            name: service.name.clone(),
+            lb: lb_to_string(service.lb.clone()).to_string(),
+            health_check_enabled: service.health_check.enabled,
+            circuit_breaker_enabled: service.circuit_breaker.is_enabled(),
+            upstreams,
+        });
+    }
+
+    json_response(
+        StatusCode::OK,
+        &ServiceStatusPayload {
+            checked_at_epoch_ms: now_epoch_ms(),
+            services,
+        },
+    )
+}
+
+/// `POST /web/upstreams/test` — opens a connection to one upstream and says
+/// what happened.
+///
+/// The same TCP check the route health endpoint falls back to, addressable on
+/// its own so "test this upstream" does not mean "probe the whole config".
+async fn post_upstream_test(State(_state): State<AdminState>, body: Body) -> Response<Body> {
+    let bytes = match body::to_bytes(body, MAX_ADMIN_CONFIG_BODY_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed_to_read_request_body: {err:#}\n"),
+            );
+        }
+    };
+
+    let request = match serde_json::from_slice::<UpstreamTestRequest>(&bytes) {
+        Ok(request) => request,
+        Err(err) => {
+            return text_response(
+                StatusCode::BAD_REQUEST,
+                format!("invalid_request_body: {err:#}\n"),
+            );
+        }
+    };
+
+    if request.addr.trim().is_empty() {
+        return text_response(StatusCode::BAD_REQUEST, b"addr_is_empty\n".to_vec());
+    }
+
+    let timeout_ms = health_timeout_ms(request.timeout_ms);
+    let result = check_upstream_health(request.addr, timeout_ms).await;
+    json_response(StatusCode::OK, &result)
 }
 
 /// `POST /web/routes/test` — runs one imaginary request through the live route
@@ -1412,34 +1602,7 @@ async fn list_services(State(state): State<AdminState>) -> Response<Body> {
             let services: Vec<AdminServicePayload> = config
                 .services
                 .iter()
-                .map(|s| AdminServicePayload {
-                    name: s.name.clone(),
-                    lb: lb_to_string(s.lb.clone()).to_string(),
-                    max_retries: s.max_retries,
-                    retry_backoff_ms: s.retry_backoff_ms,
-                    circuit_breaker: AdminCircuitBreakerPayload {
-                        enabled: s.circuit_breaker.enabled,
-                        consecutive_failures: s.circuit_breaker.consecutive_failures,
-                        open_ms: s.circuit_breaker.open_ms,
-                    },
-                    upstreams: s
-                        .upstreams
-                        .iter()
-                        .map(|u| AdminUpstreamPayload {
-                            addr: u.addr.clone(),
-                            tls: u.tls,
-                            sni: u.sni.clone().unwrap_or_default(),
-                            weight: u.weight,
-                            verify_cert: u.verify_cert,
-                            verify_hostname: u.verify_hostname,
-                            connect_timeout_ms: u.connect_timeout_ms,
-                            total_connect_timeout_ms: u.total_connect_timeout_ms,
-                            read_timeout_ms: u.read_timeout_ms,
-                            write_timeout_ms: u.write_timeout_ms,
-                            idle_timeout_ms: u.idle_timeout_ms,
-                        })
-                        .collect(),
-                })
+                .map(AdminServicePayload::from_config)
                 .collect();
             json_response(StatusCode::OK, &services)
         }
@@ -1457,34 +1620,7 @@ async fn get_service(
     match state.config_admin.read_parsed_config() {
         Ok(config) => {
             if let Some(service) = config.services.iter().find(|s| s.name == name) {
-                let service_payload = AdminServicePayload {
-                    name: service.name.clone(),
-                    lb: lb_to_string(service.lb.clone()).to_string(),
-                    max_retries: service.max_retries,
-                    retry_backoff_ms: service.retry_backoff_ms,
-                    circuit_breaker: AdminCircuitBreakerPayload {
-                        enabled: service.circuit_breaker.enabled,
-                        consecutive_failures: service.circuit_breaker.consecutive_failures,
-                        open_ms: service.circuit_breaker.open_ms,
-                    },
-                    upstreams: service
-                        .upstreams
-                        .iter()
-                        .map(|u| AdminUpstreamPayload {
-                            addr: u.addr.clone(),
-                            tls: u.tls,
-                            sni: u.sni.clone().unwrap_or_default(),
-                            weight: u.weight,
-                            verify_cert: u.verify_cert,
-                            verify_hostname: u.verify_hostname,
-                            connect_timeout_ms: u.connect_timeout_ms,
-                            total_connect_timeout_ms: u.total_connect_timeout_ms,
-                            read_timeout_ms: u.read_timeout_ms,
-                            write_timeout_ms: u.write_timeout_ms,
-                            idle_timeout_ms: u.idle_timeout_ms,
-                        })
-                        .collect(),
-                };
+                let service_payload = AdminServicePayload::from_config(service);
                 json_response(StatusCode::OK, &service_payload)
             } else {
                 text_response(StatusCode::NOT_FOUND, b"service_not_found\n".to_vec())
@@ -1578,6 +1714,7 @@ async fn create_service(State(state): State<AdminState>, body: Body) -> Response
                 return Err(anyhow::anyhow!("service '{}' already exists", payload.name));
             }
 
+            let defaults = ServiceConfig::default();
             let service = crate::config::ServiceConfig {
                 name: payload.name.clone(),
                 lb: payload
@@ -1585,9 +1722,26 @@ async fn create_service(State(state): State<AdminState>, body: Body) -> Response
                     .as_deref()
                     .map(|s| s.parse().unwrap_or_default())
                     .unwrap_or_default(),
-                upstream_h2: crate::config::UpstreamH2::default(),
+                upstream_h2: payload.upstream_h2.unwrap_or(defaults.upstream_h2),
                 max_retries: payload.max_retries.unwrap_or(0),
                 retry_backoff_ms: payload.retry_backoff_ms.unwrap_or(0),
+                retry_budget_ratio: payload
+                    .retry_budget_ratio
+                    .unwrap_or(defaults.retry_budget_ratio),
+                retry_budget_min_per_window: payload
+                    .retry_budget_min_per_window
+                    .unwrap_or(defaults.retry_budget_min_per_window),
+                retry_budget_window_ms: payload
+                    .retry_budget_window_ms
+                    .unwrap_or(defaults.retry_budget_window_ms),
+                retry_idempotent_only: payload
+                    .retry_idempotent_only
+                    .unwrap_or(defaults.retry_idempotent_only),
+                request_timeout_ms: payload
+                    .request_timeout_ms
+                    .unwrap_or(defaults.request_timeout_ms),
+                health_check: payload.health_check.unwrap_or(defaults.health_check),
+                sticky: payload.sticky.unwrap_or(defaults.sticky),
                 circuit_breaker: payload
                     .circuit_breaker
                     .map(|cb| crate::config::CircuitBreakerConfig {
@@ -1601,6 +1755,7 @@ async fn create_service(State(state): State<AdminState>, body: Body) -> Response
                     .into_iter()
                     .map(|u| crate::config::UpstreamConfig {
                         addr: u.addr,
+                        enabled: u.enabled.unwrap_or(true),
                         tls: u.tls.unwrap_or(false),
                         sni: u.sni,
                         weight: u.weight.unwrap_or(1),
@@ -1613,7 +1768,6 @@ async fn create_service(State(state): State<AdminState>, body: Body) -> Response
                         idle_timeout_ms: u.idle_timeout_ms,
                     })
                     .collect(),
-                ..Default::default()
             };
 
             config.services.push(service);
@@ -1723,15 +1877,40 @@ async fn update_service(
                     .as_deref()
                     .map(|s| s.parse().unwrap_or_default())
                     .unwrap_or_else(|| config.services[index].lb.clone()),
-                // Preserved rather than reset: the admin API does not expose
-                // this knob yet (T205 will generate the payload from the schema).
-                upstream_h2: config.services[index].upstream_h2,
+                // A block the request does not mention keeps whatever the file
+                // said. This used to fall through to `..Default::default()`,
+                // which quietly reset health checks, session affinity and retry
+                // budgets every time anyone renamed a service in the UI.
+                upstream_h2: payload
+                    .upstream_h2
+                    .unwrap_or(config.services[index].upstream_h2),
                 max_retries: payload
                     .max_retries
                     .unwrap_or(config.services[index].max_retries),
                 retry_backoff_ms: payload
                     .retry_backoff_ms
                     .unwrap_or(config.services[index].retry_backoff_ms),
+                retry_budget_ratio: payload
+                    .retry_budget_ratio
+                    .unwrap_or(config.services[index].retry_budget_ratio),
+                retry_budget_min_per_window: payload
+                    .retry_budget_min_per_window
+                    .unwrap_or(config.services[index].retry_budget_min_per_window),
+                retry_budget_window_ms: payload
+                    .retry_budget_window_ms
+                    .unwrap_or(config.services[index].retry_budget_window_ms),
+                retry_idempotent_only: payload
+                    .retry_idempotent_only
+                    .unwrap_or(config.services[index].retry_idempotent_only),
+                request_timeout_ms: payload
+                    .request_timeout_ms
+                    .unwrap_or(config.services[index].request_timeout_ms),
+                health_check: payload
+                    .health_check
+                    .unwrap_or_else(|| config.services[index].health_check.clone()),
+                sticky: payload
+                    .sticky
+                    .unwrap_or_else(|| config.services[index].sticky.clone()),
                 circuit_breaker: payload
                     .circuit_breaker
                     .map(|cb| crate::config::CircuitBreakerConfig {
@@ -1751,6 +1930,7 @@ async fn update_service(
                     .into_iter()
                     .map(|u| crate::config::UpstreamConfig {
                         addr: u.addr,
+                        enabled: u.enabled.unwrap_or(true),
                         tls: u.tls.unwrap_or(false),
                         sni: u.sni,
                         weight: u.weight.unwrap_or(1),
@@ -1763,7 +1943,6 @@ async fn update_service(
                         idle_timeout_ms: u.idle_timeout_ms,
                     })
                     .collect(),
-                ..Default::default()
             };
 
             config.services[index] = service;
@@ -1793,12 +1972,20 @@ async fn delete_service(
                 .position(|s| s.name == name)
                 .ok_or_else(|| anyhow::anyhow!("service '{}' not found", name))?;
 
-            // Check if any routes reference this service
-            let referenced = config.routes.iter().any(|r| r.service == name);
-            if referenced {
+            // Naming them matters: "something still points at this" is not
+            // an answer anyone can act on.
+            let referenced: Vec<&str> = config
+                .routes
+                .iter()
+                .filter(|r| r.service == name)
+                .map(|r| r.name.as_str())
+                .collect();
+            if !referenced.is_empty() {
                 return Err(anyhow::anyhow!(
-                    "service '{}' is referenced by one or more routes",
-                    name
+                    "service '{}' is referenced by {} route(s): {}",
+                    name,
+                    referenced.len(),
+                    referenced.join(", ")
                 ));
             }
 
@@ -2132,6 +2319,11 @@ fn build_router(state: AdminState) -> Router {
             get(get_route_health).post(post_route_health),
         )
         .route(ADMIN_ROUTE_TEST_PATH, axum::routing::post(post_route_test))
+        .route(ADMIN_SERVICE_STATUS_PATH, get(get_service_status))
+        .route(
+            ADMIN_UPSTREAM_TEST_PATH,
+            axum::routing::post(post_upstream_test),
+        )
         .route(ADMIN_CACHE_PATH, get(get_cache_status).delete(purge_cache))
         .route(ADMIN_TLS_STATUS_PATH, get(get_tls_status))
         // Service CRUD endpoints
@@ -2446,6 +2638,129 @@ is_default = true
             .would_pick;
         assert_eq!(first, second);
         assert!(first.is_some(), "round robin has a next upstream to name");
+    }
+
+    const WEIGHTED_SERVICE: &str = r#"
+[server]
+listen = ["127.0.0.1:18080"]
+health_path = "/healthz"
+ready_path = "/readyz"
+
+[[service]]
+name = "weighted"
+lb = "round_robin"
+
+[[service.upstream]]
+addr = "127.0.0.1:19001"
+weight = 3
+
+[[service.upstream]]
+addr = "127.0.0.1:19002"
+weight = 1
+
+[[route]]
+name = "default"
+service = "weighted"
+path_prefix = "/"
+is_default = true
+"#;
+
+    #[test]
+    fn the_share_a_weight_buys_is_the_share_traffic_gets() {
+        // The UI puts a percentage next to the weight slider. This is the test
+        // that the percentage is not a story: the reported share and the
+        // distribution round robin actually produces have to agree.
+        let config = PrxConfig::from_toml_str(WEIGHTED_SERVICE).expect("config parses");
+        let runtime = RuntimeConfig::from_config(config);
+        let service = runtime.service(0).expect("service");
+
+        let shares = service.selection_share();
+        assert_eq!(shares.len(), 2);
+        assert!((shares[0] - 0.75).abs() < 1e-9, "3:1 is 75% of the ring");
+        assert!((shares[1] - 0.25).abs() < 1e-9);
+
+        let mut picked = [0usize; 2];
+        for _ in 0..4_000 {
+            let (idx, _) = service.next_upstream(0, &[]).expect("an upstream");
+            picked[idx] += 1;
+        }
+        let observed = [picked[0] as f64 / 4_000.0, picked[1] as f64 / 4_000.0];
+        for (share, seen) in shares.iter().zip(observed.iter()) {
+            assert!(
+                (share - seen).abs() < 0.01,
+                "reported {share} but round robin sent {seen}"
+            );
+        }
+    }
+
+    #[test]
+    fn weight_zero_is_not_a_drain() {
+        // The balancer clamps weights to at least 1, so an upstream set to
+        // weight 0 quietly keeps serving. This is why draining is its own flag
+        // rather than a weight trick, and this test is what keeps it that way.
+        let toml = WEIGHTED_SERVICE.replace("weight = 1", "weight = 0");
+        let config = PrxConfig::from_toml_str(&toml).expect("config parses");
+        let runtime = RuntimeConfig::from_config(config);
+        let service = runtime.service(0).expect("service");
+
+        assert!(service.selection_share()[1] > 0.0);
+    }
+
+    #[test]
+    fn a_drained_upstream_takes_no_traffic() {
+        let toml = WEIGHTED_SERVICE.replace(
+            "addr = \"127.0.0.1:19002\"\nweight = 1",
+            "addr = \"127.0.0.1:19002\"\nweight = 1\nenabled = false",
+        );
+        let config = PrxConfig::from_toml_str(&toml).expect("config parses");
+        let runtime = RuntimeConfig::from_config(config);
+        let service = runtime.service(0).expect("service");
+
+        let shares = service.selection_share();
+        assert_eq!(
+            shares[1], 0.0,
+            "a drained upstream has no share of the ring"
+        );
+        assert!((shares[0] - 1.0).abs() < 1e-9, "the rest takes everything");
+
+        for _ in 0..200 {
+            let (idx, _) = service.next_upstream(0, &[]).expect("an upstream");
+            assert_eq!(idx, 0, "traffic never reaches the drained upstream");
+        }
+
+        // It is still in the config, and still worth probing, so it can be
+        // brought back on evidence rather than on hope.
+        assert_eq!(service.upstreams.len(), 2);
+        assert!(!service.upstreams[1].enabled);
+    }
+
+    #[test]
+    fn draining_every_upstream_leaves_nothing_to_pick() {
+        let toml = WEIGHTED_SERVICE
+            .replace("weight = 3", "weight = 3\nenabled = false")
+            .replace("weight = 1", "weight = 1\nenabled = false");
+        let config = PrxConfig::from_toml_str(&toml).expect("config parses");
+        let runtime = RuntimeConfig::from_config(config);
+        let service = runtime.service(0).expect("service");
+
+        assert!(service.next_upstream(0, &[]).is_none());
+        assert!(!service.has_available_upstream());
+    }
+
+    #[test]
+    fn service_status_reports_every_upstream() {
+        let config = PrxConfig::from_toml_str(WEIGHTED_SERVICE).expect("config parses");
+        let runtime = RuntimeConfig::from_config(config);
+        let service = runtime.service(0).expect("service");
+
+        let shares = service.selection_share();
+        assert_eq!(service.upstreams.len(), shares.len());
+        for upstream in &service.upstreams {
+            // Nothing has failed yet, so the breaker is shut and nothing is due.
+            assert!(!upstream.is_circuit_open());
+            assert_eq!(upstream.circuit_reopens_in_ms(), None);
+            assert_eq!(upstream.consecutive_failures(), 0);
+        }
     }
 
     #[test]

@@ -1180,6 +1180,13 @@ fn default_cb_open_ms() -> u64 {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UpstreamConfig {
     pub addr: String,
+    /// `false` drains the upstream: it stays in the config, keeps being probed,
+    /// and is left out of the selection ring so it takes no traffic.
+    ///
+    /// This cannot be expressed as `weight = 0` — the balancer clamps weights to
+    /// at least 1, so a zero-weight upstream would quietly keep serving.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     #[serde(default)]
     pub tls: bool,
     #[serde(default)]
@@ -1213,6 +1220,7 @@ mod tests {
     fn valid_upstream(addr: &str) -> UpstreamConfig {
         UpstreamConfig {
             addr: addr.to_string(),
+            enabled: true,
             tls: false,
             sni: None,
             weight: 1,

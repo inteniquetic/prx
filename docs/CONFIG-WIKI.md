@@ -653,9 +653,10 @@ Validation (when `enabled = true`):
 | Field | Type | Default | Required | Description |
 |---|---|---|---|---|
 | `addr` | `string` | - | Yes | Upstream address, e.g. `10.0.0.5:8080` |
+| `enabled` | `bool` | `true` | No | `false` drains it: still configured and still probed, but out of the selection ring |
 | `tls` | `bool` | `false` | No | Connect to upstream via TLS |
 | `sni` | `string` | auto | No | SNI for upstream TLS |
-| `weight` | `number` | `1` | No | Load balancing weight |
+| `weight` | `number` | `1` | No | Load balancing weight. Clamped to 1–256, so `0` does **not** drain an upstream — use `enabled = false` |
 | `verify_cert` | `bool` | runtime `true` | No | verify certificate |
 | `verify_hostname` | `bool` | runtime `true` | No | verify hostname |
 | `connect_timeout_ms` | `number` | `null` | No | connect timeout |

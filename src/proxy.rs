@@ -1251,6 +1251,7 @@ mod tests {
     fn upstream(addr: &str) -> UpstreamConfig {
         UpstreamConfig {
             addr: addr.to_string(),
+            enabled: true,
             tls: false,
             sni: None,
             weight: 1,
