@@ -37,9 +37,11 @@ use crate::{
     router::RouteMatch,
     runtime::RuntimeConfig,
     stats::{self, EventLevel},
+    validate::{self, ValidationReport},
 };
 
 pub const ADMIN_CONFIG_PATH: &str = "/web/config";
+pub const ADMIN_CONFIG_VALIDATE_PATH: &str = "/web/config/validate";
 pub const ADMIN_ROUTE_HEALTH_PATH: &str = "/web/health/routes";
 pub const ADMIN_CACHE_PATH: &str = "/web/cache";
 pub const ADMIN_TLS_STATUS_PATH: &str = "/web/tls/status";
@@ -257,6 +259,24 @@ struct AdminState {
 #[derive(Debug, Default, Deserialize)]
 struct ConfigQuery {
     format: Option<String>,
+    /// `PUT ?dry_run=true` validates and answers with the report, and writes
+    /// nothing (T203).
+    dry_run: Option<String>,
+}
+
+/// Loose truthiness for a query flag: `?dry_run` on its own means yes, and so
+/// do `1`, `true` and `yes`, because every one of them gets typed.
+fn query_flag(value: Option<&String>) -> bool {
+    match value {
+        None => false,
+        Some(raw) => {
+            let raw = raw.trim();
+            raw.is_empty()
+                || raw.eq_ignore_ascii_case("true")
+                || raw.eq_ignore_ascii_case("1")
+                || raw.eq_ignore_ascii_case("yes")
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1521,17 +1541,53 @@ fn is_asset_dir(segment: &str) -> bool {
         .any(|dir| dir.path().to_str() == Some(segment))
 }
 
+/// An identity for the config file as it is on disk right now.
+///
+/// Two tabs that both loaded the same file get the same value, and anything
+/// that rewrites the file changes it, which is all `If-Match` needs. It is not
+/// a checksum anyone should trust against tampering.
+fn config_etag(bytes: &[u8]) -> String {
+    use std::hash::Hasher;
+
+    let mut hasher = rustc_hash::FxHasher::default();
+    hasher.write(bytes);
+    format!("\"{:x}-{:x}\"", bytes.len(), hasher.finish())
+}
+
+fn with_etag(mut response: Response<Body>, etag: &str) -> Response<Body> {
+    if let Ok(value) = HeaderValue::from_str(etag) {
+        response.headers_mut().insert(header::ETAG, value);
+    }
+    response
+}
+
 async fn get_config(
     State(state): State<AdminState>,
     Query(query): Query<ConfigQuery>,
 ) -> Response<Body> {
+    // Both shapes describe the same file, so both carry the same ETag: the
+    // editor can load the text and still know what a JSON reader is looking at.
+    let text = match state.config_admin.read_config_text() {
+        Ok(text) => text,
+        Err(err) => {
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed_to_read_config: {err:#}\n"),
+            );
+        }
+    };
+    let etag = config_etag(text.as_bytes());
+
     if query
         .format
         .as_deref()
         .is_some_and(|value| value.eq_ignore_ascii_case("json"))
     {
-        return match state.config_admin.read_parsed_config() {
-            Ok(config) => json_response(StatusCode::OK, &AdminConfigPayload::from(config)),
+        return match PrxConfig::from_toml_str(&text) {
+            Ok(config) => with_etag(
+                json_response(StatusCode::OK, &AdminConfigPayload::from(config)),
+                &etag,
+            ),
             Err(err) => text_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("failed_to_read_config: {err:#}\n"),
@@ -1539,47 +1595,154 @@ async fn get_config(
         };
     }
 
-    match state.config_admin.read_config_text() {
-        Ok(content) => text_response(StatusCode::OK, content.into_bytes()),
-        Err(err) => text_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed_to_read_config: {err:#}\n"),
-        ),
+    with_etag(text_response(StatusCode::OK, text.into_bytes()), &etag)
+}
+
+/// The body of a config request, or the response to send instead.
+async fn read_config_body(body: Body) -> Result<String, Response<Body>> {
+    let bytes = match body::to_bytes(body, MAX_ADMIN_CONFIG_BODY_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            if err.to_string().to_ascii_lowercase().contains("limit") {
+                return Err(text_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    b"request_body_too_large\n".to_vec(),
+                ));
+            }
+            return Err(text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed_to_read_request_body: {err:#}\n"),
+            ));
+        }
+    };
+
+    if bytes.is_empty() {
+        return Err(text_response(
+            StatusCode::BAD_REQUEST,
+            b"request_body_is_empty\n".to_vec(),
+        ));
+    }
+
+    match std::str::from_utf8(&bytes) {
+        Ok(text) => Ok(text.to_string()),
+        Err(_) => Err(text_response(
+            StatusCode::BAD_REQUEST,
+            b"invalid_utf8_body\n".to_vec(),
+        )),
     }
 }
 
-async fn put_config(State(state): State<AdminState>, body: Body) -> Response<Body> {
-    let body = match body::to_bytes(body, MAX_ADMIN_CONFIG_BODY_BYTES).await {
-        Ok(body) => body,
-        Err(err) => {
-            if err.to_string().to_ascii_lowercase().contains("limit") {
-                return text_response(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    b"request_body_too_large\n".to_vec(),
-                );
-            }
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed_to_read_request_body: {err:#}\n"),
-            );
-        }
+/// `POST /web/config/validate` (T203): every problem in one pass, each with the
+/// line it is on, and nothing written.
+#[derive(Debug, Serialize)]
+struct ValidateResponse {
+    #[serde(flatten)]
+    report: ValidationReport,
+    /// The config as the API would report it, when it is valid — so the editor
+    /// can say what changed without parsing TOML in the browser.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config: Option<AdminConfigPayload>,
+    /// The ETag of the file on disk at the moment of validation. A draft whose
+    /// base no longer matches this was overtaken by someone else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_etag: Option<String>,
+}
+
+async fn post_config_validate(State(state): State<AdminState>, body: Body) -> Response<Body> {
+    let text = match read_config_body(body).await {
+        Ok(text) => text,
+        Err(response) => return response,
     };
 
-    if body.is_empty() {
-        return text_response(StatusCode::BAD_REQUEST, b"request_body_is_empty\n".to_vec());
+    let (report, config) = validate::validate_text(&text);
+    let current_etag = state
+        .config_admin
+        .read_config_text()
+        .ok()
+        .map(|current| config_etag(current.as_bytes()));
+
+    json_response(
+        StatusCode::OK,
+        &ValidateResponse {
+            report,
+            config: config.map(AdminConfigPayload::from),
+            current_etag,
+        },
+    )
+}
+
+/// What a client gets back when its `If-Match` no longer matches the file:
+/// enough to show the three sides without a second request.
+#[derive(Debug, Serialize)]
+struct ConfigConflict {
+    error: &'static str,
+    /// What the client believed it was editing.
+    expected_etag: String,
+    /// What is actually on disk.
+    current_etag: String,
+    current_toml: String,
+}
+
+async fn put_config(
+    State(state): State<AdminState>,
+    Query(query): Query<ConfigQuery>,
+    headers: header::HeaderMap,
+    body: Body,
+) -> Response<Body> {
+    let text = match read_config_body(body).await {
+        Ok(text) => text,
+        Err(response) => return response,
+    };
+
+    let current = state.config_admin.read_config_text().unwrap_or_default();
+    let current_etag = config_etag(current.as_bytes());
+
+    // Optimistic concurrency (T204): a client that says which version it edited
+    // is told when someone else got there first, instead of silently winning.
+    if let Some(expected) = headers
+        .get(header::IF_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "*")
+        && expected != current_etag
+    {
+        stats::record_event(
+            EventLevel::Warn,
+            "config_apply",
+            "Config apply rejected: the file changed since it was loaded",
+        );
+        return json_response(
+            StatusCode::CONFLICT,
+            &ConfigConflict {
+                error: "config_changed",
+                expected_etag: expected.to_string(),
+                current_etag,
+                current_toml: current,
+            },
+        );
     }
 
-    let text = match std::str::from_utf8(&body) {
-        Ok(content) => content,
-        Err(_) => {
-            return text_response(StatusCode::BAD_REQUEST, b"invalid_utf8_body\n".to_vec());
-        }
-    };
+    let (report, _) = validate::validate_text(&text);
+    if query_flag(query.dry_run.as_ref()) {
+        return json_response(
+            StatusCode::OK,
+            &ValidateResponse {
+                report,
+                config: None,
+                current_etag: Some(current_etag),
+            },
+        );
+    }
 
-    if let Err(err) = PrxConfig::from_toml_str(text) {
+    if !report.valid {
+        let first = report
+            .errors
+            .first()
+            .map(|error| format!("line {}: {} ({})", error.line, error.message, error.code))
+            .unwrap_or_else(|| "config is not valid".to_string());
         return text_response(
             StatusCode::BAD_REQUEST,
-            format!("invalid_config: {err:#}\n"),
+            format!("invalid_config: {first}\n"),
         );
     }
 
@@ -1587,7 +1750,7 @@ async fn put_config(State(state): State<AdminState>, body: Body) -> Response<Bod
     // so it goes on the dashboard's event strip either way round (T306).
     match state
         .config_admin
-        .apply_config_text(text, &state.active_config)
+        .apply_config_text(&text, &state.active_config)
     {
         Ok(()) => {
             stats::record_event(
@@ -1595,7 +1758,10 @@ async fn put_config(State(state): State<AdminState>, body: Body) -> Response<Bod
                 "config_apply",
                 "Config applied from the admin API",
             );
-            text_response(StatusCode::OK, b"config_applied\n".to_vec())
+            with_etag(
+                text_response(StatusCode::OK, b"config_applied\n".to_vec()),
+                &config_etag(text.as_bytes()),
+            )
         }
         Err(err) => {
             stats::record_event(
@@ -2479,6 +2645,10 @@ fn build_router(state: AdminState) -> Router {
         // Config endpoints
         .route(ADMIN_CONFIG_PATH, get(get_config).put(put_config))
         .route(
+            ADMIN_CONFIG_VALIDATE_PATH,
+            axum::routing::post(post_config_validate),
+        )
+        .route(
             ADMIN_ROUTE_HEALTH_PATH,
             get(get_route_health).post(post_route_health),
         )
@@ -3027,5 +3197,246 @@ is_default = true
 
         let content = fs::read_to_string(&config_path).expect("config should be readable");
         assert_eq!(content, next);
+    }
+
+    // ---- validate, ETag and If-Match (T203/T204, for the editor in T307) ----
+
+    fn admin_state(config_path: &Path) -> AdminState {
+        let parsed = PrxConfig::from_file(config_path).expect("seed config should be valid");
+        AdminState {
+            config_admin: ConfigAdmin::new(config_path.to_path_buf()),
+            active_config: Arc::new(ArcSwap::from_pointee(RuntimeConfig::from_config(parsed))),
+            acme_status: Arc::new(std::sync::RwLock::new(crate::acme::AcmeStatus::default())),
+            tls_resolver: None,
+        }
+    }
+
+    async fn response_text(response: Response<Body>) -> String {
+        let bytes = body::to_bytes(response.into_body(), MAX_ADMIN_CONFIG_BODY_BYTES)
+            .await
+            .expect("body should be readable");
+        String::from_utf8(bytes.to_vec()).expect("body should be utf-8")
+    }
+
+    fn seeded(text: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempdir().expect("tempdir should be created");
+        let config_path = dir.path().join("Prx.toml");
+        fs::write(&config_path, text).expect("seed config");
+        (dir, config_path)
+    }
+
+    #[tokio::test]
+    async fn get_config_carries_an_etag_that_follows_the_file() {
+        let (_dir, config_path) = seeded(&sample_config("127.0.0.1:8080"));
+        let state = admin_state(&config_path);
+
+        let first = get_config(State(state.clone()), Query(ConfigQuery::default())).await;
+        let etag = first
+            .headers()
+            .get(header::ETAG)
+            .expect("an ETag so a draft knows what it is based on")
+            .to_str()
+            .expect("ascii")
+            .to_string();
+
+        // The JSON shape describes the same file, so it answers with the same
+        // ETag rather than one of its own.
+        let as_json = get_config(
+            State(state.clone()),
+            Query(ConfigQuery {
+                format: Some("json".to_string()),
+                dry_run: None,
+            }),
+        )
+        .await;
+        assert_eq!(
+            as_json
+                .headers()
+                .get(header::ETAG)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            etag
+        );
+
+        fs::write(&config_path, sample_config("127.0.0.1:8081")).expect("rewrite config");
+        let after = get_config(State(state), Query(ConfigQuery::default())).await;
+        assert_ne!(
+            after.headers().get(header::ETAG).unwrap().to_str().unwrap(),
+            etag,
+            "a rewritten file has to look different"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_reports_every_error_with_its_line() {
+        let (_dir, config_path) = seeded(&sample_config("127.0.0.1:8080"));
+        let state = admin_state(&config_path);
+
+        let draft = sample_config("127.0.0.1:8080")
+            .replace("service = \"default\"", "service = \"missing\"");
+        let response = post_config_validate(State(state), Body::from(draft)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&response_text(response).await).expect("json report");
+        assert_eq!(payload["valid"], false);
+        assert_eq!(payload["errors"][0]["code"], "unknown_service");
+        assert!(payload["errors"][0]["line"].as_u64().unwrap() > 1);
+        assert!(payload["current_etag"].is_string());
+        assert!(
+            payload["config"].is_null(),
+            "an invalid draft has no config to report"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_hands_back_the_parsed_config_and_its_warnings() {
+        let (_dir, config_path) = seeded(&sample_config("127.0.0.1:8080"));
+        let state = admin_state(&config_path);
+
+        // A second service nothing routes to: valid, but worth saying.
+        let draft = format!(
+            "{}\n[[service]]\nname = \"spare\"\n\n[[service.upstream]]\naddr = \"127.0.0.1:9001\"\n",
+            sample_config("127.0.0.1:8080")
+        );
+        let response = post_config_validate(State(state), Body::from(draft)).await;
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&response_text(response).await).expect("json report");
+        assert_eq!(payload["valid"], true);
+        assert_eq!(payload["config"]["services"][1]["name"], "spare");
+        assert_eq!(payload["warnings"][0]["code"], "unused_service");
+        assert_eq!(payload["warnings"][0]["severity"], "warning");
+    }
+
+    #[tokio::test]
+    async fn an_apply_that_was_overtaken_is_a_conflict_not_a_silent_win() {
+        let (_dir, config_path) = seeded(&sample_config("127.0.0.1:8080"));
+        let state = admin_state(&config_path);
+
+        // What this tab loaded...
+        let loaded = get_config(State(state.clone()), Query(ConfigQuery::default())).await;
+        let stale_etag = loaded
+            .headers()
+            .get(header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        // ...and what somebody else did in the meantime.
+        let theirs = sample_config("127.0.0.1:9999");
+        fs::write(&config_path, &theirs).expect("someone else writes the file");
+
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::IF_MATCH,
+            HeaderValue::from_str(&stale_etag).unwrap(),
+        );
+        let mine = sample_config("127.0.0.1:8081");
+        let response = put_config(
+            State(state),
+            Query(ConfigQuery::default()),
+            headers,
+            Body::from(mine),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let payload: serde_json::Value =
+            serde_json::from_str(&response_text(response).await).expect("json conflict");
+        assert_eq!(payload["error"], "config_changed");
+        assert_eq!(payload["expected_etag"], stale_etag);
+        assert_eq!(
+            payload["current_toml"], theirs,
+            "the conflict carries the other version so the UI can diff all three"
+        );
+        assert_eq!(
+            fs::read_to_string(&config_path).unwrap(),
+            theirs,
+            "a rejected apply must not touch the file"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_apply_with_a_current_if_match_goes_through() {
+        let (_dir, config_path) = seeded(&sample_config("127.0.0.1:8080"));
+        let state = admin_state(&config_path);
+
+        let loaded = get_config(State(state.clone()), Query(ConfigQuery::default())).await;
+        let etag = loaded
+            .headers()
+            .get(header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let mut headers = header::HeaderMap::new();
+        headers.insert(header::IF_MATCH, HeaderValue::from_str(&etag).unwrap());
+        let next = sample_config("127.0.0.1:8081");
+        let response = put_config(
+            State(state),
+            Query(ConfigQuery::default()),
+            headers,
+            Body::from(next.clone()),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let new_etag = response
+            .headers()
+            .get(header::ETAG)
+            .expect("the new version answers with its own ETag")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(new_etag, etag);
+        assert_eq!(fs::read_to_string(&config_path).unwrap(), next);
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_answers_with_the_report_and_writes_nothing() {
+        let original = sample_config("127.0.0.1:8080");
+        let (_dir, config_path) = seeded(&original);
+        let state = admin_state(&config_path);
+
+        let response = put_config(
+            State(state),
+            Query(ConfigQuery {
+                format: None,
+                dry_run: Some("true".to_string()),
+            }),
+            header::HeaderMap::new(),
+            Body::from(sample_config("127.0.0.1:8081")),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_str(&response_text(response).await).expect("json report");
+        assert_eq!(payload["valid"], true);
+        assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_apply_names_the_line_it_failed_on() {
+        let original = sample_config("127.0.0.1:8080");
+        let (_dir, config_path) = seeded(&original);
+        let state = admin_state(&config_path);
+
+        let response = put_config(
+            State(state),
+            Query(ConfigQuery::default()),
+            header::HeaderMap::new(),
+            Body::from("[server]\nlisten = [\n"),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_text(response).await;
+        assert!(body.starts_with("invalid_config: line "), "{body}");
+        assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
     }
 }
