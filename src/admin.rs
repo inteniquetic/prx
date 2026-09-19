@@ -1,10 +1,13 @@
 use std::{
+    convert::Infallible,
     fs::{self, File, OpenOptions},
     io::Write,
     net::TcpListener,
     path::{Path, PathBuf},
+    pin::Pin,
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    task::{Context as TaskContext, Poll},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, bail};
@@ -15,7 +18,10 @@ use axum::{
     body::{self, Body},
     extract::{Path as AxumPath, Query, State},
     http::{HeaderValue, StatusCode, header},
-    response::Response,
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::get,
 };
 use include_dir::{Dir, include_dir};
@@ -30,6 +36,7 @@ use crate::{
     },
     router::RouteMatch,
     runtime::RuntimeConfig,
+    stats::{self, EventLevel},
 };
 
 pub const ADMIN_CONFIG_PATH: &str = "/web/config";
@@ -45,6 +52,8 @@ pub const ADMIN_ROUTES_NAME_PATH: &str = "/admin/routes/{name}";
 pub const ADMIN_ROUTE_TEST_PATH: &str = "/web/routes/test";
 pub const ADMIN_SERVICE_STATUS_PATH: &str = "/web/services/status";
 pub const ADMIN_UPSTREAM_TEST_PATH: &str = "/web/upstreams/test";
+pub const ADMIN_STATS_PATH: &str = "/web/stats";
+pub const ADMIN_STATS_STREAM_PATH: &str = "/web/stats/stream";
 const WEBUI_INDEX_PATH: &str = "index.html";
 static WEBUI_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/webui/dist");
 
@@ -1574,15 +1583,31 @@ async fn put_config(State(state): State<AdminState>, body: Body) -> Response<Bod
         );
     }
 
+    // Applying a config is the single most consequential thing this API does,
+    // so it goes on the dashboard's event strip either way round (T306).
     match state
         .config_admin
         .apply_config_text(text, &state.active_config)
     {
-        Ok(()) => text_response(StatusCode::OK, b"config_applied\n".to_vec()),
-        Err(err) => text_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed_to_apply_config: {err:#}\n"),
-        ),
+        Ok(()) => {
+            stats::record_event(
+                EventLevel::Info,
+                "config_apply",
+                "Config applied from the admin API",
+            );
+            text_response(StatusCode::OK, b"config_applied\n".to_vec())
+        }
+        Err(err) => {
+            stats::record_event(
+                EventLevel::Error,
+                "config_apply",
+                format!("Config apply failed: {err}"),
+            );
+            text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed_to_apply_config: {err:#}\n"),
+            )
+        }
     }
 }
 
@@ -1773,7 +1798,16 @@ async fn create_service(State(state): State<AdminState>, body: Body) -> Response
             config.services.push(service);
             Ok(())
         }) {
-        Ok(_) => text_response(StatusCode::CREATED, b"service_created\n".to_vec()),
+        Ok(_) => {
+            let target = payload.name.clone();
+            stats::record_event_for(
+                EventLevel::Info,
+                "config_apply",
+                format!("Service '{}' was created", target),
+                target,
+            );
+            text_response(StatusCode::CREATED, b"service_created\n".to_vec())
+        }
         Err(err) => {
             if err.to_string().contains("already exists") {
                 text_response(StatusCode::CONFLICT, format!("{err:#}\n"))
@@ -1948,7 +1982,16 @@ async fn update_service(
             config.services[index] = service;
             Ok(())
         }) {
-        Ok(_) => text_response(StatusCode::OK, b"service_updated\n".to_vec()),
+        Ok(_) => {
+            let target = name.clone();
+            stats::record_event_for(
+                EventLevel::Info,
+                "config_apply",
+                format!("Service '{}' was updated", target),
+                target,
+            );
+            text_response(StatusCode::OK, b"service_updated\n".to_vec())
+        }
         Err(err) => {
             if err.to_string().contains("not found") {
                 text_response(StatusCode::NOT_FOUND, format!("{err:#}\n"))
@@ -1992,7 +2035,16 @@ async fn delete_service(
             config.services.remove(index);
             Ok(())
         }) {
-        Ok(_) => text_response(StatusCode::OK, b"service_deleted\n".to_vec()),
+        Ok(_) => {
+            let target = name.clone();
+            stats::record_event_for(
+                EventLevel::Info,
+                "config_apply",
+                format!("Service '{}' was deleted", target),
+                target,
+            );
+            text_response(StatusCode::OK, b"service_deleted\n".to_vec())
+        }
         Err(err) => {
             if err.to_string().contains("not found") {
                 text_response(StatusCode::NOT_FOUND, format!("{err:#}\n"))
@@ -2137,7 +2189,16 @@ async fn create_route(State(state): State<AdminState>, body: Body) -> Response<B
             config.routes.push(route);
             Ok(())
         }) {
-        Ok(_) => text_response(StatusCode::CREATED, b"route_created\n".to_vec()),
+        Ok(_) => {
+            let target = payload.name.clone();
+            stats::record_event_for(
+                EventLevel::Info,
+                "config_apply",
+                format!("Route '{}' was created", target),
+                target,
+            );
+            text_response(StatusCode::CREATED, b"route_created\n".to_vec())
+        }
         Err(err) => {
             let err_str = err.to_string();
             if err_str.contains("already exists") {
@@ -2269,7 +2330,16 @@ async fn update_route(
             config.routes[index] = route;
             Ok(())
         }) {
-        Ok(_) => text_response(StatusCode::OK, b"route_updated\n".to_vec()),
+        Ok(_) => {
+            let target = name.clone();
+            stats::record_event_for(
+                EventLevel::Info,
+                "config_apply",
+                format!("Route '{}' was updated", target),
+                target,
+            );
+            text_response(StatusCode::OK, b"route_updated\n".to_vec())
+        }
         Err(err) => {
             let err_str = err.to_string();
             if err_str.contains("not found") {
@@ -2299,7 +2369,16 @@ async fn delete_route(
             config.routes.remove(index);
             Ok(())
         }) {
-        Ok(_) => text_response(StatusCode::OK, b"route_deleted\n".to_vec()),
+        Ok(_) => {
+            let target = name.clone();
+            stats::record_event_for(
+                EventLevel::Info,
+                "config_apply",
+                format!("Route '{}' was deleted", target),
+                target,
+            );
+            text_response(StatusCode::OK, b"route_deleted\n".to_vec())
+        }
         Err(err) => {
             if err.to_string().contains("not found") {
                 text_response(StatusCode::NOT_FOUND, format!("{err:#}\n"))
@@ -2308,6 +2387,91 @@ async fn delete_route(
             }
         }
     }
+}
+
+// --- live stats (T207) ------------------------------------------------------
+//
+// The dashboard needs "what is happening now", which `/web/config` cannot
+// answer and `/metrics` only answers to a Prometheus. `GET /web/stats` is the
+// first read, `GET /web/stats/stream` is every read after that.
+
+/// Keeps a stream's slot taken for exactly as long as the stream is alive.
+///
+/// The client cap only works if a slot comes back when the tab closes, and the
+/// only thing that reliably notices a closed tab is the response body being
+/// dropped — so the guard rides along inside it. There is no per-client task to
+/// leak: everyone reads the same broadcast.
+struct GuardedStream<S> {
+    inner: S,
+    _guard: stats::ClientGuard,
+}
+
+impl<S> tokio_stream::Stream for GuardedStream<S>
+where
+    S: tokio_stream::Stream + Unpin,
+{
+    type Item = S::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<S::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+async fn get_stats() -> Response<Body> {
+    json_response(StatusCode::OK, &stats::hub().snapshot())
+}
+
+async fn get_stats_stream() -> Response<Body> {
+    let Some((receiver, guard)) = stats::hub().subscribe() else {
+        // Refusing is better than letting a wall of dashboards turn the control
+        // plane into a fan-out service; the client falls back to polling.
+        return text_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "too_many_stats_clients: at most {} streams at a time\n",
+                stats::MAX_STREAM_CLIENTS
+            ),
+        );
+    };
+
+    let ticks = tokio_stream::StreamExt::map(
+        tokio_stream::wrappers::BroadcastStream::new(receiver),
+        |tick| {
+            let event = match tick {
+                Ok(tick) => Event::default()
+                    .id(tick.seq.to_string())
+                    .event("tick")
+                    .json_data(&*tick)
+                    .unwrap_or_else(|_| Event::default().event("error").data("encode_failed")),
+                // A client too slow to keep up is told it fell behind rather
+                // than shown a chart with a silent hole in it.
+                Err(_) => Event::default().event("lagged").data("refetch"),
+            };
+            Ok::<Event, Infallible>(event)
+        },
+    );
+
+    // The retry hint is what makes reconnection the browser's problem instead
+    // of ours; `hello` tells the page the stream is live again.
+    let hello = tokio_stream::iter([Ok::<Event, Infallible>(
+        Event::default()
+            .event("hello")
+            .retry(Duration::from_secs(2))
+            .data(stats::hub().snapshot().seq.to_string()),
+    )]);
+
+    let stream = GuardedStream {
+        inner: tokio_stream::StreamExt::chain(hello, ticks),
+        _guard: guard,
+    };
+
+    Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keepalive"),
+        )
+        .into_response()
 }
 
 fn build_router(state: AdminState) -> Router {
@@ -2324,6 +2488,8 @@ fn build_router(state: AdminState) -> Router {
             ADMIN_UPSTREAM_TEST_PATH,
             axum::routing::post(post_upstream_test),
         )
+        .route(ADMIN_STATS_PATH, get(get_stats))
+        .route(ADMIN_STATS_STREAM_PATH, get(get_stats_stream))
         .route(ADMIN_CACHE_PATH, get(get_cache_status).delete(purge_cache))
         .route(ADMIN_TLS_STATUS_PATH, get(get_tls_status))
         // Service CRUD endpoints
@@ -2417,6 +2583,10 @@ impl Service for AdminAxumService {
             path = ADMIN_CONFIG_PATH,
             "admin config API is enabled"
         );
+
+        // The live-stats sampler runs on the admin runtime, not the proxy's, so
+        // a dashboard can never slow a request down (T207).
+        stats::spawn_sampler(self.state.active_config.clone());
 
         let app = build_router(self.state.clone());
         let shutdown_signal = async move {

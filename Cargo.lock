@@ -2233,6 +2233,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tokio-tungstenite",
  "toml",
  "tracing",
@@ -3064,6 +3065,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

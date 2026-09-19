@@ -499,6 +499,9 @@ pub struct RequestCtx {
     /// Whether the request method is safe to replay once it may have reached
     /// the upstream.
     is_idempotent: bool,
+    /// True once this request has been added to the in-flight gauge, so it is
+    /// taken back off exactly once.
+    counted_inflight: bool,
     /// Set when a sticky cookie should be written on the way back, holding the
     /// upstream identifier to store.
     sticky_cookie: Option<u64>,
@@ -530,6 +533,7 @@ impl Default for RequestCtx {
             client_port: None,
             request_id: None,
             is_idempotent: true,
+            counted_inflight: false,
             sticky_cookie: None,
             holds_concurrency_slot: false,
             cache_key: None,
@@ -562,6 +566,13 @@ impl ProxyHttp for PrxProxy {
     }
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
+        // One relaxed atomic each way, which is what the dashboard's "in
+        // flight" tile costs the request path (T207). `logging()` runs for every
+        // request, including the ones this filter answers itself, so the gauge
+        // comes back down.
+        metrics::inc_inflight();
+        ctx.counted_inflight = true;
+
         // `load()` hands out a guard without touching the Arc refcount, which
         // matters because every worker thread reads this same cacheline on
         // every request. The refcount is only paid for requests that go on to
@@ -1142,6 +1153,11 @@ impl ProxyHttp for PrxProxy {
         let elapsed = ctx.started_at.elapsed();
         let latency_ms = elapsed.as_millis();
 
+        if ctx.counted_inflight {
+            metrics::dec_inflight();
+            ctx.counted_inflight = false;
+        }
+
         // Every attempt took a slot; give them all back exactly once, and feed
         // the latency of the attempt that actually served the request into the
         // moving average used by p2c_ewma.
@@ -1208,8 +1224,11 @@ impl ProxyHttp for PrxProxy {
 
         // Metrics are recorded whether or not the access log is on: they are
         // separate signals, and tying them together silently emptied /metrics
-        // for anyone running with access_log = false.
-        metrics::observe_request(route_name.as_ref(), status, latency_ms as f64);
+        // for anyone running with access_log = false. The latency goes in with
+        // sub-millisecond resolution, because whole milliseconds round every
+        // fast request down to zero and make p50 meaningless on a proxy that
+        // answers in microseconds.
+        metrics::observe_request(route_name.as_ref(), status, elapsed.as_secs_f64() * 1000.0);
 
         if !self.access_log {
             return;
