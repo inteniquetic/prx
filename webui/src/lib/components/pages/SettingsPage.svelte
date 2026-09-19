@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import AppLayout from '../layout/AppLayout.svelte';
+  import ConfigEditor from '../config/ConfigEditor.svelte';
   import { configStore } from '../../stores/config';
   import type { PrxConfig } from '../../types/config';
 
@@ -15,7 +16,6 @@
   // ---------------------------------------------------------------------------
 
   export let config: PrxConfig;
-  export let tomlPreview: string;
   export let validationIssues: string[];
   export let isSaving: boolean;
   export let isLoading: boolean;
@@ -52,7 +52,6 @@
   // ---------------------------------------------------------------------------
 
   let newListenAddr = '';
-  let copiedToml = false;
   let importInputRef: HTMLInputElement | undefined = undefined;
 
   // ---------------------------------------------------------------------------
@@ -202,18 +201,8 @@
   };
 
   // ---------------------------------------------------------------------------
-  // TOML Actions
+  // Import / Export
   // ---------------------------------------------------------------------------
-
-  const copyToml = async () => {
-    try {
-      await navigator.clipboard.writeText(tomlPreview);
-      copiedToml = true;
-      setTimeout(() => { copiedToml = false; }, 2000);
-    } catch {
-      // Fallback: do nothing
-    }
-  };
 
   const triggerImport = () => {
     importInputRef?.click();
@@ -745,70 +734,18 @@
       <!-- TOML CONFIG TAB                                                    -->
       <!-- ================================================================== -->
       {#if activeTab === 'toml'}
-        <div class="max-w-4xl space-y-4">
-          <!-- Validation Status Banner -->
-          <div
-            class={
-              isValid
-                ? 'flex items-center justify-between rounded-xl border border-success/40 bg-success/10 px-4 py-3'
-                : 'flex items-center justify-between rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3'
-            }
-          >
-            <div class="flex items-center gap-3">
-              {#if isValid}
-                <svg class="h-5 w-5 text-success" viewBox="0 0 20 20" fill="currentColor">
-                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
-                </svg>
-                <span class="text-sm font-semibold text-success">VALIDATION: PASS</span>
-              {:else}
-                <svg class="h-5 w-5 text-destructive" viewBox="0 0 20 20" fill="currentColor">
-                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
-                </svg>
-                <span class="text-sm font-semibold text-destructive">
-                  VALIDATION: FAIL ({validationIssues.length} issue{validationIssues.length !== 1 ? 's' : ''})
-                </span>
-              {/if}
-            </div>
+        <div class="space-y-4">
+          <div>
+            <h3 class="text-sm font-semibold text-foreground">Raw TOML configuration</h3>
+            <p class="mt-1 text-xs text-muted-foreground">
+              The file the proxy is running, comments and all. Every change is validated as
+              you type and shown as a diff before it is applied (T307).
+            </p>
           </div>
 
-          <!-- First validation issue (if any) -->
-          {#if !isValid && validationIssues.length > 0}
-            <div class="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3">
-              <p class="text-sm font-medium text-destructive">First Issue:</p>
-              <p class="mt-1 text-xs text-destructive/80">{validationIssues[0]}</p>
-            </div>
-          {/if}
-
-          <!-- TOML Preview -->
-          <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
-            <div class="mb-4 flex items-center justify-between">
-              <div>
-                <h3 class="text-sm font-semibold text-foreground">Raw TOML Configuration</h3>
-                <p class="mt-1 text-xs text-muted-foreground">
-                  This is the generated TOML config that will be saved
-                </p>
-              </div>
-              <button
-                class="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
-                on:click={copyToml}
-              >
-                {#if copiedToml}
-                  <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
-                  </svg>
-                  Copied
-                {:else}
-                  <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
-                    <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
-                  </svg>
-                  Copy
-                {/if}
-              </button>
-            </div>
-
-            <pre class="max-h-[60vh] overflow-auto rounded-xl border border-border bg-background/70 p-4 text-xs leading-6 text-foreground/80 md:text-sm">{tomlPreview}</pre>
-          </section>
+          <!-- Owns its own draft, loaded straight from the admin API: what the
+               forms above render is the parsed config, not the file. -->
+          <ConfigEditor onapplied={() => dispatch('reload')} />
 
           <!-- Import / Export Actions -->
           <section class="rounded-2xl border border-border/80 bg-card/80 p-6">

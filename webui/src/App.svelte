@@ -385,7 +385,6 @@
   {:else if $currentPage === 'settings'}
     <SettingsPage
       config={$configStore}
-      tomlPreview={$tomlPreview}
       validationIssues={$validationIssues}
       isSaving={isSavingToServer}
       isLoading={isLoadingFromServer}

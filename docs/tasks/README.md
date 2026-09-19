@@ -74,8 +74,8 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 |---|---|---|---|
 | [T201](T201-admin-auth-hardening.md) | Auth + bind loopback + CORS/CSRF ของ Admin API | M | — |
 | [T202](T202-config-history-rollback.md) | เก็บประวัติ config + diff + rollback | M | T201 |
-| [T203](T203-validate-dry-run-api.md) | `POST /web/config/validate` คืน error แบบมีพิกัด | M | — |
-| [T204](T204-atomic-apply-reload.md) | Apply แบบ atomic + auto-rollback ถ้า reload ไม่ผ่าน | M | T202, T203 |
+| [T203](T203-validate-dry-run-api.md) | `POST /web/config/validate` คืน error แบบมีพิกัด | M | — | 🟡 endpoint + error/warning ครบพร้อมพิกัด (ทำใน T307); เหลือ error code ของ TOML syntax แยกชนิด |
+| [T204](T204-atomic-apply-reload.md) | Apply แบบ atomic + auto-rollback ถ้า reload ไม่ผ่าน | M | T202, T203 | 🟡 atomic write + `If-Match` 409 แล้ว (T307); เหลือ reload ซ้ำจาก watcher และรายละเอียดใน response |
 | [T205](T205-openapi-typed-client.md) | OpenAPI + JSON Schema + typed client ให้ WebUI | M | T203 |
 | [T206](T206-audit-log.md) | Audit log ใครแก้อะไรเมื่อไหร่ | S | T201 |
 | [T207](T207-live-stats-stream.md) | SSE stream สถิติสดให้ dashboard | M | T401 | ✅ done (ทำพร้อม T306; แก้ bucket ของ histogram ที่จบที่ 10 ms) |
@@ -90,7 +90,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T304](T304-routes-crud-ui.md) | หน้า Routes: data table + form validation | L | T303, T205 | ✅ done (เจอบั๊ก Save ลบ header/rate limit/cache ทิ้ง) |
 | [T305](T305-services-upstreams-ui.md) | หน้า Services/Upstreams + health badge | L | T304 | ✅ done (ปิดบั๊ก Save ลบ health check/sticky ทิ้ง) |
 | [T306](T306-dashboard-live-metrics.md) | Dashboard สถิติสด + กราฟ | L | T303, T207 | ✅ done (ทำ T207 ให้ด้วย; กราฟเขียนเอง ไม่พึ่งไลบรารี) |
-| [T307](T307-toml-editor-diff-apply.md) | TOML editor + diff ก่อน apply | M | T303, T203 |
+| [T307](T307-toml-editor-diff-apply.md) | TOML editor + diff ก่อน apply | M | T303, T203 | ✅ done (ทำแกนของ T203 + `If-Match` ของ T204 ให้ด้วย) |
 | [T308](T308-settings-tls-observability-ui.md) | หน้า Settings: server/TLS/observability | M | T303 |
 | [T309](T309-ux-polish-i18n.md) | Empty state, skeleton, toast, i18n th/en | M | T304, T305 |
 | [T310](T310-webui-testing-and-embed.md) | Vitest + Playwright + embed pipeline ใน CI | M | T309 |

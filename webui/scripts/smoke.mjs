@@ -127,37 +127,47 @@ try {
   if (stored === 'dark' && !afterReload.dark) problems.push('stored dark theme was not applied on load');
   if (stored === 'light' && afterReload.dark) problems.push('stored light theme was not applied on load');
 
-  // The TOML this UI would write has to be a config the proxy accepts, and it
-  // has to still contain the parts of a route the forms never show. This is the
-  // one place that can be checked end to end: the page renders the TOML, the
-  // real server parses it.
+  // Two things have to hold on the TOML tab, and only the binary can show
+  // either: the editor loads the file the proxy is actually running (T307), and
+  // the TOML the forms would write is still a config the proxy accepts with
+  // nothing dropped from it.
   await navLink('/settings').click();
   await page.waitForTimeout(400);
-  // The preview lives behind the TOML tab of the settings page.
   await page.getByRole('button', { name: /TOML Config/ }).click();
-  await page.waitForTimeout(400);
-  const toml = (await page.locator('pre').first().innerText()).trim();
-  if (!toml.includes('[[route]]')) {
-    problems.push('the settings page did not render a TOML preview');
-  } else {
-    const roundTrip = await page.evaluate(async (body) => {
-      const before = await (await fetch('/web/config?format=json')).json();
-      const put = await fetch('/web/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-        body
-      });
-      const status = put.status;
-      const detail = (await put.text()).trim();
-      const after = await (await fetch('/web/config?format=json')).json();
-      return { status, detail, before, after };
-    }, toml);
+  // CodeMirror is fetched on demand (T307), so wait for it to arrive — or for
+  // the plain textarea it falls back to.
+  await page.waitForSelector('[data-slot="toml-editor"] .cm-line, textarea');
+  await page.waitForTimeout(800);
 
-    if (roundTrip.status !== 200) {
-      problems.push(`the proxy rejected the UI's own TOML (${roundTrip.status}): ${roundTrip.detail}`);
-    }
+  const editorToml = await page.evaluate(() => {
+    const lines = document.querySelectorAll('[data-slot="toml-editor"] .cm-line');
+    if (lines.length > 0) return [...lines].map((line) => line.textContent).join('\n');
+    const textarea = document.querySelector('textarea');
+    return textarea ? textarea.value : '';
+  });
+
+  // Only the top of the file is compared: CodeMirror renders the lines that are
+  // on screen, so the tail of a long config is legitimately not in the DOM.
+  const fileToml = await (await fetch(`${base}/web/config`)).text();
+  const head = (text) => text.split('\n').slice(0, 15).join('\n').replace(/\s+$/, '');
+  if (head(editorToml) !== head(fileToml)) {
+    problems.push(
+      `the editor is not showing the file the proxy is running:\n${head(editorToml)}\n---\n${head(fileToml)}`
+    );
+  }
+
+  // The header's Save writes the config the forms hold, rendered by
+  // `configCodec.ts`. Round-tripping it through the real parser is the only
+  // check that catches a field the renderer quietly drops.
+  const before = await page.evaluate(() => fetch('/web/config?format=json').then((r) => r.json()));
+  await page.getByRole('button', { name: /^Sav(e|ing)/ }).first().click();
+  await page.waitForTimeout(1200);
+  const after = await page.evaluate(() => fetch('/web/config?format=json').then((r) => r.json()));
+  const roundTrip = { before, after };
+
+  {
     if (roundTrip.before.routes.length !== roundTrip.after.routes.length) {
-      problems.push('saving the UI\'s TOML changed how many routes exist');
+      problems.push("saving the UI's TOML changed how many routes exist");
     }
     for (const route of roundTrip.before.routes) {
       const same = roundTrip.after.routes.find((entry) => entry.name === route.name);
@@ -231,6 +241,7 @@ if (problems.length) {
 }
 console.log(
   `smoke passed against ${base}: 4 pages with real URLs, a deep link through the server, ` +
-    'modal open/close, command palette, theme menu + persistence, a TOML round trip ' +
-    'through the server, self-hosted fonts, no console errors, no external requests'
+    'modal open/close, command palette, theme menu + persistence, the TOML editor on ' +
+    'the real file, a TOML round trip through the server, self-hosted fonts, ' +
+    'no console errors, no external requests'
 );
