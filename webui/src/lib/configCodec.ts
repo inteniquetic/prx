@@ -1,5 +1,8 @@
 import {
   createDefaultConcurrencyLimit,
+  createDefaultHealthCheck,
+  createDefaultService,
+  createDefaultSticky,
   createDefaultRateLimit,
   createDefaultRouteCache,
   type HeaderRules,
@@ -24,6 +27,11 @@ const pushOptionalNumber = (lines: string[], key: string, value: number | null) 
 const renderUpstream = (upstream: UpstreamConfig, prefix: 'service' | 'route' = 'service'): string => {
   const lines = [`[[${prefix}.upstream]]`];
   lines.push(`addr = "${esc(upstream.addr)}"`);
+  if (!upstream.enabled) {
+    // Drained: written out so the state survives a reload, unlike a weight of
+    // 0, which the balancer clamps back to 1.
+    lines.push('enabled = false');
+  }
   lines.push(`tls = ${toTomlBool(upstream.tls)}`);
   if (upstream.sni.trim()) {
     lines.push(`sni = "${esc(upstream.sni)}"`);
@@ -47,12 +55,38 @@ const renderUpstream = (upstream: UpstreamConfig, prefix: 'service' | 'route' = 
   return lines.join('\n');
 };
 
+/**
+ * Only settings that differ from prx's own defaults are written, same as for
+ * routes: the file stays the size of what someone decided, and a default that
+ * moves in a later release still reaches services that never expressed a view.
+ */
 const renderService = (service: ServiceConfig): string => {
+  const defaults = createDefaultService(1);
   const lines = ['[[service]]'];
   lines.push(`name = "${esc(service.name)}"`);
   lines.push(`lb = "${service.lb}"`);
   lines.push(`max_retries = ${Math.max(0, service.max_retries)}`);
   lines.push(`retry_backoff_ms = ${Math.max(0, service.retry_backoff_ms)}`);
+
+  if (service.retry_budget_ratio !== defaults.retry_budget_ratio) {
+    lines.push(`retry_budget_ratio = ${service.retry_budget_ratio}`);
+  }
+  if (service.retry_budget_min_per_window !== defaults.retry_budget_min_per_window) {
+    lines.push(`retry_budget_min_per_window = ${service.retry_budget_min_per_window}`);
+  }
+  if (service.retry_budget_window_ms !== defaults.retry_budget_window_ms) {
+    lines.push(`retry_budget_window_ms = ${service.retry_budget_window_ms}`);
+  }
+  if (service.retry_idempotent_only !== defaults.retry_idempotent_only) {
+    lines.push(`retry_idempotent_only = ${toTomlBool(service.retry_idempotent_only)}`);
+  }
+  if (service.request_timeout_ms !== defaults.request_timeout_ms) {
+    lines.push(`request_timeout_ms = ${Math.max(0, service.request_timeout_ms)}`);
+  }
+  if (service.upstream_h2 !== defaults.upstream_h2) {
+    lines.push(`upstream_h2 = "${service.upstream_h2}"`);
+  }
+
   lines.push('');
   lines.push('[service.circuit_breaker]');
   lines.push(`enabled = ${toTomlBool(service.circuit_breaker.enabled)}`);
@@ -60,6 +94,50 @@ const renderService = (service: ServiceConfig): string => {
     `consecutive_failures = ${Math.max(1, service.circuit_breaker.consecutive_failures)}`
   );
   lines.push(`open_ms = ${Math.max(1, service.circuit_breaker.open_ms)}`);
+
+  const healthDefaults = createDefaultHealthCheck();
+  if (service.health_check.enabled) {
+    lines.push('');
+    lines.push('[service.health_check]');
+    lines.push('enabled = true');
+    lines.push(`kind = "${service.health_check.kind}"`);
+    if (service.health_check.kind === 'http') {
+      lines.push(`path = "${esc(service.health_check.path)}"`);
+      if (
+        service.health_check.expected_status.join(',') !==
+        healthDefaults.expected_status.join(',')
+      ) {
+        lines.push(`expected_status = [${service.health_check.expected_status.join(', ')}]`);
+      }
+    }
+    if (service.health_check.interval_ms !== healthDefaults.interval_ms) {
+      lines.push(`interval_ms = ${service.health_check.interval_ms}`);
+    }
+    if (service.health_check.timeout_ms !== healthDefaults.timeout_ms) {
+      lines.push(`timeout_ms = ${service.health_check.timeout_ms}`);
+    }
+    if (service.health_check.healthy_threshold !== healthDefaults.healthy_threshold) {
+      lines.push(`healthy_threshold = ${service.health_check.healthy_threshold}`);
+    }
+    if (service.health_check.unhealthy_threshold !== healthDefaults.unhealthy_threshold) {
+      lines.push(`unhealthy_threshold = ${service.health_check.unhealthy_threshold}`);
+    }
+  }
+
+  const stickyDefaults = createDefaultSticky();
+  if (service.sticky.enabled) {
+    lines.push('');
+    lines.push('[service.sticky]');
+    lines.push('enabled = true');
+    lines.push(`mode = "${service.sticky.mode}"`);
+    if (service.sticky.name !== stickyDefaults.name) {
+      lines.push(`name = "${esc(service.sticky.name)}"`);
+    }
+    if (service.sticky.mode === 'cookie' && service.sticky.ttl_s !== stickyDefaults.ttl_s) {
+      lines.push(`ttl_s = ${service.sticky.ttl_s}`);
+    }
+  }
+
   lines.push('');
   const upstreams = service.upstreams.map((u) => renderUpstream(u, 'service')).join('\n\n');
   return `${lines.join('\n')}${upstreams}`;

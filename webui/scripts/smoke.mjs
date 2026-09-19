@@ -85,7 +85,9 @@ try {
   await page.waitForTimeout(400);
   if ((await page.locator('[role="dialog"]').count()) !== 1) problems.push('modal did not open');
   await page.keyboard.press('Escape');
-  await page.waitForTimeout(300);
+  // The sheet slides out over 300ms and is removed after, so a shorter wait
+  // would be timing the animation rather than the behaviour.
+  await page.waitForTimeout(800);
   if ((await page.locator('[role="dialog"]').count()) !== 0)
     problems.push('Escape did not close the modal');
 
@@ -169,6 +171,39 @@ try {
       const hadHeaders = JSON.stringify(route.request_headers ?? {});
       if (hadHeaders !== JSON.stringify(same.request_headers ?? {})) {
         problems.push(`route ${route.name} lost its header rules after saving the UI's TOML`);
+      }
+    }
+
+    for (const service of roundTrip.before.services) {
+      const same = roundTrip.after.services.find((entry) => entry.name === service.name);
+      if (!same) {
+        problems.push(`service ${service.name} disappeared after saving the UI's TOML`);
+        continue;
+      }
+      for (const field of ['health_check', 'sticky', 'circuit_breaker']) {
+        if (JSON.stringify(service[field] ?? {}) !== JSON.stringify(same[field] ?? {})) {
+          problems.push(`service ${service.name} lost its ${field} after saving the UI's TOML`);
+        }
+      }
+      for (const field of [
+        'lb',
+        'retry_budget_ratio',
+        'retry_budget_window_ms',
+        'retry_idempotent_only',
+        'request_timeout_ms',
+        'upstream_h2'
+      ]) {
+        if (service[field] !== same[field]) {
+          problems.push(
+            `service ${service.name} lost ${field} after saving the UI's TOML ` +
+              `(${JSON.stringify(service[field])} -> ${JSON.stringify(same[field])})`
+          );
+        }
+      }
+      for (const [index, up] of (service.upstreams ?? []).entries()) {
+        if (up.enabled !== same.upstreams?.[index]?.enabled) {
+          problems.push(`service ${service.name} lost the drained state of ${up.addr}`);
+        }
       }
     }
   }

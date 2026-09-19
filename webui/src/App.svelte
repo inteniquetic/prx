@@ -200,6 +200,7 @@
   // "Add route" from the dashboard or the palette lands in the same place as
   // the button on the page itself.
   let createRouteRequest = 0;
+  let createServiceRequest = 0;
 
   const addRouteAndEdit = () => {
     navigate('routes');
@@ -221,10 +222,6 @@
 
   const onDashboardExportJson = () => {
     exportAsJson();
-  };
-
-  const onServicesNavigate = (e: CustomEvent) => {
-    navigate(e.detail);
   };
 
   const onSettingsSave = () => {
@@ -251,7 +248,6 @@
     navigate(name ? { page: 'services', name } : 'services');
   };
 
-  const onServicesSelect = (e: CustomEvent<string | null>) => openService(e.detail);
 
   // A deep link to something that is no longer in the config: drop back to the
   // list and say why, rather than leaving the address bar naming a route that
@@ -370,8 +366,10 @@
     <ServicesPage
       config={$configStore}
       selectedServiceName={$currentName}
-      on:select={onServicesSelect}
-      on:navigate={onServicesNavigate}
+      createRequest={createServiceRequest}
+      onselect={openService}
+      onchanged={() => void reloadFromServer()}
+      onnavigate={(page) => navigate(page)}
     />
   {:else if $currentPage === 'routes'}
     <RoutesPage

@@ -1,6 +1,8 @@
 import {
   createDefaultCircuitBreaker,
   createDefaultConcurrencyLimit,
+  createDefaultHealthCheck,
+  createDefaultSticky,
   createDefaultConfig,
   createDefaultHeaderRules,
   createDefaultRateLimit,
@@ -10,6 +12,9 @@ import {
   createDefaultUpstream,
   type ConcurrencyLimitConfig,
   type HeaderRules,
+  type HealthCheckConfig,
+  type StickyConfig,
+  type UpstreamH2,
   type LbStrategy,
   type PrxConfig,
   type RateLimitConfig,
@@ -136,21 +141,58 @@ const normalizeRouteCache = (value: unknown): RouteCacheConfig => {
   };
 };
 
-const normalizeLb = (value: unknown): LbStrategy => {
-  if (value === 'random' || value === 'hash' || value === 'round_robin') {
-    return value;
-  }
-  return 'round_robin';
+const LB_VALUES: LbStrategy[] = ['round_robin', 'random', 'hash', 'least_conn', 'p2c_ewma'];
+
+const normalizeLb = (value: unknown): LbStrategy =>
+  LB_VALUES.includes(value as LbStrategy) ? (value as LbStrategy) : 'round_robin';
+
+const normalizeHealthCheck = (value: unknown): HealthCheckConfig => {
+  const source = asRecord(value);
+  const defaults = createDefaultHealthCheck();
+  const expected = Array.isArray(source.expected_status)
+    ? source.expected_status.map((code) => Number(code)).filter((code) => Number.isFinite(code))
+    : defaults.expected_status;
+  return {
+    enabled: asBool(source.enabled, defaults.enabled),
+    kind: source.kind === 'http' ? 'http' : defaults.kind,
+    path: typeof source.path === 'string' && source.path ? source.path : defaults.path,
+    interval_ms: asNumber(source.interval_ms, defaults.interval_ms),
+    timeout_ms: asNumber(source.timeout_ms, defaults.timeout_ms),
+    healthy_threshold: asNumber(source.healthy_threshold, defaults.healthy_threshold),
+    unhealthy_threshold: asNumber(source.unhealthy_threshold, defaults.unhealthy_threshold),
+    expected_status: expected
+  };
 };
+
+const normalizeSticky = (value: unknown): StickyConfig => {
+  const source = asRecord(value);
+  const defaults = createDefaultSticky();
+  const mode =
+    source.mode === 'client_ip' || source.mode === 'header' || source.mode === 'cookie'
+      ? source.mode
+      : defaults.mode;
+  return {
+    enabled: asBool(source.enabled, defaults.enabled),
+    mode,
+    name: typeof source.name === 'string' && source.name ? source.name : defaults.name,
+    ttl_s: asNumber(source.ttl_s, defaults.ttl_s)
+  };
+};
+
+const normalizeUpstreamH2 = (value: unknown, fallback: UpstreamH2): UpstreamH2 =>
+  value === 'always' || value === 'auto' || value === 'never' ? value : fallback;
 
 const normalizeUpstream = (upstream: PartialUpstream): UpstreamConfig => {
   const defaults = createDefaultUpstream();
   const weight = parseNullableNumber(upstream.weight) ?? defaults.weight;
 
+  const source = upstream as Record<string, unknown>;
+
   return {
     ...defaults,
     ...upstream,
     addr: String(upstream.addr ?? defaults.addr),
+    enabled: asBool(source.enabled, defaults.enabled),
     tls: upstream.tls ?? defaults.tls,
     sni: upstream.sni == null ? '' : String(upstream.sni),
     weight: Math.max(1, Math.min(256, weight)),
@@ -177,6 +219,8 @@ const normalizeService = (service: PartialService, serviceIndex: number): Servic
         ? service.upstream
         : [createDefaultUpstream()];
 
+  const source = service as Record<string, unknown>;
+
   return {
     ...defaults,
     ...service,
@@ -184,10 +228,26 @@ const normalizeService = (service: PartialService, serviceIndex: number): Servic
     lb: normalizeLb(service.lb),
     max_retries: parseNullableNumber(service.max_retries) ?? defaults.max_retries,
     retry_backoff_ms: parseNullableNumber(service.retry_backoff_ms) ?? defaults.retry_backoff_ms,
+    // Same rule as routes: whatever the config can say about a service travels
+    // with it, so reading it and writing it back cannot delete anything.
+    retry_budget_ratio: asNumber(source.retry_budget_ratio, defaults.retry_budget_ratio),
+    retry_budget_min_per_window: asNumber(
+      source.retry_budget_min_per_window,
+      defaults.retry_budget_min_per_window
+    ),
+    retry_budget_window_ms: asNumber(
+      source.retry_budget_window_ms,
+      defaults.retry_budget_window_ms
+    ),
+    retry_idempotent_only: asBool(source.retry_idempotent_only, defaults.retry_idempotent_only),
+    request_timeout_ms: asNumber(source.request_timeout_ms, defaults.request_timeout_ms),
+    upstream_h2: normalizeUpstreamH2(source.upstream_h2, defaults.upstream_h2),
     circuit_breaker: {
       ...createDefaultCircuitBreaker(),
       ...(service.circuit_breaker ?? {})
     },
+    health_check: normalizeHealthCheck(source.health_check),
+    sticky: normalizeSticky(source.sticky),
     upstreams: upstreamSource.map(normalizeUpstream)
   };
 };

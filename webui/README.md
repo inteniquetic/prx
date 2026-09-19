@@ -18,6 +18,7 @@ npm run check          # svelte-check + ตรวจ contrast ของ token
 npm run styleguide     # เปิดหน้ารวม component ทั้งหมด (dev เท่านั้น)
 npm run shell:check    # ขับ app shell ใน Chromium: deep link / keyboard / 375px / palette
 npm run routes:check   # ขับหน้า Routes: search budget / คำเตือน / ฟอร์ม / bulk / tester
+npm run services:check # ขับหน้า Services: live state / weight share / drain / delete guard
 npm run styleguide:check  # วัด contrast จากหน้าที่ render จริง
 npm run smoke          # ขับ UI ที่ฝังใน binary จริง (ต้องมี prx รันอยู่)
 ```
@@ -143,6 +144,50 @@ filter ตาม service และสถานะ, เรียงได้ท�
 route ใช้ `/admin/routes*` ซึ่ง **apply ทันที** — ไม่ใช่ draft
 ส่วน draft ในแถบบน (T303) มาจากการแก้ config ในหน้า Settings ซึ่งยังต้องกด Save
 และตอนนี้ปิดแท็บทั้งที่มี draft ค้างจะโดน browser ถามก่อน
+
+---
+
+# หน้า Services
+
+## การ์ดของแต่ละ service
+
+ชื่อ + สถานะรวม, LB, ป้าย probed / sticky / breaker, จำนวน upstream ที่พร้อม,
+route ที่ชี้มา และตาราง upstream (share, สถานะ, in-flight, latency)
+
+## สถานะสด
+
+`GET /web/services/status` บอกสิ่งที่เกิดขึ้นจริง ไม่ใช่สิ่งที่ตั้งไว้ —
+สถานะ circuit พร้อมเวลาที่เหลือ, จำนวน failure ที่ทำให้มันเปิด, ผลการ probe ล่าสุดและอายุของมัน,
+request ที่ค้างอยู่, EWMA ของ latency และ share ของแต่ละ upstream ในวงเลือก
+
+หน้าเพจ poll ทุก 3 วินาทีและ**หยุดเมื่อแท็บไม่ได้อยู่หน้าจอ** (ยังไม่มี event stream จนกว่า T207 จะเสร็จ)
+`services:check` ยืนยันว่า circuit ที่เปิดขึ้นปรากฏบนหน้าจอโดยไม่ต้อง reload
+
+## Weight กับ share
+
+slider บอก % ของ request ที่ upstream นั้นจะได้ คำนวณแบบเดียวกับที่ balancer สร้างวงเลือก
+(weight ของ upstream ที่ไม่ได้ drain หารด้วยผลรวม) และเมื่อ apply แล้วจะถูกแทนด้วยตัวเลข
+ที่ server อ่านจากวงจริงๆ — ระหว่างที่ยังไม่ apply จะขึ้นหมายเหตุว่า "until applied"
+
+ฝั่ง Rust มี test เทียบ share ที่รายงานกับการกระจายที่ round-robin ทำจริง 4,000 ครั้ง
+
+## Drain
+
+**weight 0 ไม่ใช่การ drain** — balancer clamp weight เป็นอย่างน้อย 1 ดังนั้น upstream ที่ตั้ง 0
+ยังรับทราฟฟิกอยู่เงียบๆ (มี test คุมข้อเท็จจริงนี้ไว้) การ drain จึงเป็น flag ของตัวเอง:
+`enabled = false` ทำให้ upstream หลุดจากวงเลือกแต่ยังอยู่ใน config และยังถูก probe อยู่
+— จะเอากลับมาเมื่อไหร่จึงตัดสินจากหลักฐาน ไม่ใช่ความหวัง
+
+## ลบ service
+
+ถูกบล็อกถ้ายังมี route ชี้อยู่ ทั้งในฟอร์ม (ปุ่ม disabled พร้อมบอกชื่อ route) และฝั่ง server
+(409 พร้อมรายชื่อ route)
+
+## ฟอร์ม
+
+4 แท็บ: Upstreams / Balancing / Retries / Health
+LB แต่ละแบบมีคำอธิบายสั้นๆ กำกับ, retry budget อธิบายว่าทำไมถึงมี,
+และ circuit breaker บอกตรงๆ ว่า prx ไม่มี half-open — พอหมดเวลาก็กลับมาใช้เลย
 
 ---
 

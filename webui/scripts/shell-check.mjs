@@ -122,6 +122,13 @@ await context.route('**/web/config*', (route) =>
 await context.route('**/web/health/routes*', (route) =>
   route.fulfill({ contentType: 'application/json', body: JSON.stringify(health) })
 );
+// The services page polls this while it is open.
+await context.route('**/web/services/status', (route) =>
+  route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ checked_at_epoch_ms: Date.now(), services: [] })
+  })
+);
 
 const page = await context.newPage();
 page.setDefaultTimeout(10_000);

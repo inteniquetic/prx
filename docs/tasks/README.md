@@ -88,7 +88,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T302](T302-design-system-components.md) | ชุด component พื้นฐาน + dark mode | M | T301 | ✅ done (เขียน component เอง — registry ถูก network บล็อก) |
 | [T303](T303-app-shell-navigation.md) | App shell: sidebar, topbar, breadcrumb, command palette | M | T302 | ✅ done (URL จริง + แก้ SPA fallback ฝั่ง server) |
 | [T304](T304-routes-crud-ui.md) | หน้า Routes: data table + form validation | L | T303, T205 | ✅ done (เจอบั๊ก Save ลบ header/rate limit/cache ทิ้ง) |
-| [T305](T305-services-upstreams-ui.md) | หน้า Services/Upstreams + health badge | L | T304 |
+| [T305](T305-services-upstreams-ui.md) | หน้า Services/Upstreams + health badge | L | T304 | ✅ done (ปิดบั๊ก Save ลบ health check/sticky ทิ้ง) |
 | [T306](T306-dashboard-live-metrics.md) | Dashboard สถิติสด + กราฟ | L | T303, T207 |
 | [T307](T307-toml-editor-diff-apply.md) | TOML editor + diff ก่อน apply | M | T303, T203 |
 | [T308](T308-settings-tls-observability-ui.md) | หน้า Settings: server/TLS/observability | M | T303 |
