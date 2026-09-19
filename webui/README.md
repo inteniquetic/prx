@@ -1,6 +1,6 @@
 # PRX WebUI
 
-SPA สำหรับจัดการ config ของ `prx` ด้วย Svelte + TypeScript + TailwindCSS
+SPA สำหรับจัดการ config ของ `prx` ด้วย Svelte 5 + TypeScript + Tailwind 4 + shadcn-svelte
 
 ## Run
 
@@ -13,8 +13,9 @@ npm run dev
 ## Build
 
 ```bash
-npm run build
-npm run preview
+npm run build        # vite build + ตรวจ bundle budget
+npm run check        # svelte-check + ตรวจ contrast ของ token
+npm run styleguide   # เปิดหน้ารวม component ทั้งหมด (dev เท่านั้น)
 ```
 
 ## Features
@@ -27,3 +28,139 @@ npm run preview
 - บันทึก config กลับผ่าน Admin API (`PUT /web/config`)
 - Export / Import เป็น JSON
 - แสดงผล TOML preview พร้อม copy ได้ทันที
+
+---
+
+# Design language
+
+กติกาที่ทุกหน้าใช้ร่วมกัน เพื่อไม่ให้แต่ละหน้าต่างคนต่างเขียน Tailwind
+**ห้าม hardcode สี** — ทุกสีมาจาก token ใน `src/app.css` เสมอ
+
+## Spacing
+
+ใช้ spacing scale ของ Tailwind (`--spacing` = 0.25rem) แต่เลือกใช้แค่ชุดนี้:
+
+| step | ใช้กับ |
+| ---- | ------ |
+| `1` / `1.5` | ระยะระหว่างไอคอนกับข้อความ |
+| `2` | ระหว่าง control ที่อยู่กลุ่มเดียวกัน (ปุ่มติดกัน, label กับ input) |
+| `3` | padding ของ cell ในตาราง |
+| `4` | padding ภายใน card / dialog / sheet |
+| `6` | ระยะระหว่าง section ภายในหน้า |
+| `8`–`10` | padding ของ page shell |
+
+ไม่ใช้เลขนอกชุดนี้นอกจากจำเป็นจริงๆ (เช่น ชดเชย optical alignment)
+
+## Radius
+
+ฐานคือ `--radius: 0.625rem` แล้วแตกเป็น 4 ระดับ
+
+| token | ค่า | ใช้กับ |
+| ----- | --- | ------ |
+| `rounded-sm` | `--radius - 4px` | menu item, badge เล็ก, ช่องใน dropdown |
+| `rounded-md` | `--radius - 2px` | button, input, select, tab |
+| `rounded-lg` | `--radius` | dialog, popover, alert |
+| `rounded-xl` | `--radius + 4px` | card, metric tile, empty state |
+| `rounded-full` | — | status pill, avatar, switch |
+
+## Elevation
+
+เงาบอก "ชั้น" ของ UI ไม่ใช่การตกแต่ง — ชั้นสูงกว่าต้องลอยกว่าเสมอ
+
+| ระดับ | class | ใช้กับ |
+| ----- | ----- | ------ |
+| 0 | ไม่มีเงา | พื้นหน้า, ตาราง |
+| 1 | `shadow-xs` | control ที่อยู่นิ่ง (button, input, switch) |
+| 2 | `shadow-sm` | card, metric tile |
+| 3 | `shadow-md` | popover, dropdown, select content |
+| 4 | `shadow-lg` | dialog, sheet, toast |
+
+## สีเชิงความหมาย
+
+| ความหมาย | สี | token (พื้น / ตัวอักษรบนพื้น / ตัวอักษรบนหน้าเว็บ) | ไอคอน |
+| -------- | -- | -------------------------------------------------- | ----- |
+| healthy | เขียว | `success` / `success-foreground` / `success-emphasis` | `circle-check` |
+| degraded | เหลืองอำพัน | `warning` / `warning-foreground` / `warning-emphasis` | `triangle-alert` |
+| down | แดง | `destructive` / `destructive-foreground` / `destructive-emphasis` | `circle-x` |
+| circuit-open | ส้ม | `circuit` / `circuit-foreground` / `circuit-emphasis` | `zap-off` |
+| disabled / unknown | เทา | `muted` / `muted-foreground` | `circle-slash` / `circle-help` |
+| info / action | ฟ้า | `primary` / `primary-foreground` | — |
+
+**สีเป็นตัวช่วย ไม่ใช่ตัวหลัก** ทุกสถานะต้องอ่านออกได้โดยไม่ต้องแยกสี:
+`StatusDot` ใช้ไอคอนคนละรูปต่อสถานะ และมีคำกำกับ (`showLabel` หรือ `sr-only` เสมอ),
+`MetricTile` ใช้ลูกศรขึ้น/ลง/นิ่งพร้อมเครื่องหมาย +/−,
+field ที่ผิดมีไอคอนกับข้อความ ไม่ใช่แค่ขอบแดง
+
+ทำไมต้องมี `*-emphasis` แยกจาก `*`:
+สีพื้น (เช่น `--success`) ทำมาให้ตัวอักษรสีขาว/ดำทับแล้วอ่านออก
+พอเอาสีนั้นไปเป็น **ตัวอักษร** บนพื้นขาวกลับ contrast ไม่พอ
+`*-emphasis` คือเฉดเดียวกันที่ปรับให้ผ่าน 4.5:1 บนพื้นหน้าและบน card ทั้งสอง theme
+
+## รูปแบบตัวเลข
+
+ทุกตัวเลขผ่าน `src/lib/format.ts` ไม่เรียก `toFixed()` เองในหน้า
+
+| ชนิด | ฟังก์ชัน | ผลลัพธ์ |
+| ---- | -------- | ------- |
+| latency | `formatLatency` | `0.42 ms` · `7.3 ms` · `1,240 ms` — เป็น ms เสมอ ทศนิยมลดลงเมื่อค่าโตขึ้น |
+| throughput | `formatThroughput` | `8.4 req/s` · `2.4k req/s` · `1.2M req/s` |
+| ขนาดข้อมูล | `formatBytes` | IEC เท่านั้น: `900 B` · `1.5 KiB` · `5.4 GiB` (1 KiB = 1024 B) |
+| จำนวนนับ | `formatCount` | `12,480` |
+| สัดส่วน | `formatPercent` | `99.76%` |
+| ส่วนต่าง | `formatDelta` | `+180` · `-3.4` |
+
+ตัวเลขที่เรียงกันเป็นคอลัมน์ให้ใส่ `tabular-nums` เสมอ
+
+## Component
+
+`src/lib/components/ui/` — component จาก shadcn-svelte (bits-ui + tailwind-variants)
+เขียนไว้ในโปรเจกต์ ไม่ใช่ dependency: `button`, `card`, `input`, `textarea`, `label`,
+`select`, `switch`, `checkbox`, `badge`, `table`, `dialog`, `sheet`, `dropdown-menu`,
+`tabs`, `tooltip`, `separator`, `skeleton`, `alert`, `sonner`, `command`, `popover`, `form`
+
+ในโฟลเดอร์เดียวกันมี component เฉพาะของ prx ที่ใช้ซ้ำทุกหน้า
+(ไม่ได้มาจาก registry ของ shadcn จึงไม่ถูก `shadcn-svelte add` เขียนทับ):
+
+| component | ใช้ตอน |
+| --------- | ------ |
+| `status-dot` | สถานะ upstream พร้อม tooltip บอกเหตุผล |
+| `metric-tile` | ตัวเลขใหญ่ + delta + sparkline |
+| `copy-button` | copy ค่า พร้อม fallback ตอนไม่ได้อยู่บน secure origin |
+| `empty-state` | ตอนยังไม่มีข้อมูล พร้อมทางออก |
+| `confirm-dialog` | ยืนยันก่อนทำสิ่งที่ย้อนไม่ได้ |
+| `key-value-list` | รายละเอียดแบบ key/value |
+
+import แบบ namespace สำหรับตัวที่มีหลายชิ้น และแบบชื่อตรงสำหรับตัวเดียว:
+
+```svelte
+import * as Card from '$lib/components/ui/card';
+import { Button } from '$lib/components/ui/button';
+```
+
+`form` ของที่นี่ไม่ได้ใช้ `formsnap`/`sveltekit-superforms` เพราะทั้งคู่ผูกกับ SvelteKit
+แต่ UI นี้เป็น SPA ธรรมดา — `Form.Field` จึงรับ `errors` เป็น prop
+แล้วเดินสาย `id` / `aria-describedby` / `aria-invalid` ให้ control เอง
+
+## Styleguide
+
+`npm run styleguide` เปิด `/?styleguide` ซึ่งรวม component ทุกตัว, token, spacing,
+radius, elevation และรูปแบบตัวเลขไว้หน้าเดียว ทั้ง light และ dark
+
+หน้านี้อยู่หลัง `import.meta.env.DEV` ใน `src/main.ts` — production build
+แทนค่าเป็น `false` แล้ว Rollup ตัดทั้ง branch รวมถึง dynamic import ทิ้ง
+ดังนั้น styleguide **ไม่เคยเข้าไปอยู่ใน binary** (ตรวจได้: `grep -r styleguide dist/` ต้องไม่เจอ)
+
+## ความเข้าถึง (accessibility)
+
+เป้าคือ WCAG 2.2 AA และมีสองด่านที่ทำให้ตกไม่ได้:
+
+- `npm run contrast` — อ่าน token จาก `app.css` ตรงๆ แล้วคำนวณ contrast
+  ของคู่ที่ component ใช้จริง ทั้ง light/dark (ข้อความ 4.5:1, ส่วนที่บอกว่า
+  control อยู่ตรงไหน/สถานะอะไร 3:1) รันอยู่ใน `npm run check` ด้วย
+- `npm run styleguide:check` — เปิด styleguide ใน Chromium จริง เดินทุกก้อนข้อความ
+  (เปิด popover / menu / tooltip / dialog / sheet ทีละอัน) แล้ววัด contrast จาก
+  `getComputedStyle` ซึ่งเป็นค่าที่คนหน้าจอเห็นจริง จับเคสที่ token ถูกแต่
+  component หยิบคู่ผิด หรือมี layer โปร่งแสงซ้อนกัน
+
+เส้นขอบที่เป็นการตกแต่งล้วน (ขอบ card, เส้นคั่นแถว) ไม่ถูกบังคับ 3:1
+เพราะไม่ได้แบกความหมาย — แต่ขอบ input, focus ring และ marker สถานะถูกบังคับ
