@@ -233,8 +233,8 @@ T501 plugin core ─┬─ T502 ย้ายของเดิมมาเป็
 |---|---|---|---|
 | [T501](tasks/T501-plugin-core.md) | Plugin trait, registry, chain ที่คอมไพล์ตอน reload | L | — |
 | [T502](tasks/T502-builtins-as-plugins.md) | ย้าย header/rate limit/concurrency/cache/compression มาเป็น plugin | M | T501 |
-| [T503](tasks/T503-body-inspection.md) | `request_body_filter` + buffering แบบมีเพดาน | L | T501 |
-| [T504](tasks/T504-waf-engine-spike.md) | **วัด CRS compat, เทียบ 4 ทางเลือก, เขียน decision record** | M | T501 |
+| [T503](tasks/T503-body-inspection.md) | `request_body_filter` + buffering แบบมีเพดาน | L | T501 (เฉพาะส่วนต่อ plugin) |
+| [T504](tasks/T504-waf-engine-spike.md) | **วัด CRS compat, เทียบ 4 ทางเลือก, เขียน decision record** | M | — |
 | [T505](tasks/T505-seclang-parser.md) | Parser ของ SecLang → rule model ที่คอมไพล์แล้ว | L | T504 |
 | [T506](tasks/T506-waf-operators.md) | Operators, transformations, libinjection | L | T505 |
 | [T507](tasks/T507-crs-anomaly-scoring.md) | CRS: anomaly scoring, paranoia level, exclusion | L | T506 |
@@ -250,6 +250,41 @@ T501 plugin core ─┬─ T502 ย้ายของเดิมมาเป็
 - **W4 — "คนอื่นใช้เป็น"** : T509 (+T510) → ปรับจูน false positive ได้จาก UI โดยไม่ต้อง ssh
 
 ---
+
+### ทำ plugin ทีหลังได้ไหม
+
+ได้ — และ dependency จริงผูกกันน้อยกว่าลำดับข้างบนมาก มีแค่ **2 ใบจาก 9 ที่ต้องมี T501 จริง ๆ**
+คือ T502 (ซึ่งคือการย้ายเอง) กับ T510 (WASM) ส่วน T504 ไม่แตะโค้ดเบสเลย และ T505–T509
+เป็นเรื่องภายใน WAF ล้วน
+
+ลำดับแบบ **WAF ก่อน plugin** จึงเป็นไปได้:
+
+```
+T504 (spike)  →  T503 ครึ่งแรก (request_body_filter เปล่า ๆ)
+              →  T505–T508 (WAF เป็น builtin ตัวที่หก เหมือนอีก 5 ตัวที่มีอยู่)
+              →  T509 (UI)
+              →  T501 + T502 ทีหลัง โดย WAF กลายเป็นตัวที่หกที่ถูกย้าย
+```
+
+**ราคาที่จ่าย** มีสามอย่าง และไม่มีอันไหนที่กู้ไม่ได้:
+
+1. `request_filter` ยาวขึ้นอีกก่อนจะสั้นลง — คืนทุนตอนทำ T502
+2. ลำดับของ WAF เทียบกับ rate limit/cache ถูกกำหนดโดยตำแหน่งของ `if` แทนที่จะเป็น config
+   จนกว่าจะทำ T501
+3. **ข้อที่ต้องระวังที่สุด: config shape** — ถ้า WAF ออกมาเป็น `[waf]` แล้ววันหนึ่งกลายเป็น
+   `[[plugin]] kind = "waf"` นั่นคือ breaking change ที่ผลักต้นทุนไปให้ผู้ใช้
+
+   แต่ข้อนี้**ไม่บังคับให้ต้องตัดสินใจตอนนี้** เพราะ repo มีกติกาอยู่แล้วว่าของเดิมต้องใช้ได้ต่อ
+   โดยไม่ต้องแก้ไฟล์ (ดู acceptance criteria ของ T502) — `[waf]` ก็ได้การปฏิบัติแบบเดียวกัน
+   คือถูกเก็บไว้เป็น sugar ที่คอมไพล์เป็น waf plugin ตอน `from_config`
+
+**ข้อที่เสียถ้าทำ WAF ก่อนจริง ๆ คือการพิสูจน์ API** — T502 มีไว้เพื่อบังคับให้ของเดิม 5 ตัว
+วิ่งบน plugin API ก่อนประกาศว่านิ่ง ถ้า WAF (ซึ่งเป็นตัวที่เรียกร้องจาก API มากที่สุด — ต้องการ
+ทุก phase, ต้องการ body, ต้องการ state ข้าม phase) ถูกเขียนก่อนที่ API จะมีอยู่ API ที่ออกแบบทีหลัง
+ก็จะถูกดัดให้เข้ากับสิ่งที่ WAF บังเอิญทำไปแล้ว แทนที่จะออกแบบจากความต้องการของทั้ง 6 ตัวพร้อมกัน
+
+**ไม่ว่าจะเลือกลำดับไหน T504 ควรเป็นใบแรก** เพราะมันให้ข้อมูลมากที่สุดต่อแรงที่ลงไป
+และอาจเปลี่ยนแผนทั้งเฟส
 
 ## 7. ความเสี่ยงที่รู้ตัวแล้ว
 

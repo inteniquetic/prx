@@ -115,8 +115,8 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 |---|---|---|---|---|
 | [T501](T501-plugin-core.md) | Plugin trait, registry, chain ที่คอมไพล์ตอน reload | L | — | todo |
 | [T502](T502-builtins-as-plugins.md) | ย้าย header/rate limit/concurrency/cache/compression มาเป็น plugin | M | T501 | todo |
-| [T503](T503-body-inspection.md) | `request_body_filter` + buffering แบบมีเพดานสองชั้น | L | T501 | todo |
-| [T504](T504-waf-engine-spike.md) | **Spike: วัด CRS compat แล้วเลือก engine** — ประตูตัดสินของเฟส | M | T501 | todo |
+| [T503](T503-body-inspection.md) | `request_body_filter` + buffering แบบมีเพดานสองชั้น | L | T501 (เฉพาะส่วนต่อ plugin) | todo |
+| [T504](T504-waf-engine-spike.md) | **Spike: วัด CRS compat แล้วเลือก engine** — ประตูตัดสินของเฟส | M | — | todo · **หยิบได้ทันที** |
 | [T505](T505-seclang-parser.md) | SecLang parser → rule model ที่คอมไพล์แล้ว | L | T504 | รอผล T504 |
 | [T506](T506-waf-operators.md) | Operators, transformations, variable extraction | L | T505 | รอผล T504 |
 | [T507](T507-crs-anomaly-scoring.md) | CRS: anomaly scoring, paranoia level, exclusion | L | T506 | รอผล T504 |

@@ -3,8 +3,11 @@
 **Phase:** 5 · Plugin & WAF
 **Status:** todo
 **Size:** M (~1d)
-**Depends on:** T501
+**Depends on:** — (ไม่พึ่งอะไรเลย · spike นี้อยู่นอกโค้ดเบสของ prx ทั้งหมด)
 **Files:** `docs/decisions/0001-waf-engine.md`, `spike/waf/` (ทิ้งได้หลังจบ)
+
+> **ทำได้ทันที** — งานนี้แค่โหลด CRS มานับและ benchmark crate ไม่แตะ request path
+> จึงเป็นใบที่ควรหยิบก่อนใครในเฟสนี้ไม่ว่าจะตัดสินใจเรื่อง plugin อย่างไร
 
 ## เป้าหมาย
 

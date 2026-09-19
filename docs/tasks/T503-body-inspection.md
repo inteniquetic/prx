@@ -3,7 +3,7 @@
 **Phase:** 5 · Plugin & WAF
 **Status:** todo
 **Size:** L (~2d)
-**Depends on:** T501
+**Depends on:** T501 *เฉพาะการต่อเข้า plugin phase* — ตัว `request_body_filter` เองทำก่อนได้
 **Files:** `src/plugin/body.rs`, `src/proxy.rs`, `src/config.rs`
 
 ## เป้าหมาย
@@ -20,7 +20,9 @@ micro-cache สะสม response body อยู่แล้วใน `ctx.cache
 
 ## ขอบเขตงาน
 
-1. เพิ่ม `request_body_filter` เข้า `impl ProxyHttp` และต่อเข้า phase `on_request_body`
+1. เพิ่ม `request_body_filter` เข้า `impl ProxyHttp` — **ส่วนนี้ไม่พึ่ง T501** ทำก่อนได้
+   แล้วต่อเข้า phase `on_request_body` เมื่อ plugin core พร้อม (หรือเรียก WAF ตรง ๆ ไปก่อน
+   ถ้าเลือกทำ WAF ก่อน plugin)
 2. **Buffering ที่มีเพดานสองชั้น** — ต่อ request (`request_body_limit`) และรวมทั้ง instance
    (`body_buffer_total_limit`) ชั้นที่สองคือตัวที่กัน OOM ตอนโดนยิงพร้อมกันหลายพัน connection
    ซึ่งเพดานต่อ request อย่างเดียวกันไม่ได้
