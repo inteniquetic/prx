@@ -181,10 +181,15 @@
   role="dialog"
   aria-modal="true"
   tabindex="-1"
-  on:click|self={handleCancel}
 >
-  <!-- Backdrop -->
-  <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+  <!-- Backdrop. A button rather than a div so dismissing the dialog by
+       clicking outside it is reachable from the keyboard too. -->
+  <button
+    type="button"
+    class="absolute inset-0 bg-black/60 backdrop-blur-sm"
+    aria-label="Close dialog"
+    on:click={handleCancel}
+  ></button>
 
   <!-- Modal Content -->
   <div class="relative z-10 flex max-h-[90vh] w-full max-w-2xl flex-col rounded-xl border border-slate-700/80 bg-slate-950 shadow-2xl">
@@ -200,6 +205,7 @@
       </div>
       <button
         class="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200"
+        aria-label="Close"
         on:click={handleCancel}
       >
         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -216,7 +222,7 @@
         <!-- ============================================================= -->
         <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
           <div class="flex items-center gap-3 border-b border-slate-700/80 px-5 py-4">
-            <div class="h-8 w-1 rounded-full bg-cyan-400" />
+            <div class="h-8 w-1 rounded-full bg-cyan-400" ></div>
             <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
               Service Configuration
             </h3>
@@ -291,7 +297,7 @@
             on:click={() => circuitBreakerExpanded = !circuitBreakerExpanded}
           >
             <div class="flex items-center gap-3">
-              <div class="h-8 w-1 rounded-full bg-amber-400" />
+              <div class="h-8 w-1 rounded-full bg-amber-400" ></div>
               <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
                 Circuit Breaker
               </h3>
@@ -380,7 +386,7 @@
         <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
           <div class="flex items-center justify-between border-b border-slate-700/80 px-5 py-4">
             <div class="flex items-center gap-3">
-              <div class="h-8 w-1 rounded-full bg-emerald-400" />
+              <div class="h-8 w-1 rounded-full bg-emerald-400" ></div>
               <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
                 Upstreams
               </h3>

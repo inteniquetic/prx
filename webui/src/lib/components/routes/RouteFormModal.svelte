@@ -128,13 +128,6 @@
     selectedMethods = newMethods;
   }
 
-  function handleOverlayClick(event: MouseEvent): void {
-    // Only close if clicking directly on the overlay, not the modal content
-    if (event.target === event.currentTarget) {
-      handleCancel();
-    }
-  }
-
   // ---------------------------------------------------------------------------
   // Input Helpers
   // ---------------------------------------------------------------------------
@@ -160,17 +153,22 @@
 
 <svelte:window on:keydown={handleKeydown} />
 
-<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
 <!-- Modal Overlay -->
 <div
   class="fixed inset-0 z-50 flex items-center justify-center p-4"
-  on:click={handleOverlayClick}
   role="dialog"
   aria-modal="true"
   aria-labelledby="modal-title"
+  tabindex="-1"
 >
-  <!-- Backdrop -->
-  <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+  <!-- Backdrop. A button rather than a div so dismissing the dialog by
+       clicking outside it is reachable from the keyboard too. -->
+  <button
+    type="button"
+    class="absolute inset-0 bg-black/60 backdrop-blur-sm"
+    aria-label="Close dialog"
+    on:click={handleCancel}
+  ></button>
 
   <!-- Modal Panel -->
   <div class="relative z-10 w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-slate-700/80 bg-slate-900 shadow-2xl shadow-black/50">
@@ -203,7 +201,7 @@
       <!-- Section: Basic Configuration -->
       <section class="border-b border-slate-700/80">
         <div class="flex items-center gap-3 px-6 pt-5 pb-3">
-          <div class="h-8 w-1 rounded-full bg-cyan-400" />
+          <div class="h-8 w-1 rounded-full bg-cyan-400" ></div>
           <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
             Basic Configuration
           </h3>
@@ -289,7 +287,7 @@
       <!-- Section: Methods -->
       <section class="border-b border-slate-700/80">
         <div class="flex items-center gap-3 px-6 pt-5 pb-3">
-          <div class="h-8 w-1 rounded-full bg-emerald-400" />
+          <div class="h-8 w-1 rounded-full bg-emerald-400" ></div>
           <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
             HTTP Methods
           </h3>
@@ -336,7 +334,7 @@
       <!-- Section: Advanced -->
       <section>
         <div class="flex items-center gap-3 px-6 pt-5 pb-3">
-          <div class="h-8 w-1 rounded-full bg-amber-400" />
+          <div class="h-8 w-1 rounded-full bg-amber-400" ></div>
           <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
             Advanced
           </h3>
@@ -364,7 +362,7 @@
                 for="modal-is-default-toggle"
                 class="inline-flex h-6 w-11 cursor-pointer items-center rounded-full border border-slate-600 bg-slate-700 transition-colors peer-checked:border-cyan-500 peer-checked:bg-cyan-500/30"
               >
-                <span class="ml-0.5 h-5 w-5 rounded-full border border-slate-500 bg-slate-300 shadow-sm transition-transform peer-checked:translate-x-5 peer-checked:border-cyan-400 peer-checked:bg-cyan-300" />
+                <span class="ml-0.5 h-5 w-5 rounded-full border border-slate-500 bg-slate-300 shadow-sm transition-transform peer-checked:translate-x-5 peer-checked:border-cyan-400 peer-checked:bg-cyan-300" ></span>
               </label>
             </div>
           </div>

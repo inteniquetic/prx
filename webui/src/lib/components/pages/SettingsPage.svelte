@@ -715,14 +715,14 @@
 
             {#if config.observability.prometheus_listen}
               <div class="mt-3 inline-flex items-center gap-2 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2">
-                <span class="h-2 w-2 rounded-full bg-emerald-400" />
+                <span class="h-2 w-2 rounded-full bg-emerald-400" ></span>
                 <span class="text-xs font-medium text-emerald-200">
                   Metrics enabled at http://{config.observability.prometheus_listen}/metrics
                 </span>
               </div>
             {:else}
               <div class="mt-3 inline-flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-800 px-3 py-2">
-                <span class="h-2 w-2 rounded-full bg-slate-500" />
+                <span class="h-2 w-2 rounded-full bg-slate-500" ></span>
                 <span class="text-xs font-medium text-slate-400">Metrics disabled</span>
               </div>
             {/if}

@@ -478,7 +478,7 @@
                           <span
                             class={healthDotClass(routeHealthStatus(index))}
                             title={healthTooltip(index)}
-                          />
+                          ></span>
                           <span class="font-medium text-slate-100">{route.name}</span>
                           {#if route.is_default}
                             <span class="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-200">

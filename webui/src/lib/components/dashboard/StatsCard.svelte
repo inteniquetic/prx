@@ -58,7 +58,7 @@
   class="group relative overflow-hidden rounded-xl border border-slate-700/80 bg-slate-900/80 p-4 backdrop-blur transition-all duration-200 hover:border-slate-600/80 hover:bg-slate-900/90"
 >
   <!-- Subtle gradient background -->
-  <div class="pointer-events-none absolute inset-0 bg-gradient-to-br {colors.bg} opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
+  <div class="pointer-events-none absolute inset-0 bg-gradient-to-br {colors.bg} opacity-0 transition-opacity duration-200 group-hover:opacity-100" ></div>
 
   <div class="relative flex items-start justify-between gap-3">
     <!-- Icon + Label -->

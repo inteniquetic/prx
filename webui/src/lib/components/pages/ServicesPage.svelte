@@ -584,7 +584,7 @@
         <!-- ============================================================= -->
         <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
           <div class="flex items-center gap-3 border-b border-slate-700/80 px-5 py-4">
-            <div class="h-8 w-1 rounded-full bg-cyan-400" />
+            <div class="h-8 w-1 rounded-full bg-cyan-400" ></div>
             <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
               Service Configuration
             </h3>
@@ -657,7 +657,7 @@
             disabled={isSaving}
           >
             <div class="flex items-center gap-3">
-              <div class="h-8 w-1 rounded-full bg-amber-400" />
+              <div class="h-8 w-1 rounded-full bg-amber-400" ></div>
               <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
                 Circuit Breaker
               </h3>
@@ -739,7 +739,7 @@
         <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
           <div class="flex items-center justify-between border-b border-slate-700/80 px-5 py-4">
             <div class="flex items-center gap-3">
-              <div class="h-8 w-1 rounded-full bg-emerald-400" />
+              <div class="h-8 w-1 rounded-full bg-emerald-400" ></div>
               <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
                 Upstreams
               </h3>

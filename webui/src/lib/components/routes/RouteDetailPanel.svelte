@@ -207,7 +207,7 @@
   <!-- ========================================================================= -->
   <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
     <div class="flex items-center gap-3 border-b border-slate-700/80 px-5 py-4">
-      <div class="h-8 w-1 rounded-full bg-cyan-400" />
+      <div class="h-8 w-1 rounded-full bg-cyan-400" ></div>
       <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
         Route Configuration
       </h3>
@@ -363,7 +363,7 @@
             for="is-default-toggle"
             class="inline-flex h-6 w-11 cursor-pointer items-center rounded-full border border-slate-600 bg-slate-700 transition-colors peer-checked:border-cyan-500 peer-checked:bg-cyan-500/30 peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
           >
-            <span class="ml-0.5 h-5 w-5 rounded-full border border-slate-500 bg-slate-300 shadow-sm transition-transform peer-checked:translate-x-5 peer-checked:border-cyan-400 peer-checked:bg-cyan-300" />
+            <span class="ml-0.5 h-5 w-5 rounded-full border border-slate-500 bg-slate-300 shadow-sm transition-transform peer-checked:translate-x-5 peer-checked:border-cyan-400 peer-checked:bg-cyan-300" ></span>
           </label>
         </div>
       </label>
@@ -375,7 +375,7 @@
   <!-- ========================================================================= -->
   <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
     <div class="flex items-center gap-3 border-b border-slate-700/80 px-5 py-4">
-      <div class="h-8 w-1 rounded-full bg-violet-400" />
+      <div class="h-8 w-1 rounded-full bg-violet-400" ></div>
       <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
         About Routes
       </h3>

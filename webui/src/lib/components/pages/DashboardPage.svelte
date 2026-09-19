@@ -290,26 +290,26 @@
             {healthCheckedServices} of {totalServices} services checked
           </div>
           <div class="flex items-center gap-2">
-            <span class="h-2.5 w-2.5 rounded-full bg-emerald-400" />
+            <span class="h-2.5 w-2.5 rounded-full bg-emerald-400" ></span>
             <span class="text-sm font-medium text-slate-200">
               {healthyCount} Healthy
             </span>
           </div>
           <div class="flex items-center gap-2">
-            <span class="h-2.5 w-2.5 rounded-full bg-amber-400" />
+            <span class="h-2.5 w-2.5 rounded-full bg-amber-400" ></span>
             <span class="text-sm font-medium text-slate-200">
               {degradedCount} Degraded
             </span>
           </div>
           <div class="flex items-center gap-2">
-            <span class="h-2.5 w-2.5 rounded-full bg-rose-400" />
+            <span class="h-2.5 w-2.5 rounded-full bg-rose-400" ></span>
             <span class="text-sm font-medium text-slate-200">
               {downCount} Down
             </span>
           </div>
           {#if unknownCount > 0}
             <div class="flex items-center gap-2">
-              <span class="h-2.5 w-2.5 rounded-full bg-slate-500" />
+              <span class="h-2.5 w-2.5 rounded-full bg-slate-500" ></span>
               <span class="text-sm font-medium text-slate-200">
                 {unknownCount} Unknown
               </span>
@@ -324,7 +324,7 @@
               class="group relative"
               title="{route.name}: {routeHealthStatus(idx)}"
             >
-              <span class="h-3 w-3 rounded-full {statusDotClass(routeHealthStatus(idx))} transition-transform hover:scale-125" />
+              <span class="h-3 w-3 rounded-full {statusDotClass(routeHealthStatus(idx))} transition-transform hover:scale-125" ></span>
               <!-- Tooltip on hover -->
               <div class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
                 <div class="font-medium">{route.name}</div>
@@ -417,7 +417,7 @@
               <div class="flex flex-col gap-2 px-4 py-4">
                 <div class="flex items-center justify-between">
                   <span class="font-medium text-slate-100">{service.name}</span>
-                  <span class="h-2 w-2 rounded-full {statusDotClass(serviceHealthStatus(service.name))}" />
+                  <span class="h-2 w-2 rounded-full {statusDotClass(serviceHealthStatus(service.name))}" ></span>
                 </div>
                 <div class="flex items-center gap-3 text-xs text-slate-400">
                   <span>{formatLbStrategy(service.lb)}</span>
