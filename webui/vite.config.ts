@@ -1,8 +1,20 @@
+import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [tailwindcss(), svelte()],
+  resolve: {
+    alias: {
+      $lib: fileURLToPath(new URL('./src/lib', import.meta.url))
+    }
+  },
+  build: {
+    // The UI is embedded in the prx binary and served over a closed network,
+    // so weight is a feature. Warn well before anything gets fat.
+    chunkSizeWarningLimit: 300
+  },
   server: {
     port: 5173,
     host: true

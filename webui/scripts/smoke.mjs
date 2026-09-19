@@ -53,6 +53,45 @@ try {
   await page.waitForTimeout(300);
   if ((await page.locator('[role="dialog"]').count()) !== 0) problems.push('Escape did not close the modal');
 
+  // Theme: the button cycles light -> dark -> system and the choice has to
+  // survive a reload without the page flashing the wrong one first.
+  const themeButton = page.locator('nav button, aside button').filter({ hasText: /Light|Dark|System/ }).first();
+  const seen = [];
+  for (let i = 0; i < 3; i += 1) {
+    await themeButton.click();
+    await page.waitForTimeout(200);
+    seen.push({
+      // The button renders an icon above the word, so match on the word only.
+      label: (await themeButton.innerText()).trim().split('\n').pop().trim(),
+      dark: await page.evaluate(() => document.documentElement.classList.contains('dark'))
+    });
+  }
+  const labels = seen.map((s) => s.label);
+  if (new Set(labels).size !== 3) problems.push(`theme button did not cycle: ${labels.join(' -> ')}`);
+  const lightState = seen.find((s) => s.label === 'Light');
+  const darkState = seen.find((s) => s.label === 'Dark');
+  if (lightState?.dark !== false) problems.push('Light did not remove the dark class');
+  if (darkState?.dark !== true) problems.push('Dark did not add the dark class');
+
+  const stored = await page.evaluate(() => localStorage.getItem('prx-theme'));
+  await page.reload({ waitUntil: 'networkidle' });
+  const afterReload = await page.evaluate(() => ({
+    choice: localStorage.getItem('prx-theme'),
+    dark: document.documentElement.classList.contains('dark')
+  }));
+  if (afterReload.choice !== stored) problems.push('theme choice did not survive a reload');
+  if (stored === 'dark' && !afterReload.dark) problems.push('stored dark theme was not applied on load');
+  if (stored === 'light' && afterReload.dark) problems.push('stored light theme was not applied on load');
+
+  // Fonts must come from the binary, never a CDN.
+  const fontRequests = await page.evaluate(() =>
+    performance.getEntriesByType('resource').filter((r) => r.name.includes('.woff')).map((r) => r.name)
+  );
+  for (const url of fontRequests) {
+    const { hostname } = new URL(url);
+    if (!['127.0.0.1', 'localhost'].includes(hostname)) problems.push(`font loaded off-host: ${url}`);
+  }
+
   if (external.length) problems.push(`requested off-host assets: ${external.join(', ')}`);
 } catch (err) {
   problems.push(`${err.name}: ${err.message.split('\n')[0]}`);
@@ -65,4 +104,7 @@ if (problems.length) {
   for (const p of problems) console.error(`  - ${p}`);
   process.exit(1);
 }
-console.log(`smoke passed against ${base}: 4 pages, modal open/close, no console errors, no external requests`);
+console.log(
+  `smoke passed against ${base}: 4 pages, modal open/close, theme cycle + persistence, ` +
+    'self-hosted fonts, no console errors, no external requests'
+);

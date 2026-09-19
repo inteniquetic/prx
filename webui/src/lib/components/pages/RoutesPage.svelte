@@ -134,13 +134,13 @@
   const healthDotClass = (status: string): string => {
     switch (status) {
       case 'up':
-        return 'h-2 w-2 rounded-full bg-emerald-400';
+        return 'h-2 w-2 rounded-full bg-success';
       case 'degraded':
-        return 'h-2 w-2 rounded-full bg-amber-400';
+        return 'h-2 w-2 rounded-full bg-warning';
       case 'down':
-        return 'h-2 w-2 rounded-full bg-rose-400';
+        return 'h-2 w-2 rounded-full bg-destructive';
       default:
-        return 'h-2 w-2 rounded-full bg-slate-600';
+        return 'h-2 w-2 rounded-full bg-muted-foreground/40';
     }
   };
 
@@ -159,12 +159,12 @@
 
   const methodBadgeColor = (method: string): string => {
     const upper = method.toUpperCase();
-    if (upper === 'GET') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
-    if (upper === 'POST') return 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200';
-    if (upper === 'PUT') return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
-    if (upper === 'DELETE') return 'border-rose-500/40 bg-rose-500/10 text-rose-200';
-    if (upper === 'PATCH') return 'border-violet-500/40 bg-violet-500/10 text-violet-200';
-    return 'border-slate-500/40 bg-slate-500/10 text-slate-300';
+    if (upper === 'GET') return 'border-success/40 bg-success/10 text-success';
+    if (upper === 'POST') return 'border-primary/40 bg-primary/10 text-primary';
+    if (upper === 'PUT') return 'border-warning/40 bg-warning/10 text-warning';
+    if (upper === 'DELETE') return 'border-destructive/40 bg-destructive/10 text-destructive';
+    if (upper === 'PATCH') return 'border-primary/40 bg-primary/10 text-primary';
+    return 'border-border/40 bg-muted-foreground/60/10 text-foreground/80';
   };
 
   const serviceExists = (serviceName: string): boolean =>
@@ -176,13 +176,13 @@
 
   const rowClass = (index: number): string =>
     selectedRouteIndex === index
-      ? 'cursor-pointer transition-colors bg-cyan-500/10'
-      : 'cursor-pointer transition-colors hover:bg-slate-900/70';
+      ? 'cursor-pointer transition-colors bg-primary/10'
+      : 'cursor-pointer transition-colors hover:bg-card/70';
 
   const pageBtnClass = (page: number): string =>
     page === currentPage
-      ? 'rounded-md border px-2 py-1 text-xs font-medium transition-colors border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
-      : 'rounded-md border px-2 py-1 text-xs font-medium transition-colors border-slate-600 bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200';
+      ? 'rounded-md border px-2 py-1 text-xs font-medium transition-colors border-primary/50 bg-primary/10 text-primary'
+      : 'rounded-md border px-2 py-1 text-xs font-medium transition-colors border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground';
 
   // ---------------------------------------------------------------------------
   // Actions
@@ -334,7 +334,7 @@
 <AppLayout title="Routes" subtitle="Manage routing rules that match requests to services">
   <svelte:fragment slot="header-actions">
     <button
-      class="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-700 hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+      class="rounded-md border border-border bg-muted px-3 py-1.5 text-xs font-semibold text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
       disabled={isRefreshing || isSaving}
       on:click={refreshConfig}
       title="Refresh from server"
@@ -342,14 +342,14 @@
       {isRefreshing ? '⟳' : '↻'} Refresh
     </button>
     <button
-      class="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+      class="rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
       disabled={isSaving}
       on:click={handleOpenCreateModal}
     >
       + Add Route
     </button>
     <button
-      class="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+      class="rounded-md border border-success/40 bg-success/10 px-3 py-1.5 text-xs font-semibold text-success transition-colors hover:bg-success/20 disabled:cursor-not-allowed disabled:opacity-60"
       disabled={healthLoading || isSaving}
       on:click={() => dispatch('refreshHealth')}
     >
@@ -379,17 +379,17 @@
         <!-- Search Bar -->
         <div class="flex items-center gap-4">
           <div class="relative flex-1">
-            <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">⌕</span>
+            <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">⌕</span>
             <input
               type="text"
-              class="w-full rounded-lg border border-slate-600 bg-slate-900 py-2.5 pl-9 pr-4 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
+              class="w-full rounded-lg border border-border bg-card py-2.5 pl-9 pr-4 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
               placeholder="Search by name, host, path, service, or method..."
               value={searchQuery}
               on:input={handleSearch}
             />
           </div>
-          <div class="flex items-center gap-2 text-sm text-slate-400">
-            <span class="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 tabular-nums">
+          <div class="flex items-center gap-2 text-sm text-muted-foreground">
+            <span class="rounded-lg border border-border bg-muted/60 px-3 py-2 tabular-nums">
               {filteredRoutes.length} route{filteredRoutes.length !== 1 ? 's' : ''}
             </span>
           </div>
@@ -397,18 +397,18 @@
 
         <!-- Health Error Banner -->
         {#if healthError}
-          <div class="rounded-lg border border-rose-400/40 bg-rose-500/10 px-4 py-3 text-sm font-medium text-rose-200">
+          <div class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive">
             <span class="mr-2">⚠</span>
             Health check failed: {healthError}
           </div>
         {/if}
 
         {#if errorMessage}
-          <div class="rounded-lg border border-rose-400/40 bg-rose-500/10 px-4 py-3 text-sm font-medium text-rose-200">
+          <div class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive">
             <span class="mr-2">⚠</span>
             {errorMessage}
             <button
-              class="ml-2 rounded border border-rose-400/30 bg-rose-500/10 px-2 py-0.5 text-xs text-rose-300 transition-colors hover:bg-rose-500/20"
+              class="ml-2 rounded border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-xs text-destructive transition-colors hover:bg-destructive/20"
               on:click={clearError}
             >
               Dismiss
@@ -417,31 +417,31 @@
         {/if}
 
         <!-- Routes Table -->
-        <div class="overflow-hidden rounded-xl border border-slate-700 bg-slate-950/70">
+        <div class="overflow-hidden rounded-xl border border-border bg-background/70">
           {#if filteredRoutes.length === 0}
             <!-- Empty State -->
             <div class="flex flex-col items-center justify-center px-6 py-20">
-              <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-700 bg-slate-800/60">
-                <span class="text-3xl text-slate-500">⇌</span>
+              <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-border bg-muted/60">
+                <span class="text-3xl text-muted-foreground">⇌</span>
               </div>
               {#if searchQuery}
-                <h3 class="text-base font-semibold text-slate-300">No routes match your search</h3>
-                <p class="mt-1 text-sm text-slate-500">
+                <h3 class="text-base font-semibold text-foreground/80">No routes match your search</h3>
+                <p class="mt-1 text-sm text-muted-foreground">
                   Try adjusting your search terms or
                   <button
-                    class="ml-1 text-cyan-400 transition-colors hover:text-cyan-300"
+                    class="ml-1 text-primary transition-colors hover:text-primary"
                     on:click={() => (searchQuery = '')}
                   >
                     clear the filter
                   </button>
                 </p>
               {:else}
-                <h3 class="text-base font-semibold text-slate-300">No routes configured</h3>
-                <p class="mt-1 text-sm text-slate-500">
+                <h3 class="text-base font-semibold text-foreground/80">No routes configured</h3>
+                <p class="mt-1 text-sm text-muted-foreground">
                   Get started by adding your first route.
                 </p>
                 <button
-                  class="mt-4 inline-flex items-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  class="mt-4 inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={isSaving}
                   on:click={handleOpenCreateModal}
                 >
@@ -452,8 +452,8 @@
             </div>
           {:else}
             <div class="overflow-x-auto">
-              <table class="min-w-full divide-y divide-slate-800 text-sm">
-                <thead class="bg-slate-900 text-slate-300">
+              <table class="min-w-full divide-y divide-border text-sm">
+                <thead class="bg-card text-foreground/80">
                   <tr>
                     <th class="px-4 py-3 text-left font-semibold">Name</th>
                     <th class="px-4 py-3 text-left font-semibold">Service</th>
@@ -463,7 +463,7 @@
                     <th class="px-4 py-3 text-right font-semibold">Actions</th>
                   </tr>
                 </thead>
-                <tbody class="divide-y divide-slate-800">
+                <tbody class="divide-y divide-border">
                   {#each paginatedRoutes as { route, index } (index)}
                     <tr
                       class={rowClass(index)}
@@ -479,9 +479,9 @@
                             class={healthDotClass(routeHealthStatus(index))}
                             title={healthTooltip(index)}
                           ></span>
-                          <span class="font-medium text-slate-100">{route.name}</span>
+                          <span class="font-medium text-foreground">{route.name}</span>
                           {#if route.is_default}
-                            <span class="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-200">
+                            <span class="rounded-full border border-success/40 bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success">
                               default
                             </span>
                           {/if}
@@ -492,7 +492,7 @@
                       <td class="px-4 py-3">
                         {#if serviceExists(route.service)}
                           <button
-                            class="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-2 py-0.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20"
+                            class="rounded-lg border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
                             on:click|stopPropagation={handleNavigateServices}
                             title="View in Services"
                           >
@@ -500,7 +500,7 @@
                           </button>
                         {:else}
                           <span
-                            class="rounded-lg border border-rose-400/40 bg-rose-500/10 px-2 py-0.5 text-xs font-semibold text-rose-200"
+                            class="rounded-lg border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive"
                             title="Service not found"
                           >
                             {route.service || '—'}
@@ -509,17 +509,17 @@
                       </td>
 
                       <!-- Host -->
-                      <td class="px-4 py-3 text-slate-300">
+                      <td class="px-4 py-3 text-foreground/80">
                         {#if route.host}
                           {route.host}
                         {:else}
-                          <span class="text-slate-600">—</span>
+                          <span class="text-muted-foreground/70">—</span>
                         {/if}
                       </td>
 
                       <!-- Path -->
                       <td class="px-4 py-3">
-                        <code class="rounded bg-slate-800/80 px-1.5 py-0.5 text-xs font-mono text-slate-300">
+                        <code class="rounded bg-muted/80 px-1.5 py-0.5 text-xs font-mono text-foreground/80">
                           {route.path_prefix}
                         </code>
                       </td>
@@ -527,7 +527,7 @@
                       <!-- Methods -->
                       <td class="px-4 py-3">
                         {#if route.methods.length === 0}
-                          <span class="text-xs text-slate-500">All</span>
+                          <span class="text-xs text-muted-foreground">All</span>
                         {:else}
                           <div class="flex flex-wrap gap-1">
                             {#each route.methods as method}
@@ -543,7 +543,7 @@
                       <td class="px-4 py-3">
                         <div class="flex items-center justify-end gap-1.5">
                           <button
-                            class="rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            class="rounded-md border border-border bg-card px-2 py-1 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                             disabled={isSaving}
                             on:click|stopPropagation={() => handleViewRoute(index)}
                             title="View route"
@@ -551,7 +551,7 @@
                             View
                           </button>
                           <button
-                            class="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-xs font-medium text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                            class="rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
                             disabled={isSaving}
                             on:click|stopPropagation={() => handleEditRoute(index)}
                             title="Edit route"
@@ -559,7 +559,7 @@
                             Edit
                           </button>
                           <button
-                            class="rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            class="rounded-md border border-border bg-card px-2 py-1 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                             disabled={isSaving}
                             on:click|stopPropagation={() => handleDuplicateRoute(index)}
                             title="Duplicate route"
@@ -567,7 +567,7 @@
                             Dup
                           </button>
                           <button
-                            class="rounded-md border border-rose-400/40 bg-rose-500/10 px-2 py-1 text-xs font-medium text-rose-200 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                            class="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20 disabled:cursor-not-allowed disabled:opacity-50"
                             disabled={isSaving}
                             on:click|stopPropagation={() => handleDeleteRoute(index)}
                             title="Delete route"
@@ -584,13 +584,13 @@
 
             <!-- Pagination -->
             {#if totalPages > 1}
-              <div class="flex items-center justify-between border-t border-slate-800 bg-slate-900/50 px-4 py-3">
-                <p class="text-xs text-slate-500">
+              <div class="flex items-center justify-between border-t border-border bg-card/50 px-4 py-3">
+                <p class="text-xs text-muted-foreground">
                   Showing {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, filteredRoutes.length)} of {filteredRoutes.length}
                 </p>
                 <div class="flex items-center gap-1">
                   <button
-                    class="rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-xs font-medium text-slate-400 transition-colors hover:bg-slate-700 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    class="rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                     disabled={currentPage === 1}
                     on:click={() => goToPage(currentPage - 1)}
                   >
@@ -598,7 +598,7 @@
                   </button>
                   {#each getPageNumbers() as page}
                     {#if page === '...'}
-                      <span class="px-1 text-xs text-slate-500">…</span>
+                      <span class="px-1 text-xs text-muted-foreground">…</span>
                     {:else}
                       <button
                         class={pageBtnClass(page)}
@@ -609,7 +609,7 @@
                     {/if}
                   {/each}
                   <button
-                    class="rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-xs font-medium text-slate-400 transition-colors hover:bg-slate-700 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    class="rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                     disabled={currentPage === totalPages}
                     on:click={() => goToPage(currentPage + 1)}
                   >
@@ -623,8 +623,8 @@
 
         <!-- Table Footer Info -->
         {#if routes.length > 0 && filteredRoutes.length === 0 && searchQuery}
-          <div class="text-center text-sm text-slate-500">
-            No results found for "<span class="text-slate-400">{searchQuery}</span>"
+          <div class="text-center text-sm text-muted-foreground">
+            No results found for "<span class="text-muted-foreground">{searchQuery}</span>"
           </div>
         {/if}
       </div>

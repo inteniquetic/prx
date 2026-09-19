@@ -171,22 +171,22 @@
   ></button>
 
   <!-- Modal Panel -->
-  <div class="relative z-10 w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-slate-700/80 bg-slate-900 shadow-2xl shadow-black/50">
+  <div class="relative z-10 w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-border/80 bg-card shadow-2xl shadow-black/50">
     <!-- ========================================================================= -->
     <!-- Header -->
     <!-- ========================================================================= -->
-    <div class="flex items-center justify-between border-b border-slate-700/80 px-6 py-4">
+    <div class="flex items-center justify-between border-b border-border/80 px-6 py-4">
       <div>
-        <h2 id="modal-title" class="text-lg font-bold text-slate-100">
+        <h2 id="modal-title" class="text-lg font-bold text-foreground">
           {isEditing ? 'Edit Route' : 'Create Route'}
         </h2>
-        <p class="mt-0.5 text-sm text-slate-400">
+        <p class="mt-0.5 text-sm text-muted-foreground">
           {isEditing ? `Editing "${originalName}"` : 'Configure a new routing rule'}
         </p>
       </div>
       <button
         type="button"
-        class="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-600 bg-slate-800 text-slate-400 transition-colors hover:bg-slate-700 hover:text-slate-200"
+        class="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-muted text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         on:click={handleCancel}
         title="Close"
       >
@@ -199,10 +199,10 @@
     <!-- ========================================================================= -->
     <div class="space-y-0">
       <!-- Section: Basic Configuration -->
-      <section class="border-b border-slate-700/80">
+      <section class="border-b border-border/80">
         <div class="flex items-center gap-3 px-6 pt-5 pb-3">
-          <div class="h-8 w-1 rounded-full bg-cyan-400" ></div>
-          <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
+          <div class="h-8 w-1 rounded-full bg-primary" ></div>
+          <h3 class="text-sm font-semibold uppercase tracking-wider text-foreground">
             Basic Configuration
           </h3>
         </div>
@@ -210,28 +210,28 @@
         <div class="grid gap-4 px-6 pb-5">
           <!-- Route Name -->
           <label class="space-y-1.5">
-            <span class="text-sm font-medium text-slate-300">
-              Route Name <span class="text-rose-400">*</span>
+            <span class="text-sm font-medium text-foreground/80">
+              Route Name <span class="text-destructive">*</span>
             </span>
             <input
               type="text"
-              class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 {nameError ? 'border-rose-500' : ''}"
+              class="w-full rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30 {nameError ? 'border-destructive' : ''}"
               value={name}
               placeholder="e.g., api-gateway"
               on:input={(e) => (name = inputValue(e))}
             />
             {#if nameError}
-              <p class="text-xs text-rose-400">{nameError}</p>
+              <p class="text-xs text-destructive">{nameError}</p>
             {/if}
           </label>
 
           <!-- Service -->
           <label class="space-y-1.5">
-            <span class="text-sm font-medium text-slate-300">
-              Service <span class="text-rose-400">*</span>
+            <span class="text-sm font-medium text-foreground/80">
+              Service <span class="text-destructive">*</span>
             </span>
             <select
-              class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 {serviceError ? 'border-rose-500' : ''}"
+              class="w-full rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm text-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30 {serviceError ? 'border-destructive' : ''}"
               value={service}
               on:change={(e) => (service = selectValue(e))}
             >
@@ -241,60 +241,60 @@
               {/each}
             </select>
             {#if serviceError}
-              <p class="text-xs text-rose-400">{serviceError}</p>
+              <p class="text-xs text-destructive">{serviceError}</p>
             {/if}
             {#if services.length === 0}
-              <p class="text-xs text-amber-400">No services available. Create a service first.</p>
+              <p class="text-xs text-warning">No services available. Create a service first.</p>
             {/if}
           </label>
 
           <!-- Host -->
           <label class="space-y-1.5">
-            <span class="text-sm font-medium text-slate-300">
-              Host <span class="text-slate-500">(optional)</span>
+            <span class="text-sm font-medium text-foreground/80">
+              Host <span class="text-muted-foreground">(optional)</span>
             </span>
             <input
               type="text"
-              class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
+              class="w-full rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
               value={host}
               placeholder="e.g., api.example.com"
               on:input={(e) => (host = inputValue(e))}
             />
-            <p class="text-xs text-slate-500">Leave empty to match any host</p>
+            <p class="text-xs text-muted-foreground">Leave empty to match any host</p>
           </label>
 
           <!-- Path Prefix -->
           <label class="space-y-1.5">
-            <span class="text-sm font-medium text-slate-300">
-              Path Prefix <span class="text-rose-400">*</span>
+            <span class="text-sm font-medium text-foreground/80">
+              Path Prefix <span class="text-destructive">*</span>
             </span>
             <input
               type="text"
-              class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm font-mono text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 {pathPrefixError ? 'border-rose-500' : ''}"
+              class="w-full rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm font-mono text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30 {pathPrefixError ? 'border-destructive' : ''}"
               value={pathPrefix}
               placeholder="/"
               on:input={(e) => (pathPrefix = inputValue(e))}
             />
             {#if pathPrefixError}
-              <p class="text-xs text-rose-400">{pathPrefixError}</p>
+              <p class="text-xs text-destructive">{pathPrefixError}</p>
             {:else if pathPrefix && !pathPrefix.startsWith('/')}
-              <p class="text-xs text-amber-400">Path prefix must start with /</p>
+              <p class="text-xs text-warning">Path prefix must start with /</p>
             {/if}
           </label>
         </div>
       </section>
 
       <!-- Section: Methods -->
-      <section class="border-b border-slate-700/80">
+      <section class="border-b border-border/80">
         <div class="flex items-center gap-3 px-6 pt-5 pb-3">
-          <div class="h-8 w-1 rounded-full bg-emerald-400" ></div>
-          <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
+          <div class="h-8 w-1 rounded-full bg-success" ></div>
+          <h3 class="text-sm font-semibold uppercase tracking-wider text-foreground">
             HTTP Methods
           </h3>
         </div>
 
         <div class="px-6 pb-5">
-          <p class="mb-3 text-xs text-slate-500">
+          <p class="mb-3 text-xs text-muted-foreground">
             Select methods this route should match. Leave empty to match all methods.
           </p>
 
@@ -306,13 +306,13 @@
                 type="button"
                 class="inline-flex items-center rounded-lg border px-3 py-1.5 text-sm font-medium transition-all
                   {isSelected
-                    ? 'border-cyan-400/60 bg-cyan-500/20 text-cyan-200 shadow-sm shadow-cyan-500/10'
-                    : 'border-slate-600 bg-slate-800/60 text-slate-400 hover:border-slate-500 hover:bg-slate-800 hover:text-slate-300'}"
+                    ? 'border-primary/60 bg-primary/20 text-primary shadow-sm shadow-primary/10'
+                    : 'border-border bg-muted/60 text-muted-foreground hover:border-border hover:bg-muted hover:text-foreground/80'}"
                 on:click={() => toggleMethod(method)}
                 title="{isSelected ? 'Remove' : 'Add'} {method}"
               >
                 {#if isSelected}
-                  <span class="mr-1.5 text-xs text-cyan-400">✓</span>
+                  <span class="mr-1.5 text-xs text-primary">✓</span>
                 {/if}
                 {method}
               </button>
@@ -320,11 +320,11 @@
           </div>
 
           {#if selectedMethods.size === 0}
-            <p class="mt-2 text-xs italic text-slate-500">
+            <p class="mt-2 text-xs italic text-muted-foreground">
               No methods selected — route will match all HTTP methods
             </p>
           {:else}
-            <p class="mt-2 text-xs text-slate-500">
+            <p class="mt-2 text-xs text-muted-foreground">
               Matching {selectedMethods.size} method{selectedMethods.size !== 1 ? 's' : ''}: {Array.from(selectedMethods).join(', ')}
             </p>
           {/if}
@@ -334,8 +334,8 @@
       <!-- Section: Advanced -->
       <section>
         <div class="flex items-center gap-3 px-6 pt-5 pb-3">
-          <div class="h-8 w-1 rounded-full bg-amber-400" ></div>
-          <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
+          <div class="h-8 w-1 rounded-full bg-warning" ></div>
+          <h3 class="text-sm font-semibold uppercase tracking-wider text-foreground">
             Advanced
           </h3>
         </div>
@@ -344,8 +344,8 @@
           <!-- Default Route Toggle -->
           <div class="flex items-center justify-between">
             <div>
-              <span class="text-sm font-medium text-slate-300">Default Route</span>
-              <p class="mt-0.5 text-xs text-slate-500">
+              <span class="text-sm font-medium text-foreground/80">Default Route</span>
+              <p class="mt-0.5 text-xs text-muted-foreground">
                 Handle requests that don't match any other route
               </p>
             </div>
@@ -360,16 +360,16 @@
               />
               <label
                 for="modal-is-default-toggle"
-                class="inline-flex h-6 w-11 cursor-pointer items-center rounded-full border border-slate-600 bg-slate-700 transition-colors peer-checked:border-cyan-500 peer-checked:bg-cyan-500/30"
+                class="inline-flex h-6 w-11 cursor-pointer items-center rounded-full border border-border bg-muted transition-colors peer-checked:border-primary peer-checked:bg-primary/30"
               >
-                <span class="ml-0.5 h-5 w-5 rounded-full border border-slate-500 bg-slate-300 shadow-sm transition-transform peer-checked:translate-x-5 peer-checked:border-cyan-400 peer-checked:bg-cyan-300" ></span>
+                <span class="ml-0.5 h-5 w-5 rounded-full border border-border bg-muted-foreground shadow-sm transition-transform peer-checked:translate-x-5 peer-checked:border-primary peer-checked:bg-primary" ></span>
               </label>
             </div>
           </div>
 
           {#if isDefaultWarning}
-            <div class="mt-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
-              <p class="text-xs text-amber-200">
+            <div class="mt-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2">
+              <p class="text-xs text-warning">
                 <span class="mr-1">⚠</span>
                 {isDefaultWarning}
               </p>
@@ -382,17 +382,17 @@
     <!-- ========================================================================= -->
     <!-- Footer -->
     <!-- ========================================================================= -->
-    <div class="flex items-center justify-end gap-3 border-t border-slate-700/80 bg-slate-900/50 px-6 py-4">
+    <div class="flex items-center justify-end gap-3 border-t border-border/80 bg-card/50 px-6 py-4">
       <button
         type="button"
-        class="rounded-lg border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-700 hover:text-slate-100"
+        class="rounded-lg border border-border bg-muted px-4 py-2 text-sm font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground"
         on:click={handleCancel}
       >
         Cancel
       </button>
       <button
         type="button"
-        class="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+        class="rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
         disabled={!canSave}
         on:click={handleSave}
       >

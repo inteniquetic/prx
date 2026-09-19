@@ -234,9 +234,9 @@
   const tabButtonClass = (tabId: SettingsTab): string => {
     const base = 'px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap';
     if (activeTab === tabId) {
-      return `${base} border-b-2 border-cyan-400 text-cyan-300`;
+      return `${base} border-b-2 border-primary text-primary`;
     }
-    return `${base} text-slate-400 hover:text-slate-200 border-b-2 border-transparent`;
+    return `${base} text-muted-foreground hover:text-foreground border-b-2 border-transparent`;
   };
 </script>
 
@@ -247,10 +247,10 @@
       <div
         class={
           statusTone === 'ok'
-            ? 'rounded-md border border-emerald-400/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200'
+            ? 'rounded-md border border-success/40 bg-success/10 px-3 py-1.5 text-xs font-medium text-success'
             : statusTone === 'error'
-              ? 'rounded-md border border-rose-400/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-200'
-              : 'rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300'
+              ? 'rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive'
+              : 'rounded-md border border-border bg-muted px-3 py-1.5 text-xs font-medium text-foreground/80'
         }
       >
         {statusMessage}
@@ -258,12 +258,12 @@
     {/if}
 
     {#if lastSynced}
-      <span class="text-xs text-slate-500">Synced: {lastSynced}</span>
+      <span class="text-xs text-muted-foreground">Synced: {lastSynced}</span>
     {/if}
 
     <!-- Reload button -->
     <button
-      class="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:bg-slate-700"
+      class="rounded-md border border-border bg-muted px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted"
       on:click={() => dispatch('reload')}
       disabled={isLoading}
     >
@@ -272,7 +272,7 @@
 
     <!-- Save button -->
     <button
-      class="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/20"
+      class="rounded-md border border-success/40 bg-success/10 px-3 py-1.5 text-xs font-semibold text-success transition-colors hover:bg-success/20"
       on:click={() => dispatch('save')}
       disabled={isSaving}
     >
@@ -282,7 +282,7 @@
 
   <div class="p-6">
     <!-- Tab Bar -->
-    <nav class="-mb-px flex gap-0 border-b border-slate-700/80">
+    <nav class="-mb-px flex gap-0 border-b border-border/80">
       {#each tabs as tab}
         <button
           class={tabButtonClass(tab.id)}
@@ -290,7 +290,7 @@
         >
           {tab.label}
           {#if tab.id === 'toml' && !isValid}
-            <span class="ml-1.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-500/20 px-1 text-[10px] font-bold text-rose-300">
+            <span class="ml-1.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-destructive/20 px-1 text-[10px] font-bold text-destructive">
               {validationIssues.length}
             </span>
           {/if}
@@ -306,10 +306,10 @@
       {#if activeTab === 'general'}
         <div class="max-w-2xl space-y-6">
           <!-- Listen Addresses Section -->
-          <section class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-6">
+          <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
             <div class="mb-4">
-              <h3 class="text-sm font-semibold text-slate-200">Listen Addresses</h3>
-              <p class="mt-1 text-xs text-slate-500">
+              <h3 class="text-sm font-semibold text-foreground">Listen Addresses</h3>
+              <p class="mt-1 text-xs text-muted-foreground">
                 Addresses the proxy listens on (e.g. 0.0.0.0:8080, [::]:8080)
               </p>
             </div>
@@ -317,10 +317,10 @@
             <!-- Tags -->
             <div class="mb-3 flex flex-wrap gap-2">
               {#each config.server.listen as addr, index}
-                <span class="inline-flex items-center gap-1.5 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm text-slate-200">
-                  <code class="text-xs text-cyan-300">{addr}</code>
+                <span class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-3 py-1.5 text-sm text-foreground">
+                  <code class="text-xs text-primary">{addr}</code>
                   <button
-                    class="ml-0.5 rounded p-0.5 text-slate-400 transition-colors hover:bg-slate-700 hover:text-slate-200"
+                    class="ml-0.5 rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                     on:click={() => removeListenAddress(index)}
                     title="Remove"
                   >
@@ -336,14 +336,14 @@
             <div class="flex gap-2">
               <input
                 type="text"
-                class="flex-1 rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                class="flex-1 rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50"
                 placeholder="0.0.0.0:9090"
                 value={newListenAddr}
                 on:input={(e) => (newListenAddr = inputValue(e))}
                 on:keydown={(e) => e.key === 'Enter' && addListenAddress()}
               />
               <button
-                class="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-200 transition-colors hover:bg-cyan-500/20"
+                class="rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
                 on:click={addListenAddress}
               >
                 Add
@@ -352,83 +352,83 @@
           </section>
 
           <!-- Health & Readiness Paths Section -->
-          <section class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-6">
+          <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
             <div class="mb-4">
-              <h3 class="text-sm font-semibold text-slate-200">Health Check Endpoints</h3>
-              <p class="mt-1 text-xs text-slate-500">
+              <h3 class="text-sm font-semibold text-foreground">Health Check Endpoints</h3>
+              <p class="mt-1 text-xs text-muted-foreground">
                 Paths for liveness and readiness probes
               </p>
             </div>
 
             <div class="grid gap-4 sm:grid-cols-2">
               <div>
-                <label for="health-path" class="mb-1.5 block text-sm font-medium text-slate-300">
+                <label for="health-path" class="mb-1.5 block text-sm font-medium text-foreground/80">
                   Health Check Path
                 </label>
                 <input
                   id="health-path"
                   type="text"
-                  class="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                  class="w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50"
                   value={config.server.health_path}
                   on:input={(e) => updateServerField('health_path', inputValue(e))}
                 />
-                <p class="mt-1 text-xs text-slate-500">Path for liveness probe</p>
+                <p class="mt-1 text-xs text-muted-foreground">Path for liveness probe</p>
               </div>
 
               <div>
-                <label for="ready-path" class="mb-1.5 block text-sm font-medium text-slate-300">
+                <label for="ready-path" class="mb-1.5 block text-sm font-medium text-foreground/80">
                   Readiness Path
                 </label>
                 <input
                   id="ready-path"
                   type="text"
-                  class="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                  class="w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50"
                   value={config.server.ready_path}
                   on:input={(e) => updateServerField('ready_path', inputValue(e))}
                 />
-                <p class="mt-1 text-xs text-slate-500">Path for readiness probe</p>
+                <p class="mt-1 text-xs text-muted-foreground">Path for readiness probe</p>
               </div>
             </div>
           </section>
 
           <!-- Worker Threads -->
-          <section class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-6">
+          <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
             <div class="mb-4">
-              <h3 class="text-sm font-semibold text-slate-200">Worker Threads</h3>
-              <p class="mt-1 text-xs text-slate-500">
+              <h3 class="text-sm font-semibold text-foreground">Worker Threads</h3>
+              <p class="mt-1 text-xs text-muted-foreground">
                 Number of worker threads for the proxy server
               </p>
             </div>
 
             <div class="max-w-xs">
-              <label for="threads" class="mb-1.5 block text-sm font-medium text-slate-300">
+              <label for="threads" class="mb-1.5 block text-sm font-medium text-foreground/80">
                 Threads
               </label>
               <input
                 id="threads"
                 type="number"
                 min="1"
-                class="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                class="w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50"
                 placeholder="Auto (default)"
                 value={config.server.threads ?? ''}
                 on:input={(e) => updateServerNullableNumber('threads', inputValue(e))}
               />
-              <p class="mt-1 text-xs text-slate-500">Leave empty for default (based on CPU cores)</p>
+              <p class="mt-1 text-xs text-muted-foreground">Leave empty for default (based on CPU cores)</p>
             </div>
           </section>
 
           <!-- Timeouts Section -->
-          <section class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-6">
+          <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
             <div class="mb-4">
-              <h3 class="text-sm font-semibold text-slate-200">Graceful Shutdown & Reload</h3>
-              <p class="mt-1 text-xs text-slate-500">
+              <h3 class="text-sm font-semibold text-foreground">Graceful Shutdown & Reload</h3>
+              <p class="mt-1 text-xs text-muted-foreground">
                 Configure how the proxy handles shutdown and configuration reloads
               </p>
             </div>
 
             <div class="grid gap-4 sm:grid-cols-2">
               <div>
-                <label for="grace-period" class="mb-1.5 block text-sm font-medium text-slate-300">
+                <label for="grace-period" class="mb-1.5 block text-sm font-medium text-foreground/80">
                   Grace Period
                 </label>
                 <div class="relative">
@@ -436,18 +436,18 @@
                     id="grace-period"
                     type="number"
                     min="0"
-                    class="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 pr-12 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                    class="w-full rounded-lg border border-border bg-muted px-3 py-2 pr-12 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50"
                     placeholder="Default"
                     value={config.server.grace_period_seconds ?? ''}
                     on:input={(e) => updateServerNullableNumber('grace_period_seconds', inputValue(e))}
                   />
-                  <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">sec</span>
+                  <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">sec</span>
                 </div>
-                <p class="mt-1 text-xs text-slate-500">Seconds to wait during graceful reload</p>
+                <p class="mt-1 text-xs text-muted-foreground">Seconds to wait during graceful reload</p>
               </div>
 
               <div>
-                <label for="shutdown-timeout" class="mb-1.5 block text-sm font-medium text-slate-300">
+                <label for="shutdown-timeout" class="mb-1.5 block text-sm font-medium text-foreground/80">
                   Shutdown Timeout
                 </label>
                 <div class="relative">
@@ -455,18 +455,18 @@
                     id="shutdown-timeout"
                     type="number"
                     min="0"
-                    class="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 pr-12 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                    class="w-full rounded-lg border border-border bg-muted px-3 py-2 pr-12 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50"
                     placeholder="Default"
                     value={config.server.graceful_shutdown_timeout_seconds ?? ''}
                     on:input={(e) => updateServerNullableNumber('graceful_shutdown_timeout_seconds', inputValue(e))}
                   />
-                  <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">sec</span>
+                  <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">sec</span>
                 </div>
-                <p class="mt-1 text-xs text-slate-500">Maximum time to wait for in-flight requests</p>
+                <p class="mt-1 text-xs text-muted-foreground">Maximum time to wait for in-flight requests</p>
               </div>
 
               <div class="sm:col-span-2">
-                <label for="reload-debounce" class="mb-1.5 block text-sm font-medium text-slate-300">
+                <label for="reload-debounce" class="mb-1.5 block text-sm font-medium text-foreground/80">
                   Config Reload Debounce
                 </label>
                 <div class="relative max-w-xs">
@@ -474,13 +474,13 @@
                     id="reload-debounce"
                     type="number"
                     min="0"
-                    class="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 pr-16 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                    class="w-full rounded-lg border border-border bg-muted px-3 py-2 pr-16 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50"
                     value={config.server.config_reload_debounce_ms}
                     on:input={(e) => updateConfigReloadDebounce(inputValue(e))}
                   />
-                  <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">ms</span>
+                  <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">ms</span>
                 </div>
-                <p class="mt-1 text-xs text-slate-500">Milliseconds to debounce config file changes</p>
+                <p class="mt-1 text-xs text-muted-foreground">Milliseconds to debounce config file changes</p>
               </div>
             </div>
           </section>
@@ -488,7 +488,7 @@
           <!-- Save button for section -->
           <div class="flex justify-end">
             <button
-              class="rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/20"
+              class="rounded-lg border border-success/40 bg-success/10 px-4 py-2 text-sm font-semibold text-success transition-colors hover:bg-success/20"
               on:click={() => dispatch('save')}
               disabled={isSaving}
             >
@@ -504,11 +504,11 @@
       {#if activeTab === 'tls'}
         <div class="max-w-2xl space-y-6">
           <!-- Enable TLS Section -->
-          <section class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-6">
+          <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
             <div class="flex items-center justify-between">
               <div>
-                <h3 class="text-sm font-semibold text-slate-200">Enable TLS</h3>
-                <p class="mt-1 text-xs text-slate-500">
+                <h3 class="text-sm font-semibold text-foreground">Enable TLS</h3>
+                <p class="mt-1 text-xs text-muted-foreground">
                   Enable HTTPS/TLS support for the proxy server
                 </p>
               </div>
@@ -519,7 +519,7 @@
                   checked={tlsEnabled}
                   on:change={(e) => toggleTls(e.currentTarget.checked)}
                 />
-                <div class="h-6 w-11 rounded-full bg-slate-700 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-slate-400 after:transition-all peer-checked:bg-cyan-600 peer-checked:after:translate-x-full peer-checked:after:bg-white"></div>
+                <div class="h-6 w-11 rounded-full bg-muted after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-muted-foreground after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full peer-checked:after:bg-white"></div>
               </label>
             </div>
           </section>
@@ -527,14 +527,14 @@
           {#if tlsEnabled && config.server.tls}
             <!-- Warning if paths are missing -->
             {#if tlsMissingPaths}
-              <div class="rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-3">
+              <div class="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3">
                 <div class="flex items-start gap-3">
-                  <svg class="mt-0.5 h-5 w-5 shrink-0 text-amber-400" viewBox="0 0 20 20" fill="currentColor">
+                  <svg class="mt-0.5 h-5 w-5 shrink-0 text-warning" viewBox="0 0 20 20" fill="currentColor">
                     <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
                   </svg>
                   <div>
-                    <p class="text-sm font-medium text-amber-200">TLS is enabled but certificate paths are missing</p>
-                    <p class="mt-1 text-xs text-amber-300/70">
+                    <p class="text-sm font-medium text-warning">TLS is enabled but certificate paths are missing</p>
+                    <p class="mt-1 text-xs text-warning/70">
                       Please provide both the certificate and key file paths for TLS to work properly.
                     </p>
                   </div>
@@ -543,64 +543,64 @@
             {/if}
 
             <!-- TLS Configuration -->
-            <section class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-6">
+            <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
               <div class="mb-4">
-                <h3 class="text-sm font-semibold text-slate-200">TLS Configuration</h3>
-                <p class="mt-1 text-xs text-slate-500">
+                <h3 class="text-sm font-semibold text-foreground">TLS Configuration</h3>
+                <p class="mt-1 text-xs text-muted-foreground">
                   Configure TLS listen address, certificates, and protocol options
                 </p>
               </div>
 
               <div class="space-y-4">
                 <div>
-                  <label for="tls-listen" class="mb-1.5 block text-sm font-medium text-slate-300">
+                  <label for="tls-listen" class="mb-1.5 block text-sm font-medium text-foreground/80">
                     Listen Address
                   </label>
                   <input
                     id="tls-listen"
                     type="text"
-                    class="w-full max-w-xs rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                    class="w-full max-w-xs rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50"
                     placeholder="0.0.0.0:8443"
                     value={config.server.tls.listen}
                     on:input={(e) => updateTlsField('listen', inputValue(e))}
                   />
-                  <p class="mt-1 text-xs text-slate-500">Address for TLS connections</p>
+                  <p class="mt-1 text-xs text-muted-foreground">Address for TLS connections</p>
                 </div>
 
                 <div>
-                  <label for="tls-cert" class="mb-1.5 block text-sm font-medium text-slate-300">
+                  <label for="tls-cert" class="mb-1.5 block text-sm font-medium text-foreground/80">
                     Certificate Path
                   </label>
                   <input
                     id="tls-cert"
                     type="text"
-                    class="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                    class="w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50"
                     placeholder="/etc/ssl/certs/server.crt"
                     value={config.server.tls.cert_path}
                     on:input={(e) => updateTlsField('cert_path', inputValue(e))}
                   />
-                  <p class="mt-1 text-xs text-slate-500">Path to the TLS certificate file (PEM format)</p>
+                  <p class="mt-1 text-xs text-muted-foreground">Path to the TLS certificate file (PEM format)</p>
                 </div>
 
                 <div>
-                  <label for="tls-key" class="mb-1.5 block text-sm font-medium text-slate-300">
+                  <label for="tls-key" class="mb-1.5 block text-sm font-medium text-foreground/80">
                     Private Key Path
                   </label>
                   <input
                     id="tls-key"
                     type="text"
-                    class="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                    class="w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50"
                     placeholder="/etc/ssl/private/server.key"
                     value={config.server.tls.key_path}
                     on:input={(e) => updateTlsField('key_path', inputValue(e))}
                   />
-                  <p class="mt-1 text-xs text-slate-500">Path to the TLS private key file (PEM format)</p>
+                  <p class="mt-1 text-xs text-muted-foreground">Path to the TLS private key file (PEM format)</p>
                 </div>
 
-                <div class="flex items-center justify-between rounded-lg border border-slate-700/60 bg-slate-800/50 px-4 py-3">
+                <div class="flex items-center justify-between rounded-lg border border-border/60 bg-muted/50 px-4 py-3">
                   <div>
-                    <p class="text-sm font-medium text-slate-300">HTTP/2 Support</p>
-                    <p class="mt-0.5 text-xs text-slate-500">Enable HTTP/2 protocol (h2) over TLS</p>
+                    <p class="text-sm font-medium text-foreground/80">HTTP/2 Support</p>
+                    <p class="mt-0.5 text-xs text-muted-foreground">Enable HTTP/2 protocol (h2) over TLS</p>
                   </div>
                   <label class="relative inline-flex cursor-pointer items-center">
                     <input
@@ -609,7 +609,7 @@
                       checked={config.server.tls.enable_h2}
                       on:change={(e) => toggleTlsH2(e.currentTarget.checked)}
                     />
-                    <div class="h-6 w-11 rounded-full bg-slate-700 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-slate-400 after:transition-all peer-checked:bg-cyan-600 peer-checked:after:translate-x-full peer-checked:after:bg-white"></div>
+                    <div class="h-6 w-11 rounded-full bg-muted after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-muted-foreground after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full peer-checked:after:bg-white"></div>
                   </label>
                 </div>
               </div>
@@ -619,7 +619,7 @@
           <!-- Save button for section -->
           <div class="flex justify-end">
             <button
-              class="rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/20"
+              class="rounded-lg border border-success/40 bg-success/10 px-4 py-2 text-sm font-semibold text-success transition-colors hover:bg-success/20"
               on:click={() => dispatch('save')}
               disabled={isSaving}
             >
@@ -635,23 +635,23 @@
       {#if activeTab === 'observability'}
         <div class="max-w-2xl space-y-6">
           <!-- Log Level Section -->
-          <section class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-6">
+          <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
             <div class="mb-4">
-              <h3 class="text-sm font-semibold text-slate-200">Log Level</h3>
-              <p class="mt-1 text-xs text-slate-500">
+              <h3 class="text-sm font-semibold text-foreground">Log Level</h3>
+              <p class="mt-1 text-xs text-muted-foreground">
                 Control the verbosity of proxy logs
               </p>
             </div>
 
             <!-- Segmented Control -->
-            <div class="inline-flex rounded-lg border border-slate-600 bg-slate-800 p-1">
+            <div class="inline-flex rounded-lg border border-border bg-muted p-1">
               {#each logLevels as level}
                 <button
                   class="rounded-md px-3 py-1.5 text-xs font-medium transition-all"
-                  class:bg-cyan-600={config.observability.log_level === level}
+                  class:bg-primary={config.observability.log_level === level}
                   class:text-white={config.observability.log_level === level}
-                  class:text-slate-400={config.observability.log_level !== level}
-                  class:hover:text-slate-200={config.observability.log_level !== level}
+                  class:text-muted-foreground={config.observability.log_level !== level}
+                  class:hover:text-foreground={config.observability.log_level !== level}
                   class:shadow-sm={config.observability.log_level === level}
                   on:click={() => setLogLevel(level)}
                 >
@@ -660,18 +660,18 @@
               {/each}
             </div>
 
-            <p class="mt-3 text-xs text-slate-500">
-              Current: <code class="rounded bg-slate-800 px-1.5 py-0.5 text-cyan-300">{config.observability.log_level}</code>
+            <p class="mt-3 text-xs text-muted-foreground">
+              Current: <code class="rounded bg-muted px-1.5 py-0.5 text-primary">{config.observability.log_level}</code>
               — trace is most verbose, error is least verbose
             </p>
           </section>
 
           <!-- Access Log Section -->
-          <section class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-6">
+          <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
             <div class="flex items-center justify-between">
               <div>
-                <h3 class="text-sm font-semibold text-slate-200">Access Log</h3>
-                <p class="mt-1 text-xs text-slate-500">
+                <h3 class="text-sm font-semibold text-foreground">Access Log</h3>
+                <p class="mt-1 text-xs text-muted-foreground">
                   Log all incoming requests to stdout
                 </p>
               </div>
@@ -682,48 +682,48 @@
                   checked={config.observability.access_log}
                   on:change={(e) => toggleAccessLog(e.currentTarget.checked)}
                 />
-                <div class="h-6 w-11 rounded-full bg-slate-700 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-slate-400 after:transition-all peer-checked:bg-cyan-600 peer-checked:after:translate-x-full peer-checked:after:bg-white"></div>
+                <div class="h-6 w-11 rounded-full bg-muted after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-muted-foreground after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full peer-checked:after:bg-white"></div>
               </label>
             </div>
           </section>
 
           <!-- Prometheus Section -->
-          <section class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-6">
+          <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
             <div class="mb-4">
-              <h3 class="text-sm font-semibold text-slate-200">Prometheus Metrics</h3>
-              <p class="mt-1 text-xs text-slate-500">
+              <h3 class="text-sm font-semibold text-foreground">Prometheus Metrics</h3>
+              <p class="mt-1 text-xs text-muted-foreground">
                 Expose a /metrics endpoint for Prometheus scraping
               </p>
             </div>
 
             <div class="max-w-xs">
-              <label for="prometheus-listen" class="mb-1.5 block text-sm font-medium text-slate-300">
+              <label for="prometheus-listen" class="mb-1.5 block text-sm font-medium text-foreground/80">
                 Listen Address
               </label>
               <input
                 id="prometheus-listen"
                 type="text"
-                class="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                class="w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50"
                 placeholder="0.0.0.0:9090"
                 value={config.observability.prometheus_listen}
                 on:input={(e) => updatePrometheusListen(inputValue(e))}
               />
-              <p class="mt-1 text-xs text-slate-500">
+              <p class="mt-1 text-xs text-muted-foreground">
                 Address for /metrics endpoint. Leave empty to disable.
               </p>
             </div>
 
             {#if config.observability.prometheus_listen}
-              <div class="mt-3 inline-flex items-center gap-2 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2">
-                <span class="h-2 w-2 rounded-full bg-emerald-400" ></span>
-                <span class="text-xs font-medium text-emerald-200">
+              <div class="mt-3 inline-flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-2">
+                <span class="h-2 w-2 rounded-full bg-success" ></span>
+                <span class="text-xs font-medium text-success">
                   Metrics enabled at http://{config.observability.prometheus_listen}/metrics
                 </span>
               </div>
             {:else}
-              <div class="mt-3 inline-flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-800 px-3 py-2">
-                <span class="h-2 w-2 rounded-full bg-slate-500" ></span>
-                <span class="text-xs font-medium text-slate-400">Metrics disabled</span>
+              <div class="mt-3 inline-flex items-center gap-2 rounded-lg border border-border bg-muted px-3 py-2">
+                <span class="h-2 w-2 rounded-full bg-muted-foreground/60" ></span>
+                <span class="text-xs font-medium text-muted-foreground">Metrics disabled</span>
               </div>
             {/if}
           </section>
@@ -731,7 +731,7 @@
           <!-- Save button for section -->
           <div class="flex justify-end">
             <button
-              class="rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/20"
+              class="rounded-lg border border-success/40 bg-success/10 px-4 py-2 text-sm font-semibold text-success transition-colors hover:bg-success/20"
               on:click={() => dispatch('save')}
               disabled={isSaving}
             >
@@ -750,21 +750,21 @@
           <div
             class={
               isValid
-                ? 'flex items-center justify-between rounded-xl border border-emerald-400/40 bg-emerald-500/10 px-4 py-3'
-                : 'flex items-center justify-between rounded-xl border border-rose-400/40 bg-rose-500/10 px-4 py-3'
+                ? 'flex items-center justify-between rounded-xl border border-success/40 bg-success/10 px-4 py-3'
+                : 'flex items-center justify-between rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3'
             }
           >
             <div class="flex items-center gap-3">
               {#if isValid}
-                <svg class="h-5 w-5 text-emerald-400" viewBox="0 0 20 20" fill="currentColor">
+                <svg class="h-5 w-5 text-success" viewBox="0 0 20 20" fill="currentColor">
                   <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
                 </svg>
-                <span class="text-sm font-semibold text-emerald-200">VALIDATION: PASS</span>
+                <span class="text-sm font-semibold text-success">VALIDATION: PASS</span>
               {:else}
-                <svg class="h-5 w-5 text-rose-400" viewBox="0 0 20 20" fill="currentColor">
+                <svg class="h-5 w-5 text-destructive" viewBox="0 0 20 20" fill="currentColor">
                   <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
                 </svg>
-                <span class="text-sm font-semibold text-rose-200">
+                <span class="text-sm font-semibold text-destructive">
                   VALIDATION: FAIL ({validationIssues.length} issue{validationIssues.length !== 1 ? 's' : ''})
                 </span>
               {/if}
@@ -773,23 +773,23 @@
 
           <!-- First validation issue (if any) -->
           {#if !isValid && validationIssues.length > 0}
-            <div class="rounded-xl border border-rose-300/30 bg-rose-500/10 px-4 py-3">
-              <p class="text-sm font-medium text-rose-200">First Issue:</p>
-              <p class="mt-1 text-xs text-rose-300/80">{validationIssues[0]}</p>
+            <div class="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3">
+              <p class="text-sm font-medium text-destructive">First Issue:</p>
+              <p class="mt-1 text-xs text-destructive/80">{validationIssues[0]}</p>
             </div>
           {/if}
 
           <!-- TOML Preview -->
-          <section class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-6">
+          <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
             <div class="mb-4 flex items-center justify-between">
               <div>
-                <h3 class="text-sm font-semibold text-slate-200">Raw TOML Configuration</h3>
-                <p class="mt-1 text-xs text-slate-500">
+                <h3 class="text-sm font-semibold text-foreground">Raw TOML Configuration</h3>
+                <p class="mt-1 text-xs text-muted-foreground">
                   This is the generated TOML config that will be saved
                 </p>
               </div>
               <button
-                class="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
                 on:click={copyToml}
               >
                 {#if copiedToml}
@@ -807,21 +807,21 @@
               </button>
             </div>
 
-            <pre class="max-h-[60vh] overflow-auto rounded-xl border border-slate-700 bg-slate-950/70 p-4 text-xs leading-6 text-slate-300 md:text-sm">{tomlPreview}</pre>
+            <pre class="max-h-[60vh] overflow-auto rounded-xl border border-border bg-background/70 p-4 text-xs leading-6 text-foreground/80 md:text-sm">{tomlPreview}</pre>
           </section>
 
           <!-- Import / Export Actions -->
-          <section class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-6">
+          <section class="rounded-2xl border border-border/80 bg-card/80 p-6">
             <div class="mb-4">
-              <h3 class="text-sm font-semibold text-slate-200">Import / Export</h3>
-              <p class="mt-1 text-xs text-slate-500">
+              <h3 class="text-sm font-semibold text-foreground">Import / Export</h3>
+              <p class="mt-1 text-xs text-muted-foreground">
                 Import or export the configuration as JSON
               </p>
             </div>
 
             <div class="flex gap-3">
               <button
-                class="inline-flex items-center gap-2 rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20"
+                class="inline-flex items-center gap-2 rounded-lg border border-success/40 bg-success/10 px-4 py-2 text-sm font-medium text-success transition-colors hover:bg-success/20"
                 on:click={() => dispatch('exportJson')}
               >
                 <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -831,7 +831,7 @@
               </button>
 
               <button
-                class="inline-flex items-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-200 transition-colors hover:bg-cyan-500/20"
+                class="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
                 on:click={triggerImport}
               >
                 <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">

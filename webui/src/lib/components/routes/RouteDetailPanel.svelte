@@ -133,7 +133,7 @@
 <div class="space-y-6">
   <!-- Back Button -->
   <button
-    class="inline-flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-slate-100"
+    class="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground"
     on:click={() => dispatch('close')}
   >
     <span class="text-base">←</span>
@@ -143,13 +143,13 @@
   <!-- Route Header -->
   <div class="flex items-center justify-between">
     <div>
-      <h2 class="text-xl font-bold text-slate-100">
+      <h2 class="text-xl font-bold text-foreground">
         {editRoute.name || 'Unnamed Route'}
       </h2>
-      <p class="mt-1 text-sm text-slate-400">
+      <p class="mt-1 text-sm text-muted-foreground">
         Route #{routeIndex + 1} · {isViewMode ? 'View Mode' : 'Edit Mode'}
         {#if editRoute.is_default}
-          <span class="ml-2 rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-200">
+          <span class="ml-2 rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-xs font-semibold text-success">
             Default
           </span>
         {/if}
@@ -160,7 +160,7 @@
     {#if !isViewMode}
       <div class="flex items-center gap-2">
         <button
-          class="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+          class="rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
           disabled={saving}
           on:click={handleSave}
         >
@@ -171,7 +171,7 @@
           {/if}
         </button>
         <button
-          class="rounded-lg border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+          class="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/20 disabled:cursor-not-allowed disabled:opacity-60"
           disabled={saving}
           on:click={handleDelete}
         >
@@ -183,7 +183,7 @@
         </button>
         {#if showDeleteConfirm}
           <button
-            class="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+            class="rounded-lg border border-border bg-muted px-3 py-2 text-sm font-medium text-foreground/80 transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
             disabled={saving}
             on:click={handleCancelDelete}
           >
@@ -196,7 +196,7 @@
 
   <!-- Error Banner -->
   {#if errorMessage}
-    <div class="rounded-lg border border-rose-400/40 bg-rose-500/10 px-4 py-3 text-sm font-medium text-rose-200">
+    <div class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive">
       <span class="mr-2">⚠</span>
       {errorMessage}
     </div>
@@ -205,10 +205,10 @@
   <!-- ========================================================================= -->
   <!-- Section: Route Configuration -->
   <!-- ========================================================================= -->
-  <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
-    <div class="flex items-center gap-3 border-b border-slate-700/80 px-5 py-4">
-      <div class="h-8 w-1 rounded-full bg-cyan-400" ></div>
-      <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
+  <section class="rounded-xl border border-border/80 bg-card/80 backdrop-blur">
+    <div class="flex items-center gap-3 border-b border-border/80 px-5 py-4">
+      <div class="h-8 w-1 rounded-full bg-primary" ></div>
+      <h3 class="text-sm font-semibold uppercase tracking-wider text-foreground">
         Route Configuration
       </h3>
     </div>
@@ -216,10 +216,10 @@
     <div class="grid gap-5 p-5 md:grid-cols-2">
       <!-- Name -->
       <label class="space-y-1.5">
-        <span class="text-sm font-medium text-slate-300">Name</span>
+        <span class="text-sm font-medium text-foreground/80">Name</span>
         <input
           type="text"
-          class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 disabled:cursor-not-allowed disabled:bg-slate-800/50 disabled:text-slate-500"
+          class="w-full rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
           disabled={isViewMode || saving}
           value={editRoute.name}
           placeholder="e.g., api-gateway"
@@ -229,15 +229,15 @@
 
       <!-- Service -->
       <div class="space-y-1.5">
-        <span class="text-sm font-medium text-slate-300">Service</span>
+        <span class="text-sm font-medium text-foreground/80">Service</span>
         {#if isViewMode}
-          <div class="flex h-[42px] items-center gap-2 rounded-lg border border-slate-600 bg-slate-800/50 px-3">
+          <div class="flex h-[42px] items-center gap-2 rounded-lg border border-border bg-muted/50 px-3">
             {#if serviceExists(editRoute.service)}
-              <span class="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-2 py-0.5 text-xs font-semibold text-cyan-200">
+              <span class="rounded-lg border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
                 {editRoute.service}
               </span>
             {:else}
-              <span class="text-sm text-rose-300">
+              <span class="text-sm text-destructive">
                 {editRoute.service || '(none)'} — not found
               </span>
             {/if}
@@ -245,7 +245,7 @@
         {:else}
           <label class="block">
             <select
-              class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+              class="w-full rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm text-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
               disabled={saving}
               value={editRoute.service}
               on:change={(e) => updateField('service', selectValue(e))}
@@ -257,17 +257,17 @@
             </select>
           </label>
           {#if editRoute.service && !serviceExists(editRoute.service)}
-            <p class="text-xs text-rose-400">Warning: Service "{editRoute.service}" not found</p>
+            <p class="text-xs text-destructive">Warning: Service "{editRoute.service}" not found</p>
           {/if}
         {/if}
       </div>
 
       <!-- Host -->
       <label class="space-y-1.5">
-        <span class="text-sm font-medium text-slate-300">Host <span class="text-slate-500">(optional)</span></span>
+        <span class="text-sm font-medium text-foreground/80">Host <span class="text-muted-foreground">(optional)</span></span>
         <input
           type="text"
-          class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 disabled:cursor-not-allowed disabled:bg-slate-800/50 disabled:text-slate-500"
+          class="w-full rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
           disabled={isViewMode || saving}
           value={editRoute.host}
           placeholder="e.g., api.example.com"
@@ -277,10 +277,10 @@
 
       <!-- Path Prefix -->
       <label class="space-y-1.5">
-        <span class="text-sm font-medium text-slate-300">Path Prefix</span>
+        <span class="text-sm font-medium text-foreground/80">Path Prefix</span>
         <input
           type="text"
-          class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm font-mono text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 disabled:cursor-not-allowed disabled:bg-slate-800/50 disabled:text-slate-500"
+          class="w-full rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm font-mono text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground"
           disabled={isViewMode || saving}
           value={editRoute.path_prefix}
           placeholder="/"
@@ -290,11 +290,11 @@
     </div>
 
     <!-- Methods -->
-    <div class="border-t border-slate-700/80 px-5 py-4">
+    <div class="border-t border-border/80 px-5 py-4">
       <label class="space-y-3">
         <div>
-          <span class="text-sm font-medium text-slate-300">Methods</span>
-          <p class="mt-0.5 text-xs text-slate-500">
+          <span class="text-sm font-medium text-foreground/80">Methods</span>
+          <p class="mt-0.5 text-xs text-muted-foreground">
             HTTP methods this route matches. Leave empty to match all methods.
           </p>
         </div>
@@ -302,12 +302,12 @@
         <!-- Method Tags -->
         <div class="flex flex-wrap items-center gap-2">
           {#each editRoute.methods as method, idx}
-            <span class="inline-flex items-center gap-1.5 rounded-lg border border-slate-600 bg-slate-800 px-2.5 py-1 text-sm">
-              <span class="font-medium text-cyan-300">{method}</span>
+            <span class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-2.5 py-1 text-sm">
+              <span class="font-medium text-primary">{method}</span>
               {#if !isViewMode && !saving}
                 <button
                   type="button"
-                  class="ml-0.5 text-slate-400 transition-colors hover:text-rose-400"
+                  class="ml-0.5 text-muted-foreground transition-colors hover:text-destructive"
                   on:click={() => removeMethod(idx)}
                   title="Remove {method}"
                 >
@@ -320,7 +320,7 @@
           {#if !isViewMode && !saving}
             <input
               type="text"
-              class="w-28 rounded-lg border border-slate-600 bg-slate-950/70 px-2.5 py-1 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
+              class="w-28 rounded-lg border border-border bg-background/70 px-2.5 py-1 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
               placeholder="e.g. GET"
               value={newMethod}
               on:input={(e) => (newMethod = inputValue(e))}
@@ -330,12 +330,12 @@
           {/if}
 
           {#if editRoute.methods.length === 0}
-            <span class="text-xs text-slate-500 italic">No methods specified = all methods allowed</span>
+            <span class="text-xs text-muted-foreground italic">No methods specified = all methods allowed</span>
           {/if}
         </div>
 
         {#if !isViewMode}
-          <p class="text-xs text-slate-600">
+          <p class="text-xs text-muted-foreground/70">
             Valid methods: {VALID_METHODS.join(', ')}
           </p>
         {/if}
@@ -343,11 +343,11 @@
     </div>
 
     <!-- Default Route Toggle -->
-    <div class="border-t border-slate-700/80 px-5 py-4">
+    <div class="border-t border-border/80 px-5 py-4">
       <label class="flex items-center justify-between">
         <div>
-          <span class="text-sm font-medium text-slate-300">Default Route</span>
-          <p class="mt-0.5 text-xs text-slate-500">This route will handle requests that don't match any other route</p>
+          <span class="text-sm font-medium text-foreground/80">Default Route</span>
+          <p class="mt-0.5 text-xs text-muted-foreground">This route will handle requests that don't match any other route</p>
         </div>
         <!-- Toggle Switch -->
         <div class="relative">
@@ -361,9 +361,9 @@
           />
           <label
             for="is-default-toggle"
-            class="inline-flex h-6 w-11 cursor-pointer items-center rounded-full border border-slate-600 bg-slate-700 transition-colors peer-checked:border-cyan-500 peer-checked:bg-cyan-500/30 peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
+            class="inline-flex h-6 w-11 cursor-pointer items-center rounded-full border border-border bg-muted transition-colors peer-checked:border-primary peer-checked:bg-primary/30 peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
           >
-            <span class="ml-0.5 h-5 w-5 rounded-full border border-slate-500 bg-slate-300 shadow-sm transition-transform peer-checked:translate-x-5 peer-checked:border-cyan-400 peer-checked:bg-cyan-300" ></span>
+            <span class="ml-0.5 h-5 w-5 rounded-full border border-border bg-muted-foreground shadow-sm transition-transform peer-checked:translate-x-5 peer-checked:border-primary peer-checked:bg-primary" ></span>
           </label>
         </div>
       </label>
@@ -373,25 +373,25 @@
   <!-- ========================================================================= -->
   <!-- Info: Service Reference -->
   <!-- ========================================================================= -->
-  <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
-    <div class="flex items-center gap-3 border-b border-slate-700/80 px-5 py-4">
-      <div class="h-8 w-1 rounded-full bg-violet-400" ></div>
-      <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
+  <section class="rounded-xl border border-border/80 bg-card/80 backdrop-blur">
+    <div class="flex items-center gap-3 border-b border-border/80 px-5 py-4">
+      <div class="h-8 w-1 rounded-full bg-primary" ></div>
+      <h3 class="text-sm font-semibold uppercase tracking-wider text-foreground">
         About Routes
       </h3>
     </div>
-    <div class="space-y-3 p-5 text-sm text-slate-400">
+    <div class="space-y-3 p-5 text-sm text-muted-foreground">
       <p>
-        Routes define <span class="font-medium text-slate-300">matching rules</span> for incoming requests
+        Routes define <span class="font-medium text-foreground/80">matching rules</span> for incoming requests
         based on host, path prefix, and HTTP methods.
       </p>
       <p>
-        Each route points to a <span class="font-medium text-slate-300">service</span> which contains
+        Each route points to a <span class="font-medium text-foreground/80">service</span> which contains
         the load balancing strategy, circuit breaker settings, and upstream servers.
       </p>
       <p>
         When a request matches a route, it is forwarded to the associated service for processing.
-        Configure services on the <span class="font-medium text-cyan-300">Services</span> page.
+        Configure services on the <span class="font-medium text-primary">Services</span> page.
       </p>
     </div>
   </section>

@@ -49,39 +49,39 @@
   };
 </script>
 
-<article class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-4 backdrop-blur">
+<article class="rounded-2xl border border-border/80 bg-card/80 p-4 backdrop-blur">
   <div class="mb-3 flex items-center justify-between gap-2">
-    <h2 class="text-base font-bold text-slate-100">Observability</h2>
+    <h2 class="text-base font-bold text-foreground">Observability</h2>
     {#if isEditing}
       <div class="flex gap-2">
-        <button class="rounded-md border border-slate-600 bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800" on:click={cancelEdit}>
+        <button class="rounded-md border border-border bg-card px-3 py-1 text-xs font-semibold text-foreground hover:bg-muted" on:click={cancelEdit}>
           Cancel
         </button>
-        <button class="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20" on:click={saveEdit}>
+        <button class="rounded-md border border-success/40 bg-success/10 px-3 py-1 text-xs font-semibold text-success hover:bg-success/20" on:click={saveEdit}>
           Save
         </button>
       </div>
     {:else}
-      <button class="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-3 py-1 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20" on:click={startEdit}>
+      <button class="rounded-md border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary hover:bg-primary/20" on:click={startEdit}>
         Edit
       </button>
     {/if}
   </div>
-  <div class="overflow-hidden rounded-xl border border-slate-700 bg-slate-950/70">
-    <table class="min-w-full divide-y divide-slate-800 text-sm">
-      <thead class="bg-slate-900 text-slate-300">
+  <div class="overflow-hidden rounded-xl border border-border bg-background/70">
+    <table class="min-w-full divide-y divide-border text-sm">
+      <thead class="bg-card text-foreground/80">
         <tr>
           <th class="w-40 px-4 py-3 text-left font-semibold">Key</th>
           <th class="px-4 py-3 text-left font-semibold">Value</th>
         </tr>
       </thead>
-      <tbody class="divide-y divide-slate-800">
+      <tbody class="divide-y divide-border">
         <tr>
-          <td class="px-4 py-3 font-medium text-slate-200">log_level</td>
+          <td class="px-4 py-3 font-medium text-foreground">log_level</td>
           <td class="px-4 py-3">
             {#if isEditing}
               <select
-                class="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100"
+                class="w-full rounded-lg border border-border bg-card px-3 py-2 text-foreground"
                 value={draftLogLevel}
                 on:change={(e) => (draftLogLevel = selectValue(e))}
               >
@@ -90,29 +90,29 @@
                 {/each}
               </select>
             {:else}
-              <span class="text-slate-300">{observability.log_level}</span>
+              <span class="text-foreground/80">{observability.log_level}</span>
             {/if}
           </td>
         </tr>
         <tr>
-          <td class="px-4 py-3 font-medium text-slate-200">prometheus_listen</td>
+          <td class="px-4 py-3 font-medium text-foreground">prometheus_listen</td>
           <td class="px-4 py-3">
             {#if isEditing}
               <input
-                class="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100 placeholder:text-slate-500"
+                class="w-full rounded-lg border border-border bg-card px-3 py-2 text-foreground placeholder:text-muted-foreground"
                 value={draftPrometheusListen}
                 on:input={(e) => (draftPrometheusListen = inputValue(e))}
               />
             {:else}
-              <span class="text-slate-300">{observability.prometheus_listen || '-'}</span>
+              <span class="text-foreground/80">{observability.prometheus_listen || '-'}</span>
             {/if}
           </td>
         </tr>
         <tr>
-          <td class="px-4 py-3 font-medium text-slate-200">access_log</td>
+          <td class="px-4 py-3 font-medium text-foreground">access_log</td>
           <td class="px-4 py-3">
             {#if isEditing}
-              <label class="flex items-center gap-2 text-sm text-slate-300">
+              <label class="flex items-center gap-2 text-sm text-foreground/80">
                 <input
                   type="checkbox"
                   checked={draftAccessLog}
@@ -121,7 +121,7 @@
                 Enabled
               </label>
             {:else}
-              <span class="text-slate-300">{observability.access_log ? 'true' : 'false'}</span>
+              <span class="text-foreground/80">{observability.access_log ? 'true' : 'false'}</span>
             {/if}
           </td>
         </tr>

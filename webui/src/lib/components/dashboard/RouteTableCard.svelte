@@ -61,21 +61,21 @@
   const routeHealthLabelClass = (row: RouteRow): string => {
     const label = routeHealthLabel(row);
     if (label === 'UP') {
-      return 'rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-200';
+      return 'rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-xs font-semibold text-success';
     }
     if (label === 'DEGRADED') {
-      return 'rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-200';
+      return 'rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-xs font-semibold text-warning';
     }
     if (label === 'DOWN') {
-      return 'rounded-full border border-rose-400/40 bg-rose-500/10 px-2 py-0.5 text-xs font-semibold text-rose-200';
+      return 'rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive';
     }
-    return 'rounded-full border border-slate-500 bg-slate-800 px-2 py-0.5 text-xs font-semibold text-slate-300';
+    return 'rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-semibold text-foreground/80';
   };
 
   const upstreamHealthClass = (healthy: boolean): string =>
     healthy
-      ? 'rounded border border-emerald-400/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-200'
-      : 'rounded border border-rose-400/40 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-rose-200';
+      ? 'rounded border border-success/40 bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success'
+      : 'rounded border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive';
 
   const upstreamHealthText = (row: RouteRow): string[] => {
     const health = getRouteHealth(row);
@@ -88,24 +88,24 @@
   };
 </script>
 
-<article class="rounded-2xl border border-slate-700/80 bg-slate-900/80 p-4 backdrop-blur">
+<article class="rounded-2xl border border-border/80 bg-card/80 p-4 backdrop-blur">
   <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-    <h2 class="text-base font-bold text-slate-100">Routes</h2>
+    <h2 class="text-base font-bold text-foreground">Routes</h2>
     <div class="flex w-full items-center gap-2 md:w-auto">
       <input
-        class="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 md:w-72"
+        class="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground md:w-72"
         placeholder="Search route name / host / path / strategy"
         value={routeQuery}
         on:input={(e) => dispatch('search', inputValue(e))}
       />
       <button
-        class="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20"
+        class="rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/20"
         on:click={() => dispatch('addRoute')}
       >
         Add Route
       </button>
       <button
-        class="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+        class="rounded-md border border-success/40 bg-success/10 px-3 py-2 text-xs font-semibold text-success hover:bg-success/20 disabled:cursor-not-allowed disabled:opacity-60"
         disabled={healthLoading}
         on:click={() => dispatch('refreshHealth')}
       >
@@ -115,15 +115,15 @@
   </div>
 
   {#if healthError}
-    <div class="mb-3 rounded-lg border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200">
+    <div class="mb-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">
       Health check failed: {healthError}
     </div>
   {/if}
 
-  <div class="overflow-hidden rounded-xl border border-slate-700 bg-slate-950/70">
+  <div class="overflow-hidden rounded-xl border border-border bg-background/70">
     <div class="max-h-[46vh] overflow-auto">
-      <table class="min-w-full divide-y divide-slate-800 text-sm">
-        <thead class="sticky top-0 z-10 bg-slate-900 text-slate-300">
+      <table class="min-w-full divide-y divide-border text-sm">
+        <thead class="sticky top-0 z-10 bg-card text-foreground/80">
           <tr>
             <th class="px-4 py-3 text-left font-semibold">Route</th>
             <th class="px-4 py-3 text-left font-semibold">Host</th>
@@ -134,30 +134,30 @@
             <th class="px-4 py-3 text-left font-semibold">Actions</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-slate-800">
+        <tbody class="divide-y divide-border">
           {#if rows.length === 0}
             <tr>
-              <td class="px-4 py-6 text-center text-sm text-slate-400" colspan="7">No routes found.</td>
+              <td class="px-4 py-6 text-center text-sm text-muted-foreground" colspan="7">No routes found.</td>
             </tr>
           {:else}
             {#each rows as row}
-              <tr class={selectedRouteIndex === row.routeIndex ? 'bg-cyan-500/10' : 'hover:bg-slate-900/70'}>
-                <td class="px-4 py-3 font-medium text-slate-100">
+              <tr class={selectedRouteIndex === row.routeIndex ? 'bg-primary/10' : 'hover:bg-card/70'}>
+                <td class="px-4 py-3 font-medium text-foreground">
                   {row.route.name}
                   {#if row.route.is_default}
-                    <span class="ml-2 rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-200">default</span>
+                    <span class="ml-2 rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-xs font-semibold text-success">default</span>
                   {/if}
                 </td>
-                <td class="px-4 py-3 text-slate-300">{row.route.host || '-'}</td>
-                <td class="px-4 py-3 text-slate-300">{row.route.path_prefix}</td>
-                <td class="px-4 py-3 text-slate-300">{row.route.service || '-'}</td>
+                <td class="px-4 py-3 text-foreground/80">{row.route.host || '-'}</td>
+                <td class="px-4 py-3 text-foreground/80">{row.route.path_prefix}</td>
+                <td class="px-4 py-3 text-foreground/80">{row.route.service || '-'}</td>
                 <td class="px-4 py-3">
                   <span class={routeHealthLabelClass(row)} title={routeHealthTooltip(row)}>{routeHealthLabel(row)}</span>
                 </td>
-                <td class="px-4 py-3 text-slate-300">
+                <td class="px-4 py-3 text-foreground/80">
                   <div class="flex flex-wrap gap-1.5">
                     {#if upstreamHealthText(row).length === 0}
-                      <span class="text-xs text-slate-500">n/a</span>
+                      <span class="text-xs text-muted-foreground">n/a</span>
                     {:else}
                       {#each getRouteHealth(row)?.upstreams ?? [] as upstream, idx}
                         <span class={upstreamHealthClass(upstream.healthy)} title={upstream.error ?? ''}>
@@ -170,19 +170,19 @@
                 <td class="px-4 py-3">
                   <div class="flex flex-wrap gap-2">
                     <button
-                      class="rounded-md border border-slate-600 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                      class="rounded-md border border-border bg-card px-2.5 py-1 text-xs font-semibold text-foreground hover:bg-muted"
                       on:click={() => dispatch('view', row.routeIndex)}
                     >
                       View
                     </button>
                     <button
-                      class="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20"
+                      class="rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/20"
                       on:click={() => dispatch('edit', row.routeIndex)}
                     >
                       Edit
                     </button>
                     <button
-                      class="rounded-md border border-rose-400/40 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-200 hover:bg-rose-500/20"
+                      class="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1 text-xs font-semibold text-destructive hover:bg-destructive/20"
                       on:click={() => dispatch('delete', row.routeIndex)}
                     >
                       Delete

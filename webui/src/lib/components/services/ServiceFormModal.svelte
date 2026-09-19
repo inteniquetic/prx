@@ -192,19 +192,19 @@
   ></button>
 
   <!-- Modal Content -->
-  <div class="relative z-10 flex max-h-[90vh] w-full max-w-2xl flex-col rounded-xl border border-slate-700/80 bg-slate-950 shadow-2xl">
+  <div class="relative z-10 flex max-h-[90vh] w-full max-w-2xl flex-col rounded-xl border border-border/80 bg-background shadow-2xl">
     <!-- Header -->
-    <div class="flex items-center justify-between border-b border-slate-700/80 px-6 py-4">
+    <div class="flex items-center justify-between border-b border-border/80 px-6 py-4">
       <div>
-        <h2 class="text-lg font-bold text-slate-100">
+        <h2 class="text-lg font-bold text-foreground">
           {service ? 'Edit Service' : 'Create New Service'}
         </h2>
-        <p class="mt-0.5 text-sm text-slate-400">
+        <p class="mt-0.5 text-sm text-muted-foreground">
           {service ? 'Update the service configuration' : 'Configure a new backend service target'}
         </p>
       </div>
       <button
-        class="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200"
+        class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         aria-label="Close"
         on:click={handleCancel}
       >
@@ -220,10 +220,10 @@
         <!-- ============================================================= -->
         <!-- Section 1: Service Configuration -->
         <!-- ============================================================= -->
-        <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
-          <div class="flex items-center gap-3 border-b border-slate-700/80 px-5 py-4">
-            <div class="h-8 w-1 rounded-full bg-cyan-400" ></div>
-            <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
+        <section class="rounded-xl border border-border/80 bg-card/80 backdrop-blur">
+          <div class="flex items-center gap-3 border-b border-border/80 px-5 py-4">
+            <div class="h-8 w-1 rounded-full bg-primary" ></div>
+            <h3 class="text-sm font-semibold uppercase tracking-wider text-foreground">
               Service Configuration
             </h3>
           </div>
@@ -231,26 +231,26 @@
           <div class="grid gap-5 p-5 md:grid-cols-2">
             <!-- Name -->
             <label class="space-y-1.5">
-              <span class="text-sm font-medium text-slate-300">
-                Name <span class="text-rose-400">*</span>
+              <span class="text-sm font-medium text-foreground/80">
+                Name <span class="text-destructive">*</span>
               </span>
               <input
                 type="text"
-                class="w-full rounded-lg border px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:outline-none focus:ring-1 {showError('name') ? 'border-rose-500 focus:border-rose-500 focus:ring-rose-500/30' : 'border-slate-600 bg-slate-950/70 focus:border-cyan-500 focus:ring-cyan-500/30'}"
+                class="w-full rounded-lg border px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:outline-none focus:ring-1 {showError('name') ? 'border-destructive focus:border-destructive focus:ring-destructive/30' : 'border-border bg-background/70 focus:border-primary focus:ring-primary/30'}"
                 value={formData.name}
                 placeholder="e.g., api-backend"
                 on:input={(e) => { updateField('name', inputValue(e)); markTouched('name'); }}
               />
               {#if showError('name')}
-                <p class="text-xs text-rose-400">{errors.name}</p>
+                <p class="text-xs text-destructive">{errors.name}</p>
               {/if}
             </label>
 
             <!-- LB Strategy -->
             <label class="space-y-1.5">
-              <span class="text-sm font-medium text-slate-300">Load Balancing Strategy</span>
+              <span class="text-sm font-medium text-foreground/80">Load Balancing Strategy</span>
               <select
-                class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
+                class="w-full rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm text-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
                 value={formData.lb}
                 on:change={(e) => updateField('lb', selectLbValue(e))}
               >
@@ -262,11 +262,11 @@
 
             <!-- Max Retries -->
             <label class="space-y-1.5">
-              <span class="text-sm font-medium text-slate-300">Max Retries</span>
+              <span class="text-sm font-medium text-foreground/80">Max Retries</span>
               <input
                 type="number"
                 min="0"
-                class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm tabular-nums text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
+                class="w-full rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm tabular-nums text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
                 value={formData.max_retries}
                 on:input={(e) => updateField('max_retries', numberValue(e))}
               />
@@ -274,13 +274,13 @@
 
             <!-- Retry Backoff -->
             <label class="space-y-1.5">
-              <span class="text-sm font-medium text-slate-300">
-                Retry Backoff <span class="text-slate-500">(ms)</span>
+              <span class="text-sm font-medium text-foreground/80">
+                Retry Backoff <span class="text-muted-foreground">(ms)</span>
               </span>
               <input
                 type="number"
                 min="0"
-                class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm tabular-nums text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
+                class="w-full rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm tabular-nums text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
                 value={formData.retry_backoff_ms}
                 on:input={(e) => updateField('retry_backoff_ms', numberValue(e))}
               />
@@ -291,39 +291,39 @@
         <!-- ============================================================= -->
         <!-- Section 2: Circuit Breaker -->
         <!-- ============================================================= -->
-        <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
+        <section class="rounded-xl border border-border/80 bg-card/80 backdrop-blur">
           <button
-            class="flex w-full items-center justify-between px-5 py-4 text-left transition-colors hover:bg-slate-800/50"
+            class="flex w-full items-center justify-between px-5 py-4 text-left transition-colors hover:bg-muted/50"
             on:click={() => circuitBreakerExpanded = !circuitBreakerExpanded}
           >
             <div class="flex items-center gap-3">
-              <div class="h-8 w-1 rounded-full bg-amber-400" ></div>
-              <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
+              <div class="h-8 w-1 rounded-full bg-warning" ></div>
+              <h3 class="text-sm font-semibold uppercase tracking-wider text-foreground">
                 Circuit Breaker
               </h3>
               {#if formData.circuit_breaker.enabled}
-                <span class="rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-200">
+                <span class="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold text-warning">
                   ON
                 </span>
               {:else}
-                <span class="rounded-full border border-slate-500 bg-slate-800 px-2 py-0.5 text-[10px] font-semibold text-slate-400">
+                <span class="rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
                   OFF
                 </span>
               {/if}
             </div>
-            <span class="text-slate-400 transition-transform {circuitBreakerExpanded ? 'rotate-180' : ''}">
+            <span class="text-muted-foreground transition-transform {circuitBreakerExpanded ? 'rotate-180' : ''}">
               ▼
             </span>
           </button>
 
           {#if circuitBreakerExpanded}
-            <div class="border-t border-slate-700/80 p-5">
+            <div class="border-t border-border/80 p-5">
               <!-- Enabled Toggle -->
               <div class="mb-5">
                 <label class="flex items-center justify-between">
                   <div>
-                    <span class="text-sm font-medium text-slate-300">Enable Circuit Breaker</span>
-                    <p class="mt-0.5 text-xs text-slate-500">Automatically trip when upstream failures exceed threshold</p>
+                    <span class="text-sm font-medium text-foreground/80">Enable Circuit Breaker</span>
+                    <p class="mt-0.5 text-xs text-muted-foreground">Automatically trip when upstream failures exceed threshold</p>
                   </div>
                   <label class="relative inline-flex cursor-pointer items-center">
                     <input
@@ -332,7 +332,7 @@
                       checked={formData.circuit_breaker.enabled}
                       on:change={(e) => updateCircuitBreaker('enabled', checkedValue(e))}
                     />
-                    <div class="h-6 w-11 rounded-full bg-slate-700 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-slate-400 after:transition-all peer-checked:bg-amber-600 peer-checked:after:translate-x-full peer-checked:after:bg-white"></div>
+                    <div class="h-6 w-11 rounded-full bg-muted after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-muted-foreground after:transition-all peer-checked:bg-warning peer-checked:after:translate-x-full peer-checked:after:bg-white"></div>
                   </label>
                 </label>
               </div>
@@ -341,37 +341,37 @@
                 <div class="grid gap-5 md:grid-cols-2">
                   <!-- Consecutive Failures -->
                   <label class="space-y-1.5">
-                    <span class="text-sm font-medium text-slate-300">
-                      Consecutive Failures <span class="text-rose-400">*</span>
+                    <span class="text-sm font-medium text-foreground/80">
+                      Consecutive Failures <span class="text-destructive">*</span>
                     </span>
-                    <p class="text-xs text-slate-500">Number of failures before tripping the breaker</p>
+                    <p class="text-xs text-muted-foreground">Number of failures before tripping the breaker</p>
                     <input
                       type="number"
                       min="1"
-                      class="w-full rounded-lg border px-3 py-2.5 text-sm tabular-nums text-slate-100 placeholder:text-slate-500 transition-colors focus:outline-none focus:ring-1 {showError('cb_consecutive_failures') ? 'border-rose-500 focus:border-rose-500 focus:ring-rose-500/30' : 'border-slate-600 bg-slate-950/70 focus:border-cyan-500 focus:ring-cyan-500/30'}"
+                      class="w-full rounded-lg border px-3 py-2.5 text-sm tabular-nums text-foreground placeholder:text-muted-foreground transition-colors focus:outline-none focus:ring-1 {showError('cb_consecutive_failures') ? 'border-destructive focus:border-destructive focus:ring-destructive/30' : 'border-border bg-background/70 focus:border-primary focus:ring-primary/30'}"
                       value={formData.circuit_breaker.consecutive_failures}
                       on:input={(e) => { updateCircuitBreaker('consecutive_failures', numberValue(e, 1)); markTouched('cb_consecutive_failures'); }}
                     />
                     {#if showError('cb_consecutive_failures')}
-                      <p class="text-xs text-rose-400">{errors.cb_consecutive_failures}</p>
+                      <p class="text-xs text-destructive">{errors.cb_consecutive_failures}</p>
                     {/if}
                   </label>
 
                   <!-- Open Duration -->
                   <label class="space-y-1.5">
-                    <span class="text-sm font-medium text-slate-300">
-                      Open Duration <span class="text-slate-500">(ms)</span> <span class="text-rose-400">*</span>
+                    <span class="text-sm font-medium text-foreground/80">
+                      Open Duration <span class="text-muted-foreground">(ms)</span> <span class="text-destructive">*</span>
                     </span>
-                    <p class="text-xs text-slate-500">How long the breaker stays open before attempting recovery</p>
+                    <p class="text-xs text-muted-foreground">How long the breaker stays open before attempting recovery</p>
                     <input
                       type="number"
                       min="1"
-                      class="w-full rounded-lg border px-3 py-2.5 text-sm tabular-nums text-slate-100 placeholder:text-slate-500 transition-colors focus:outline-none focus:ring-1 {showError('cb_open_ms') ? 'border-rose-500 focus:border-rose-500 focus:ring-rose-500/30' : 'border-slate-600 bg-slate-950/70 focus:border-cyan-500 focus:ring-cyan-500/30'}"
+                      class="w-full rounded-lg border px-3 py-2.5 text-sm tabular-nums text-foreground placeholder:text-muted-foreground transition-colors focus:outline-none focus:ring-1 {showError('cb_open_ms') ? 'border-destructive focus:border-destructive focus:ring-destructive/30' : 'border-border bg-background/70 focus:border-primary focus:ring-primary/30'}"
                       value={formData.circuit_breaker.open_ms}
                       on:input={(e) => { updateCircuitBreaker('open_ms', numberValue(e, 1)); markTouched('cb_open_ms'); }}
                     />
                     {#if showError('cb_open_ms')}
-                      <p class="text-xs text-rose-400">{errors.cb_open_ms}</p>
+                      <p class="text-xs text-destructive">{errors.cb_open_ms}</p>
                     {/if}
                   </label>
                 </div>
@@ -383,19 +383,19 @@
         <!-- ============================================================= -->
         <!-- Section 3: Upstreams -->
         <!-- ============================================================= -->
-        <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
-          <div class="flex items-center justify-between border-b border-slate-700/80 px-5 py-4">
+        <section class="rounded-xl border border-border/80 bg-card/80 backdrop-blur">
+          <div class="flex items-center justify-between border-b border-border/80 px-5 py-4">
             <div class="flex items-center gap-3">
-              <div class="h-8 w-1 rounded-full bg-emerald-400" ></div>
-              <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
+              <div class="h-8 w-1 rounded-full bg-success" ></div>
+              <h3 class="text-sm font-semibold uppercase tracking-wider text-foreground">
                 Upstreams
               </h3>
-              <span class="rounded-full border border-slate-600 bg-slate-800 px-2 py-0.5 text-xs font-medium text-slate-400">
+              <span class="rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
                 {formData.upstreams.length}
               </span>
             </div>
             <button
-              class="flex items-center gap-1.5 rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20"
+              class="flex items-center gap-1.5 rounded-lg border border-success/40 bg-success/10 px-3 py-1.5 text-xs font-medium text-success transition-colors hover:bg-success/20"
               on:click={handleAddUpstream}
             >
               <span class="text-sm">+</span>
@@ -404,32 +404,32 @@
           </div>
 
           {#if showError('upstreams')}
-            <div class="border-b border-slate-700/60 px-5 py-2">
-              <p class="text-xs text-rose-400">{errors.upstreams}</p>
+            <div class="border-b border-border/60 px-5 py-2">
+              <p class="text-xs text-destructive">{errors.upstreams}</p>
             </div>
           {/if}
 
-          <div class="divide-y divide-slate-700/60">
+          <div class="divide-y divide-border/60">
             {#each formData.upstreams as upstream, upstreamIndex}
               <div class="p-5">
                 <!-- Upstream Header -->
                 <div class="mb-4 flex items-center justify-between">
                   <div class="flex items-center gap-2">
-                    <span class="flex h-6 w-6 items-center justify-center rounded-md bg-slate-800 text-xs font-bold text-slate-400">
+                    <span class="flex h-6 w-6 items-center justify-center rounded-md bg-muted text-xs font-bold text-muted-foreground">
                       {upstreamIndex + 1}
                     </span>
-                    <span class="text-sm font-medium text-slate-300">
+                    <span class="text-sm font-medium text-foreground/80">
                       {upstream.addr || 'Unconfigured'}
                     </span>
                     {#if upstream.tls}
-                      <span class="rounded border border-violet-400/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-violet-200">
+                      <span class="rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
                         TLS
                       </span>
                     {/if}
                   </div>
                   {#if formData.upstreams.length > 1}
                     <button
-                      class="rounded-md border border-rose-400/40 bg-rose-500/10 px-2 py-1 text-xs font-medium text-rose-200 transition-colors hover:bg-rose-500/20"
+                      class="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
                       on:click={() => handleRemoveUpstream(upstreamIndex)}
                     >
                       Remove
@@ -441,31 +441,31 @@
                 <div class="grid gap-4 md:grid-cols-3">
                   <!-- Address -->
                   <label class="space-y-1.5 md:col-span-2">
-                    <span class="text-xs font-medium text-slate-400">
-                      Address <span class="text-rose-400">*</span>
+                    <span class="text-xs font-medium text-muted-foreground">
+                      Address <span class="text-destructive">*</span>
                     </span>
                     <input
                       type="text"
-                      class="w-full rounded-lg border px-3 py-2 text-sm font-mono text-slate-100 placeholder:text-slate-500 transition-colors focus:outline-none focus:ring-1 {showError(`upstream_addr_${upstreamIndex}`) ? 'border-rose-500 focus:border-rose-500 focus:ring-rose-500/30' : 'border-slate-600 bg-slate-950/70 focus:border-cyan-500 focus:ring-cyan-500/30'}"
+                      class="w-full rounded-lg border px-3 py-2 text-sm font-mono text-foreground placeholder:text-muted-foreground transition-colors focus:outline-none focus:ring-1 {showError(`upstream_addr_${upstreamIndex}`) ? 'border-destructive focus:border-destructive focus:ring-destructive/30' : 'border-border bg-background/70 focus:border-primary focus:ring-primary/30'}"
                       value={upstream.addr}
                       placeholder="host:port"
                       on:input={(e) => { updateUpstream(upstreamIndex, 'addr', inputValue(e)); markTouched('upstreams'); }}
                     />
                     {#if showError(`upstream_addr_${upstreamIndex}`)}
-                      <p class="text-xs text-rose-400">{errors[`upstream_addr_${upstreamIndex}`]}</p>
+                      <p class="text-xs text-destructive">{errors[`upstream_addr_${upstreamIndex}`]}</p>
                     {/if}
                   </label>
 
                   <!-- Weight -->
                   <label class="space-y-1.5">
-                    <span class="text-xs font-medium text-slate-400">
-                      Weight <span class="text-slate-600">(1-256)</span>
+                    <span class="text-xs font-medium text-muted-foreground">
+                      Weight <span class="text-muted-foreground/70">(1-256)</span>
                     </span>
                     <input
                       type="number"
                       min="1"
                       max="256"
-                      class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2 text-sm tabular-nums text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
+                      class="w-full rounded-lg border border-border bg-background/70 px-3 py-2 text-sm tabular-nums text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
                       value={upstream.weight}
                       on:input={(e) => updateUpstream(upstreamIndex, 'weight', numberValue(e, 1))}
                     />
@@ -473,12 +473,12 @@
 
                   <!-- SNI -->
                   <label class="space-y-1.5">
-                    <span class="text-xs font-medium text-slate-400">
-                      SNI <span class="text-slate-600">(TLS)</span>
+                    <span class="text-xs font-medium text-muted-foreground">
+                      SNI <span class="text-muted-foreground/70">(TLS)</span>
                     </span>
                     <input
                       type="text"
-                      class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
+                      class="w-full rounded-lg border border-border bg-background/70 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
                       value={upstream.sni}
                       placeholder="hostname"
                       on:input={(e) => updateUpstream(upstreamIndex, 'sni', inputValue(e))}
@@ -487,8 +487,8 @@
 
                   <!-- TLS Toggle -->
                   <div class="flex items-end pb-0.5 md:col-span-2">
-                    <label class="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2">
-                      <span class="text-xs font-medium text-slate-400">TLS Enabled</span>
+                    <label class="flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-background/70 px-3 py-2">
+                      <span class="text-xs font-medium text-muted-foreground">TLS Enabled</span>
                       <label class="relative inline-flex cursor-pointer items-center">
                         <input
                           type="checkbox"
@@ -496,7 +496,7 @@
                           checked={upstream.tls}
                           on:change={(e) => updateUpstream(upstreamIndex, 'tls', checkedValue(e))}
                         />
-                        <div class="h-5 w-9 rounded-full bg-slate-700 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-slate-400 after:transition-all peer-checked:bg-cyan-600 peer-checked:after:translate-x-full peer-checked:after:bg-white"></div>
+                        <div class="h-5 w-9 rounded-full bg-muted after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-muted-foreground after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full peer-checked:after:bg-white"></div>
                       </label>
                     </label>
                   </div>
@@ -507,9 +507,9 @@
 
           {#if formData.upstreams.length === 0}
             <div class="px-5 py-10 text-center">
-              <p class="text-sm text-slate-500">No upstreams configured</p>
+              <p class="text-sm text-muted-foreground">No upstreams configured</p>
               <button
-                class="mt-2 text-sm font-medium text-emerald-400 hover:text-emerald-300"
+                class="mt-2 text-sm font-medium text-success hover:text-success"
                 on:click={handleAddUpstream}
               >
                 + Add an upstream
@@ -521,15 +521,15 @@
     </div>
 
     <!-- Footer -->
-    <div class="flex items-center justify-end gap-3 border-t border-slate-700/80 px-6 py-4">
+    <div class="flex items-center justify-end gap-3 border-t border-border/80 px-6 py-4">
       <button
-        class="rounded-lg border border-slate-600 bg-slate-800 px-4 py-2.5 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-700"
+        class="rounded-lg border border-border bg-muted px-4 py-2.5 text-sm font-medium text-foreground/80 transition-colors hover:bg-muted"
         on:click={handleCancel}
       >
         Cancel
       </button>
       <button
-        class="rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-cyan-500"
+        class="rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary"
         on:click={handleSave}
       >
         {service ? 'Save Changes' : 'Create Service'}

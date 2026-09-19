@@ -22,6 +22,7 @@
     validationIssues
   } from './lib/stores/config';
   import { currentPage, navigate } from './lib/stores/navigation';
+  import { initTheme } from './lib/stores/theme';
   import type { PrxConfig } from './lib/types/config';
 
   // Health state
@@ -269,14 +270,18 @@
   }
 
   onMount(() => {
+    // index.html already set the class before paint; this keeps `system`
+    // following the OS while the page stays open.
+    const stopTheme = initTheme();
     void reloadFromServer();
+    return stopTheme;
   });
 </script>
 
-<div class="flex h-screen w-screen overflow-hidden text-slate-100">
+<div class="flex h-screen w-screen overflow-hidden text-foreground">
   <Sidebar />
 
-  <main class="flex-1 flex flex-col overflow-hidden bg-slate-950">
+  <main class="flex-1 flex flex-col overflow-hidden bg-background">
     {#if $currentPage === 'dashboard'}
       <DashboardPage
         config={$configStore}

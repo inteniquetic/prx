@@ -7,40 +7,40 @@
 
   const colorMap: Record<string, { icon: string; value: string; trend: string; bg: string }> = {
     slate: {
-      icon: 'text-slate-400',
-      value: 'text-slate-100',
-      trend: 'text-slate-500',
-      bg: 'from-slate-500/5 to-transparent'
+      icon: 'text-muted-foreground',
+      value: 'text-foreground',
+      trend: 'text-muted-foreground',
+      bg: 'from-muted-foreground/5 to-transparent'
     },
     cyan: {
-      icon: 'text-cyan-400',
-      value: 'text-cyan-100',
-      trend: 'text-cyan-500',
-      bg: 'from-cyan-500/5 to-transparent'
+      icon: 'text-primary',
+      value: 'text-primary',
+      trend: 'text-primary',
+      bg: 'from-primary/5 to-transparent'
     },
     emerald: {
-      icon: 'text-emerald-400',
-      value: 'text-emerald-100',
-      trend: 'text-emerald-500',
-      bg: 'from-emerald-500/5 to-transparent'
+      icon: 'text-success',
+      value: 'text-success',
+      trend: 'text-success',
+      bg: 'from-success/5 to-transparent'
     },
     amber: {
-      icon: 'text-amber-400',
-      value: 'text-amber-100',
-      trend: 'text-amber-500',
-      bg: 'from-amber-500/5 to-transparent'
+      icon: 'text-warning',
+      value: 'text-warning',
+      trend: 'text-warning',
+      bg: 'from-warning/5 to-transparent'
     },
     rose: {
-      icon: 'text-rose-400',
-      value: 'text-rose-100',
-      trend: 'text-rose-500',
-      bg: 'from-rose-500/5 to-transparent'
+      icon: 'text-destructive',
+      value: 'text-destructive',
+      trend: 'text-destructive',
+      bg: 'from-destructive/5 to-transparent'
     },
     violet: {
-      icon: 'text-violet-400',
-      value: 'text-violet-100',
-      trend: 'text-violet-500',
-      bg: 'from-violet-500/5 to-transparent'
+      icon: 'text-primary',
+      value: 'text-primary',
+      trend: 'text-primary',
+      bg: 'from-primary/5 to-transparent'
     }
   };
 
@@ -48,14 +48,14 @@
 
   $: trendIcon = trend === 'up' ? '↑' : trend === 'down' ? '↓' : '';
   $: trendColorClass = trend === 'up'
-    ? 'text-emerald-400'
+    ? 'text-success'
     : trend === 'down'
-      ? 'text-rose-400'
+      ? 'text-destructive'
       : colors.trend;
 </script>
 
 <div
-  class="group relative overflow-hidden rounded-xl border border-slate-700/80 bg-slate-900/80 p-4 backdrop-blur transition-all duration-200 hover:border-slate-600/80 hover:bg-slate-900/90"
+  class="group relative overflow-hidden rounded-xl border border-border/80 bg-card/80 p-4 backdrop-blur transition-all duration-200 hover:border-border/80 hover:bg-card/90"
 >
   <!-- Subtle gradient background -->
   <div class="pointer-events-none absolute inset-0 bg-gradient-to-br {colors.bg} opacity-0 transition-opacity duration-200 group-hover:opacity-100" ></div>
@@ -65,7 +65,7 @@
     <div class="flex flex-col gap-1.5">
       <div class="flex items-center gap-2">
         <span class="text-lg leading-none {colors.icon}">{icon}</span>
-        <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">
+        <span class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           {label}
         </span>
       </div>
