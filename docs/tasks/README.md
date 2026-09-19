@@ -84,7 +84,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 
 | ID | Task | Size | Depends |
 |---|---|---|---|
-| [T301](T301-webui-svelte5-shadcn-foundation.md) | อัป Svelte 5 + ติดตั้ง shadcn-svelte + design token | L | — |
+| [T301](T301-webui-svelte5-shadcn-foundation.md) | อัป Svelte 5 + ติดตั้ง shadcn-svelte + design token | L | — | ✅ done (light mode ไม่เคยมีมาก่อน) |
 | [T302](T302-design-system-components.md) | ชุด component พื้นฐาน + dark mode | M | T301 |
 | [T303](T303-app-shell-navigation.md) | App shell: sidebar, topbar, breadcrumb, command palette | M | T302 |
 | [T304](T304-routes-crud-ui.md) | หน้า Routes: data table + form validation | L | T303, T205 |
