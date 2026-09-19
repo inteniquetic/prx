@@ -7,6 +7,9 @@
 // served the way a user gets it: embedded assets, SPA fallback and all.
 //
 // Usage: npm run smoke -- [base-url]     (default http://127.0.0.1:9090)
+//
+// Run prx with a copy of scripts/smoke.toml: the smoke saves over the config
+// it runs against, and it needs one that has something to lose.
 import { chromium } from 'playwright';
 
 const base = (process.argv[2] ?? process.env.PRX_ADMIN_URL ?? 'http://127.0.0.1:9090').replace(
@@ -170,6 +173,35 @@ try {
       if (hadHeaders !== JSON.stringify(same.request_headers ?? {})) {
         problems.push(`route ${route.name} lost its header rules after saving the UI's TOML`);
       }
+    }
+
+    // A service has to come back exactly as it went in, block by block: health
+    // checks, session affinity and timeouts are what a narrower UI model used
+    // to drop on every save.
+    if (roundTrip.before.services.length !== roundTrip.after.services.length) {
+      problems.push("saving the UI's TOML changed how many services exist");
+    }
+    for (const service of roundTrip.before.services) {
+      const same = roundTrip.after.services.find((entry) => entry.name === service.name);
+      if (!same) {
+        problems.push(`service ${service.name} disappeared after saving the UI's TOML`);
+        continue;
+      }
+      for (const [key, value] of Object.entries(service)) {
+        if (JSON.stringify(value) !== JSON.stringify(same[key])) {
+          problems.push(
+            `service ${service.name} changed ${key} after saving the UI's TOML: ` +
+              `${JSON.stringify(value)} -> ${JSON.stringify(same[key])}`
+          );
+        }
+      }
+    }
+    // Without these blocks in the config the check above passes vacuously.
+    if (!roundTrip.before.services.some((s) => s.health_check?.enabled && s.sticky?.enabled)) {
+      problems.push(
+        'no service has a health check and sticky sessions, so the service round trip ' +
+          'proved nothing: run prx with a copy of webui/scripts/smoke.toml'
+      );
     }
   }
 

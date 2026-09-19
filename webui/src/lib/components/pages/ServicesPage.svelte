@@ -13,7 +13,7 @@
     deleteService,
     loadConfigFromAdmin
   } from '../../api/admin';
-  import type { LbStrategy, PrxConfig, ServiceConfig } from '../../types/config';
+  import { LB_STRATEGIES, type LbStrategy, type PrxConfig, type ServiceConfig } from '../../types/config';
   import type { NavPage } from '../../stores/navigation';
 
   // ---------------------------------------------------------------------------
@@ -53,7 +53,7 @@
   // Modal state
   let showCreateModal = false;
 
-  const lbOptions: LbStrategy[] = ['round_robin', 'random', 'hash'];
+  const lbOptions: LbStrategy[] = LB_STRATEGIES;
 
   // ---------------------------------------------------------------------------
   // Computed Values
@@ -126,6 +126,8 @@
       case 'round_robin': return 'Round Robin';
       case 'random': return 'Random';
       case 'hash': return 'Hash';
+      case 'least_conn': return 'Least Connections';
+      case 'p2c_ewma': return 'Lowest Latency (P2C EWMA)';
       default: return lb;
     }
   };

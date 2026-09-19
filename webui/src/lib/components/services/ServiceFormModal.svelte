@@ -4,6 +4,7 @@
     type UpstreamConfig,
     type CircuitBreakerConfig,
     type LbStrategy,
+    LB_STRATEGIES,
     createDefaultService,
     createDefaultUpstream,
     createDefaultCircuitBreaker
@@ -18,13 +19,15 @@
   let errors: Record<string, string> = {};
   let touched: Record<string, boolean> = {};
 
-  const lbOptions: LbStrategy[] = ['round_robin', 'random', 'hash'];
+  const lbOptions = LB_STRATEGIES;
 
   const formatLbStrategy = (lb: LbStrategy): string => {
     const labels: Record<LbStrategy, string> = {
       round_robin: 'Round Robin',
       random: 'Random',
-      hash: 'Hash'
+      hash: 'Hash',
+      least_conn: 'Least Connections',
+      p2c_ewma: 'Lowest Latency (P2C EWMA)'
     };
     return labels[lb] ?? lb;
   };

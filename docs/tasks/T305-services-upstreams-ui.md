@@ -30,6 +30,17 @@
 - [ ] สถานะสุขภาพอัปเดตสดโดยไม่ต้องรีเฟรชหน้า
 - [ ] slider weight แสดงสัดส่วนตรงกับที่ LB ทำจริง
 
+## ความคืบหน้า
+
+**Service round trip (ทำแล้ว)** — ก่อนหน้านี้ UI รู้จัก service แค่ `name`, `lb` (3 แบบ), retry และ
+circuit breaker ทำให้กด Save แล้ว `health_check`, `sticky`, retry budget, `request_timeout_ms`,
+`retry_idempotent_only`, `upstream_h2` หายจาก `Prx.toml` และ `least_conn`/`p2c_ewma` กลายเป็น `round_robin`
+ตอนนี้ `AdminServicePayload` / `ServiceRequestPayload` (`src/admin.rs`) และ `ServiceConfig` ฝั่ง UI พาทุก field ไปครบ
+(block ที่ request ไม่ส่งมา = คงค่าเดิมในไฟล์ตอน update), codec เขียนเฉพาะค่าที่ต่างจาก default
+และ `npm run smoke` เทียบ service ทั้งก้อนก่อน/หลัง Save — รันกับสำเนาของ `webui/scripts/smoke.toml`
+
+ฟอร์มสำหรับแก้ field ใหม่เหล่านี้ยังไม่มี (ข้อ 4 ด้านบน)
+
 ## Out of scope
 
 - กราฟ latency ย้อนหลังต่อ upstream (T306)

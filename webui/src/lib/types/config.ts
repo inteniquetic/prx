@@ -1,4 +1,15 @@
-export type LbStrategy = 'round_robin' | 'random' | 'hash';
+export type LbStrategy = 'round_robin' | 'random' | 'hash' | 'least_conn' | 'p2c_ewma';
+
+export const LB_STRATEGIES: LbStrategy[] = [
+  'round_robin',
+  'random',
+  'hash',
+  'least_conn',
+  'p2c_ewma'
+];
+
+/** Which HTTP version prx speaks to a service's upstreams. */
+export type UpstreamH2 = 'never' | 'always' | 'auto';
 
 export interface AcmeConfig {
   enabled: boolean;
@@ -38,12 +49,43 @@ export interface CircuitBreakerConfig {
   open_ms: number;
 }
 
+/** `[service.health_check]`: background probing of the upstreams. */
+export interface HealthCheckConfig {
+  enabled: boolean;
+  kind: 'tcp' | 'http';
+  path: string;
+  interval_ms: number;
+  timeout_ms: number;
+  healthy_threshold: number;
+  unhealthy_threshold: number;
+  expected_status: number[];
+}
+
+/** `[service.sticky]`: session affinity. */
+export interface StickyConfig {
+  enabled: boolean;
+  mode: 'cookie' | 'client_ip' | 'header';
+  /** Cookie or header name, depending on the mode. */
+  name: string;
+  ttl_s: number;
+}
+
 export interface ServiceConfig {
   name: string;
   lb: LbStrategy;
   max_retries: number;
   retry_backoff_ms: number;
+  /** `0` disables the retry budget. */
+  retry_budget_ratio: number;
+  retry_budget_min_per_window: number;
+  retry_budget_window_ms: number;
+  retry_idempotent_only: boolean;
+  /** Total time for a request including retries; `0` disables it. */
+  request_timeout_ms: number;
+  upstream_h2: UpstreamH2;
   circuit_breaker: CircuitBreakerConfig;
+  health_check: HealthCheckConfig;
+  sticky: StickyConfig;
   upstreams: UpstreamConfig[];
 }
 
@@ -155,12 +197,39 @@ export const createDefaultCircuitBreaker = (): CircuitBreakerConfig => ({
   open_ms: 30000
 });
 
+/** Mirrors the serde defaults in `src/config.rs`, like the route defaults below. */
+export const createDefaultHealthCheck = (): HealthCheckConfig => ({
+  enabled: false,
+  kind: 'tcp',
+  path: '/healthz',
+  interval_ms: 2000,
+  timeout_ms: 1000,
+  healthy_threshold: 2,
+  unhealthy_threshold: 3,
+  expected_status: [200]
+});
+
+export const createDefaultSticky = (): StickyConfig => ({
+  enabled: false,
+  mode: 'cookie',
+  name: 'prx_upstream',
+  ttl_s: 3600
+});
+
 export const createDefaultService = (idx: number): ServiceConfig => ({
   name: `service-${idx}`,
   lb: 'round_robin',
   max_retries: 0,
   retry_backoff_ms: 0,
+  retry_budget_ratio: 0.2,
+  retry_budget_min_per_window: 10,
+  retry_budget_window_ms: 10000,
+  retry_idempotent_only: true,
+  request_timeout_ms: 0,
+  upstream_h2: 'never',
   circuit_breaker: createDefaultCircuitBreaker(),
+  health_check: createDefaultHealthCheck(),
+  sticky: createDefaultSticky(),
   upstreams: [createDefaultUpstream()]
 });
 

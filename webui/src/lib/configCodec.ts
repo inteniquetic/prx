@@ -2,6 +2,7 @@ import {
   createDefaultConcurrencyLimit,
   createDefaultRateLimit,
   createDefaultRouteCache,
+  createDefaultService,
   type HeaderRules,
   type PrxConfig,
   type RouteConfig,
@@ -47,12 +48,45 @@ const renderUpstream = (upstream: UpstreamConfig, prefix: 'service' | 'route' = 
   return lines.join('\n');
 };
 
+const tomlValue = (value: unknown): string =>
+  typeof value === 'string'
+    ? `"${esc(value)}"`
+    : Array.isArray(value)
+      ? `[${value.map(tomlValue).join(', ')}]`
+      : String(value);
+
+/** A sub-table holding only the keys that differ from `defaults`; nothing at
+ *  all when every key is at its default. */
+const renderChangedTable = <T extends object>(header: string, value: T, defaults: T): string[] => {
+  const changed = Object.entries(value).filter(
+    ([key, entry]) =>
+      JSON.stringify(entry) !== JSON.stringify(defaults[key as keyof T])
+  );
+  if (changed.length === 0) return [];
+  return ['', header, ...changed.map(([key, entry]) => `${key} = ${tomlValue(entry)}`)];
+};
+
 const renderService = (service: ServiceConfig): string => {
+  const defaults = createDefaultService(0);
   const lines = ['[[service]]'];
   lines.push(`name = "${esc(service.name)}"`);
   lines.push(`lb = "${service.lb}"`);
   lines.push(`max_retries = ${Math.max(0, service.max_retries)}`);
   lines.push(`retry_backoff_ms = ${Math.max(0, service.retry_backoff_ms)}`);
+  // Plain keys have to come before the first sub-table, or TOML files them
+  // under it.
+  for (const key of [
+    'retry_budget_ratio',
+    'retry_budget_min_per_window',
+    'retry_budget_window_ms',
+    'retry_idempotent_only',
+    'request_timeout_ms',
+    'upstream_h2'
+  ] as const) {
+    if (service[key] !== defaults[key]) lines.push(`${key} = ${tomlValue(service[key])}`);
+  }
+  lines.push(...renderChangedTable('[service.health_check]', service.health_check, defaults.health_check));
+  lines.push(...renderChangedTable('[service.sticky]', service.sticky, defaults.sticky));
   lines.push('');
   lines.push('[service.circuit_breaker]');
   lines.push(`enabled = ${toTomlBool(service.circuit_breaker.enabled)}`);
@@ -62,7 +96,7 @@ const renderService = (service: ServiceConfig): string => {
   lines.push(`open_ms = ${Math.max(1, service.circuit_breaker.open_ms)}`);
   lines.push('');
   const upstreams = service.upstreams.map((u) => renderUpstream(u, 'service')).join('\n\n');
-  return `${lines.join('\n')}${upstreams}`;
+  return `${lines.join('\n')}\n${upstreams}`;
 };
 
 const formatNumberArray = (items: number[]): string => `[${items.join(', ')}]`;

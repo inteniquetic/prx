@@ -3,14 +3,19 @@ import {
   createDefaultConcurrencyLimit,
   createDefaultConfig,
   createDefaultHeaderRules,
+  createDefaultHealthCheck,
   createDefaultRateLimit,
   createDefaultRoute,
   createDefaultRouteCache,
   createDefaultService,
+  createDefaultSticky,
   createDefaultUpstream,
+  LB_STRATEGIES,
   type ConcurrencyLimitConfig,
   type HeaderRules,
+  type HealthCheckConfig,
   type LbStrategy,
+  type StickyConfig,
   type PrxConfig,
   type RateLimitConfig,
   type RouteCacheConfig,
@@ -136,11 +141,38 @@ const normalizeRouteCache = (value: unknown): RouteCacheConfig => {
   };
 };
 
-const normalizeLb = (value: unknown): LbStrategy => {
-  if (value === 'random' || value === 'hash' || value === 'round_robin') {
-    return value;
-  }
-  return 'round_robin';
+const normalizeLb = (value: unknown): LbStrategy =>
+  LB_STRATEGIES.includes(value as LbStrategy) ? (value as LbStrategy) : 'round_robin';
+
+const oneOf = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>
+  allowed.includes(value as T) ? (value as T) : fallback;
+
+const normalizeHealthCheck = (value: unknown): HealthCheckConfig => {
+  const source = asRecord(value);
+  const defaults = createDefaultHealthCheck();
+  return {
+    enabled: asBool(source.enabled, defaults.enabled),
+    kind: oneOf(source.kind, ['tcp', 'http'] as const, defaults.kind),
+    path: typeof source.path === 'string' ? source.path : defaults.path,
+    interval_ms: asNumber(source.interval_ms, defaults.interval_ms),
+    timeout_ms: asNumber(source.timeout_ms, defaults.timeout_ms),
+    healthy_threshold: asNumber(source.healthy_threshold, defaults.healthy_threshold),
+    unhealthy_threshold: asNumber(source.unhealthy_threshold, defaults.unhealthy_threshold),
+    expected_status: Array.isArray(source.expected_status)
+      ? source.expected_status.map(Number).filter(Number.isFinite)
+      : defaults.expected_status
+  };
+};
+
+const normalizeSticky = (value: unknown): StickyConfig => {
+  const source = asRecord(value);
+  const defaults = createDefaultSticky();
+  return {
+    enabled: asBool(source.enabled, defaults.enabled),
+    mode: oneOf(source.mode, ['cookie', 'client_ip', 'header'] as const, defaults.mode),
+    name: typeof source.name === 'string' && source.name ? source.name : defaults.name,
+    ttl_s: asNumber(source.ttl_s, defaults.ttl_s)
+  };
 };
 
 const normalizeUpstream = (upstream: PartialUpstream): UpstreamConfig => {
@@ -176,6 +208,7 @@ const normalizeService = (service: PartialService, serviceIndex: number): Servic
       : Array.isArray(service.upstream) && service.upstream.length > 0
         ? service.upstream
         : [createDefaultUpstream()];
+  const source = service as Record<string, unknown>;
 
   return {
     ...defaults,
@@ -184,10 +217,23 @@ const normalizeService = (service: PartialService, serviceIndex: number): Servic
     lb: normalizeLb(service.lb),
     max_retries: parseNullableNumber(service.max_retries) ?? defaults.max_retries,
     retry_backoff_ms: parseNullableNumber(service.retry_backoff_ms) ?? defaults.retry_backoff_ms,
+    // As with routes: whatever the service carries has to come back out on a
+    // save, or the file loses it.
+    retry_budget_ratio: asNumber(source.retry_budget_ratio, defaults.retry_budget_ratio),
+    retry_budget_min_per_window: asNumber(
+      source.retry_budget_min_per_window,
+      defaults.retry_budget_min_per_window
+    ),
+    retry_budget_window_ms: asNumber(source.retry_budget_window_ms, defaults.retry_budget_window_ms),
+    retry_idempotent_only: asBool(source.retry_idempotent_only, defaults.retry_idempotent_only),
+    request_timeout_ms: asNumber(source.request_timeout_ms, defaults.request_timeout_ms),
+    upstream_h2: oneOf(source.upstream_h2, ['never', 'always', 'auto'] as const, defaults.upstream_h2),
     circuit_breaker: {
       ...createDefaultCircuitBreaker(),
       ...(service.circuit_breaker ?? {})
     },
+    health_check: normalizeHealthCheck(source.health_check),
+    sticky: normalizeSticky(source.sticky),
     upstreams: upstreamSource.map(normalizeUpstream)
   };
 };
