@@ -1,11 +1,19 @@
 import {
   createDefaultCircuitBreaker,
+  createDefaultConcurrencyLimit,
   createDefaultConfig,
+  createDefaultHeaderRules,
+  createDefaultRateLimit,
   createDefaultRoute,
+  createDefaultRouteCache,
   createDefaultService,
   createDefaultUpstream,
+  type ConcurrencyLimitConfig,
+  type HeaderRules,
   type LbStrategy,
   type PrxConfig,
+  type RateLimitConfig,
+  type RouteCacheConfig,
   type RouteConfig,
   type ServiceConfig,
   type UpstreamConfig
@@ -47,6 +55,85 @@ const parseNullableNumber = (value: unknown): number | null => {
   }
 
   return Math.max(0, Math.floor(parsed));
+};
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+const asBool = (value: unknown, fallback: boolean): boolean =>
+  typeof value === 'boolean' ? value : fallback;
+
+const asNumber = (value: unknown, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const asStringMap = (value: unknown): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(asRecord(value))) {
+    if (typeof entry === 'string') out[key] = entry;
+  }
+  return out;
+};
+
+const asStringList = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+
+const normalizeHeaderRules = (value: unknown): HeaderRules => {
+  const source = asRecord(value);
+  const defaults = createDefaultHeaderRules();
+  return {
+    set: source.set === undefined ? defaults.set : asStringMap(source.set),
+    add: source.add === undefined ? defaults.add : asStringMap(source.add),
+    remove: source.remove === undefined ? defaults.remove : asStringList(source.remove)
+  };
+};
+
+const normalizeRateLimit = (value: unknown): RateLimitConfig => {
+  const source = asRecord(value);
+  const defaults = createDefaultRateLimit();
+  return {
+    enabled: asBool(source.enabled, defaults.enabled),
+    key: typeof source.key === 'string' && source.key ? source.key : defaults.key,
+    requests_per_second: asNumber(source.requests_per_second, defaults.requests_per_second),
+    burst: asNumber(source.burst, defaults.burst),
+    response_status: asNumber(source.response_status, defaults.response_status),
+    retry_after: asBool(source.retry_after, defaults.retry_after),
+    entry_ttl_ms: asNumber(source.entry_ttl_ms, defaults.entry_ttl_ms),
+    max_entries: asNumber(source.max_entries, defaults.max_entries)
+  };
+};
+
+const normalizeConcurrencyLimit = (value: unknown): ConcurrencyLimitConfig => {
+  const source = asRecord(value);
+  const defaults = createDefaultConcurrencyLimit();
+  return {
+    max_concurrent: asNumber(source.max_concurrent, defaults.max_concurrent),
+    response_status: asNumber(source.response_status, defaults.response_status)
+  };
+};
+
+const normalizeRouteCache = (value: unknown): RouteCacheConfig => {
+  const source = asRecord(value);
+  const defaults = createDefaultRouteCache();
+  const statusCodes = Array.isArray(source.cache_status_codes)
+    ? source.cache_status_codes.map((code) => Number(code)).filter((code) => Number.isFinite(code))
+    : defaults.cache_status_codes;
+  return {
+    enabled: asBool(source.enabled, defaults.enabled),
+    ttl_ms: asNumber(source.ttl_ms, defaults.ttl_ms),
+    max_body_bytes: asNumber(source.max_body_bytes, defaults.max_body_bytes),
+    max_entries: asNumber(source.max_entries, defaults.max_entries),
+    max_bytes: asNumber(source.max_bytes, defaults.max_bytes),
+    cache_status_codes: statusCodes,
+    key_query: asBool(source.key_query, defaults.key_query),
+    vary_headers:
+      source.vary_headers === undefined ? defaults.vary_headers : asStringList(source.vary_headers),
+    coalesce_wait_ms: asNumber(source.coalesce_wait_ms, defaults.coalesce_wait_ms),
+    add_status_header: asBool(source.add_status_header, defaults.add_status_header)
+  };
 };
 
 const normalizeLb = (value: unknown): LbStrategy => {
@@ -111,6 +198,8 @@ const normalizeRoute = (route: PartialRoute, routeIndex: number): RouteConfig =>
     ? route.methods.filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
     : [];
 
+  const source = route as Record<string, unknown>;
+
   return {
     ...defaults,
     ...route,
@@ -119,7 +208,16 @@ const normalizeRoute = (route: PartialRoute, routeIndex: number): RouteConfig =>
     host: route.host == null ? '' : String(route.host),
     path_prefix: String(route.path_prefix ?? defaults.path_prefix),
     methods,
-    is_default: route.is_default ?? defaults.is_default
+    is_default: route.is_default ?? defaults.is_default,
+    // Everything the config can say about a route travels with it. A UI that
+    // reads a partial route and writes it back is a UI that quietly deletes
+    // header rules, limits and cache settings.
+    enabled: asBool(source.enabled, defaults.enabled),
+    request_headers: normalizeHeaderRules(source.request_headers),
+    response_headers: normalizeHeaderRules(source.response_headers),
+    rate_limit: normalizeRateLimit(source.rate_limit),
+    concurrency_limit: normalizeConcurrencyLimit(source.concurrency_limit),
+    cache: normalizeRouteCache(source.cache)
   };
 };
 

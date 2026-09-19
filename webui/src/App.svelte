@@ -15,13 +15,7 @@
     type RouteHealthResponse
   } from './lib/api/admin';
   import { normalizePrxConfig } from './lib/configNormalize';
-  import {
-    addRoute,
-    configStore,
-    removeRoute,
-    tomlPreview,
-    validationIssues
-  } from './lib/stores/config';
+  import { configStore, tomlPreview, validationIssues } from './lib/stores/config';
   import {
     currentName,
     currentPage,
@@ -200,30 +194,16 @@
   };
 
   // Route actions
+  //
+  // Creating a route is the Routes page's job now — it talks to the admin API
+  // and the change applies immediately. The shell only asks for the form, so
+  // "Add route" from the dashboard or the palette lands in the same place as
+  // the button on the page itself.
+  let createRouteRequest = 0;
+
   const addRouteAndEdit = () => {
-    addRoute();
-    clearRouteHealthState();
     navigate('routes');
-  };
-
-  const deleteRoute = (index: number) => {
-    if (!confirm('Delete this route?')) {
-      return;
-    }
-    removeRoute(index);
-    clearRouteHealthState();
-  };
-
-  const duplicateRoute = (index: number) => {
-    const source = $configStore.routes[index];
-    if (!source) return;
-    const clone = JSON.parse(JSON.stringify(source)) as PrxConfig['routes'][0];
-    clone.name = `${clone.name}-copy`;
-    configStore.update((config) => {
-      config.routes.splice(index + 1, 0, clone);
-      return config;
-    });
-    clearRouteHealthState();
+    createRouteRequest += 1;
   };
 
   // Page event handlers
@@ -241,26 +221,6 @@
 
   const onDashboardExportJson = () => {
     exportAsJson();
-  };
-
-  const onRoutesAddRoute = () => {
-    addRouteAndEdit();
-  };
-
-  const onRoutesDeleteRoute = (e: CustomEvent<number>) => {
-    deleteRoute(e.detail);
-  };
-
-  const onRoutesDuplicateRoute = (e: CustomEvent<number>) => {
-    duplicateRoute(e.detail);
-  };
-
-  const onRoutesRefreshHealth = () => {
-    void refreshRouteHealth();
-  };
-
-  const onRoutesNavigate = (e: CustomEvent) => {
-    navigate(e.detail);
   };
 
   const onServicesNavigate = (e: CustomEvent) => {
@@ -291,7 +251,6 @@
     navigate(name ? { page: 'services', name } : 'services');
   };
 
-  const onRoutesSelect = (e: CustomEvent<string | null>) => openRoute(e.detail);
   const onServicesSelect = (e: CustomEvent<string | null>) => openService(e.detail);
 
   // A deep link to something that is no longer in the config: drop back to the
@@ -359,6 +318,16 @@
     clearRouteHealthState();
   }
 
+  // A draft lives only in this tab: closing it throws the edit away, so the
+  // browser gets a chance to ask first.
+  const onBeforeUnload = (event: BeforeUnloadEvent) => {
+    if (!hasDraft) return;
+    event.preventDefault();
+    // Safari and older Chrome still look at returnValue rather than the
+    // cancelled event.
+    event.returnValue = '';
+  };
+
   onMount(() => {
     // index.html already set the class before paint; this keeps `system`
     // following the OS while the page stays open.
@@ -375,6 +344,8 @@
     };
   });
 </script>
+
+<svelte:window on:beforeunload={onBeforeUnload} />
 
 <AppShell
   config={$configStore}
@@ -407,14 +378,13 @@
       config={$configStore}
       selectedRouteName={$currentName}
       {routeHealthByIndex}
+      createRequest={createRouteRequest}
       healthLoading={isCheckingRouteHealth}
       healthError={routeHealthError}
-      on:select={onRoutesSelect}
-      on:addRoute={onRoutesAddRoute}
-      on:deleteRoute={onRoutesDeleteRoute}
-      on:duplicateRoute={onRoutesDuplicateRoute}
-      on:refreshHealth={onRoutesRefreshHealth}
-      on:navigate={onRoutesNavigate}
+      onselect={openRoute}
+      onchanged={() => void reloadFromServer()}
+      onrefreshHealth={() => void refreshRouteHealth()}
+      onnavigate={(page) => navigate(page)}
     />
   {:else if $currentPage === 'tls'}
     <PlaceholderPage

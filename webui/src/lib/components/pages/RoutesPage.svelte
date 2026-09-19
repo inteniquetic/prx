@@ -1,666 +1,861 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import AppLayout from '../layout/AppLayout.svelte';
-  import RouteDetailPanel from '../routes/RouteDetailPanel.svelte';
-  import RouteFormModal from '../routes/RouteFormModal.svelte';
-  import { createRoute, updateRoute, deleteRoute, loadConfigFromAdmin } from '../../api/admin';
-  import { configStore } from '../../stores/config';
-  import type { PrxConfig, RouteConfig, ServiceConfig } from '../../types/config';
-  import type { RouteHealthItem } from '../../api/admin';
-  import type { NavPage } from '../../stores/navigation';
+  import ArrowUpDownIcon from '@lucide/svelte/icons/arrow-up-down';
+  import ActivityIcon from '@lucide/svelte/icons/activity';
+  import CopyIcon from '@lucide/svelte/icons/copy';
+  import EyeOffIcon from '@lucide/svelte/icons/eye-off';
+  import EyeIcon from '@lucide/svelte/icons/eye';
+  import FlaskConicalIcon from '@lucide/svelte/icons/flask-conical';
+  import MoreHorizontalIcon from '@lucide/svelte/icons/more-horizontal';
+  import PlusIcon from '@lucide/svelte/icons/plus';
+  import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+  import RouteIcon from '@lucide/svelte/icons/route';
+  import SearchIcon from '@lucide/svelte/icons/search';
+  import Trash2Icon from '@lucide/svelte/icons/trash-2';
+  import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 
-  // ---------------------------------------------------------------------------
-  // Props
-  // ---------------------------------------------------------------------------
+  import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+  import * as Select from '$lib/components/ui/select';
+  import * as Table from '$lib/components/ui/table';
+  import * as Tooltip from '$lib/components/ui/tooltip';
+  import { Badge } from '$lib/components/ui/badge';
+  import { Button } from '$lib/components/ui/button';
+  import { Checkbox } from '$lib/components/ui/checkbox';
+  import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
+  import { EmptyState } from '$lib/components/ui/empty-state';
+  import { Input } from '$lib/components/ui/input';
+  import { StatusDot, type UpstreamStatus } from '$lib/components/ui/status-dot';
+  import { toast } from '$lib/components/ui/sonner';
 
-  export let config: PrxConfig;
-  /** Which route the URL is pointing at — `/routes/:name`. */
-  export let selectedRouteName: string | null = null;
-  export let routeHealthByIndex: Record<number, RouteHealthItem> = {};
-  export let healthLoading: boolean = false;
-  export let healthError: string = '';
+  import RouteSheet from '../routes/RouteSheet.svelte';
+  import RouteTester from '../routes/RouteTester.svelte';
 
-  // ---------------------------------------------------------------------------
-  // Events
-  // ---------------------------------------------------------------------------
+  import { createRoute, deleteRoute, updateRoute, type RouteHealthItem } from '$lib/api/admin';
+  import { analyzeRoutes, tierLabel, type RouteInsight } from '$lib/routeAnalysis';
+  import { createDefaultRoute, type PrxConfig, type RouteConfig } from '$lib/types/config';
+  import { cn } from '$lib/utils';
 
-  const dispatch = createEventDispatcher<{
-    refreshHealth: void;
-    navigate: NavPage;
-    /** The route now on screen, so the shell can put it in the address bar. */
-    select: string | null;
-  }>();
+  let {
+    config,
+    /** The route the URL is pointing at — `/routes/:name`. */
+    selectedRouteName = null,
+    routeHealthByIndex = {},
+    healthLoading = false,
+    healthError = '',
+    /** Bumped by the shell when something asks for a new route. */
+    createRequest = 0,
+    onselect,
+    onchanged,
+    onrefreshHealth,
+    onnavigate
+  }: {
+    config: PrxConfig;
+    selectedRouteName?: string | null;
+    routeHealthByIndex?: Record<number, RouteHealthItem>;
+    healthLoading?: boolean;
+    healthError?: string;
+    createRequest?: number;
+    onselect?: (name: string | null) => void;
+    onchanged?: () => void;
+    onrefreshHealth?: () => void;
+    onnavigate?: (page: 'services') => void;
+  } = $props();
 
-  // ---------------------------------------------------------------------------
-  // State
-  // ---------------------------------------------------------------------------
+  type SortKey = 'order' | 'name' | 'host' | 'path' | 'service' | 'priority';
 
-  let searchQuery = '';
-  let selectedRouteIndex: number | null = null;
-  let detailMode: 'view' | 'edit' = 'edit';
-  let currentPage = 1;
-  const pageSize = 10;
-  let isSaving = false;
-  let errorMessage = '';
-  let showCreateModal = false;
-  let isRefreshing = false;
+  let query = $state('');
+  let serviceFilter = $state('all');
+  let statusFilter = $state('all');
+  let sortKey = $state<SortKey>('order');
+  let sortAscending = $state(true);
+  let page = $state(1);
+  let pageSize = $state(25);
+  let selection = $state<Set<string>>(new Set());
+  let testerOpen = $state(false);
+  /** The one row whose action menu is mounted, if any. */
+  let openMenuFor = $state<string | null>(null);
+  let testerHost = $state('');
+  let testerPath = $state('/');
 
-  // ---------------------------------------------------------------------------
-  // Computed Values
-  // ---------------------------------------------------------------------------
+  let sheetOpen = $state(false);
+  let sheetMode = $state<'create' | 'edit'>('edit');
+  let sheetRoute = $state<RouteConfig | null>(null);
+  let saving = $state(false);
+  let serverError = $state<string | null>(null);
 
-  $: routes = config.routes ?? [];
-  $: services = config.services ?? [];
+  let confirmOpen = $state(false);
+  let confirmTargets = $state<string[]>([]);
+  let busy = $state(false);
 
-  interface FilteredRoute {
-    route: RouteConfig;
-    index: number;
-  }
+  const routes = $derived(config.routes ?? []);
+  const services = $derived(config.services ?? []);
 
-  $: filteredRoutes = routes
-    .map((route, index) => ({ route, index }))
-    .filter(({ route }) => {
-      if (!searchQuery.trim()) return true;
-      const query = searchQuery.toLowerCase();
-      return (
-        route.name.toLowerCase().includes(query) ||
-        route.host.toLowerCase().includes(query) ||
-        route.path_prefix.toLowerCase().includes(query) ||
-        route.service.toLowerCase().includes(query) ||
-        route.methods.some((m) => m.toLowerCase().includes(query))
-      );
-    });
+  // Analysed once per config, not once per keystroke: precedence and shadowing
+  // depend on the whole list, and recomputing them while someone types is what
+  // makes a 500-route table feel slow.
+  const insights = $derived(analyzeRoutes(routes));
+  const byName = $derived(new Map(insights.map((insight) => [insight.route.name, insight])));
 
-  $: totalPages = Math.max(1, Math.ceil(filteredRoutes.length / pageSize));
-
-  $: paginatedRoutes = (() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredRoutes.slice(start, start + pageSize);
-  })();
-
-  // Reset to page 1 when search changes
-  $: if (searchQuery) {
-    currentPage = 1;
-  }
-
-  // Ensure current page is valid
-  $: if (currentPage > totalPages) {
-    currentPage = totalPages;
-  }
-
-  // ---------------------------------------------------------------------------
-  // View State
-  // ---------------------------------------------------------------------------
-
-  // The URL owns the selection: a refresh on /routes/api-v1 has to reopen it.
-  $: {
-    const found = selectedRouteName
-      ? routes.findIndex((entry) => entry.name === selectedRouteName)
-      : -1;
-    const next = found >= 0 ? found : null;
-    if (next !== selectedRouteIndex) {
-      selectedRouteIndex = next;
-    }
-  }
-
-  // ...and the page never assigns the selection directly: it asks for one with
-  // `select`, the shell puts it in the URL, and the block above opens it. One
-  // writer means a deep link cannot be overwritten by a first render that has
-  // not seen the config yet.
-  const selectRoute = (index: number | null) => {
-    dispatch('select', index === null ? null : routes[index]?.name ?? null);
-  };
-
-  $: isDetailView = selectedRouteIndex !== null;
-  $: selectedRoute = selectedRouteIndex !== null
-    ? routes[selectedRouteIndex] ?? null
-    : null;
-
-  // ---------------------------------------------------------------------------
-  // API Operations
-  // ---------------------------------------------------------------------------
-
-  async function refreshConfig(): Promise<void> {
-    isRefreshing = true;
-    errorMessage = '';
-    try {
-      const newConfig = await loadConfigFromAdmin();
-      configStore.set(newConfig);
-    } catch (err) {
-      errorMessage = (err as Error).message || 'Failed to refresh configuration';
-    } finally {
-      isRefreshing = false;
-    }
-  }
-
-  function clearError(): void {
-    errorMessage = '';
-  }
-
-  // ---------------------------------------------------------------------------
-  // Health Helpers
-  // ---------------------------------------------------------------------------
-
-  const getRouteHealth = (index: number): RouteHealthItem | null =>
-    routeHealthByIndex[index] ?? null;
-
-  const routeHealthStatus = (
-    index: number
-  ): 'up' | 'degraded' | 'down' | 'unknown' => {
-    const health = getRouteHealth(index);
-    if (!health) return 'unknown';
-    if (health.reachable_upstreams === 0) return 'down';
-    if (health.reachable_upstreams < health.total_upstreams) return 'degraded';
-    return health.healthy ? 'up' : 'degraded';
-  };
-
-  const healthDotClass = (status: string): string => {
-    switch (status) {
-      case 'up':
-        return 'h-2 w-2 rounded-full bg-success';
-      case 'degraded':
-        return 'h-2 w-2 rounded-full bg-warning';
-      case 'down':
-        return 'h-2 w-2 rounded-full bg-destructive';
-      default:
-        return 'h-2 w-2 rounded-full bg-muted-foreground/40';
-    }
-  };
-
-  const healthTooltip = (index: number): string => {
-    const health = getRouteHealth(index);
-    if (!health) return 'Health not checked';
-    const reachable = health.reachable_upstreams;
-    const total = health.total_upstreams;
-    if (total === 0) return 'No upstreams';
-    return `${reachable}/${total} upstreams reachable`;
-  };
-
-  // ---------------------------------------------------------------------------
-  // Formatting Helpers
-  // ---------------------------------------------------------------------------
-
-  const methodBadgeColor = (method: string): string => {
-    const upper = method.toUpperCase();
-    if (upper === 'GET') return 'border-success/40 bg-success/10 text-success';
-    if (upper === 'POST') return 'border-primary/40 bg-primary/10 text-primary';
-    if (upper === 'PUT') return 'border-warning/40 bg-warning/10 text-warning';
-    if (upper === 'DELETE') return 'border-destructive/40 bg-destructive/10 text-destructive';
-    if (upper === 'PATCH') return 'border-primary/40 bg-primary/10 text-primary';
-    return 'border-border/40 bg-muted-foreground/60/10 text-foreground/80';
-  };
-
-  const serviceExists = (serviceName: string): boolean =>
-    services.some((s) => s.name === serviceName);
-
-  // ---------------------------------------------------------------------------
-  // Class Helpers (avoid class: with /)
-  // ---------------------------------------------------------------------------
-
-  const rowClass = (index: number): string =>
-    selectedRouteIndex === index
-      ? 'cursor-pointer transition-colors bg-primary/10'
-      : 'cursor-pointer transition-colors hover:bg-card/70';
-
-  const pageBtnClass = (page: number): string =>
-    page === currentPage
-      ? 'rounded-md border px-2 py-1 text-xs font-medium transition-colors border-primary/50 bg-primary/10 text-primary'
-      : 'rounded-md border px-2 py-1 text-xs font-medium transition-colors border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground';
-
-  // ---------------------------------------------------------------------------
-  // Actions
-  // ---------------------------------------------------------------------------
-
-  const handleSearch = (event: Event) => {
-    searchQuery = (event.currentTarget as HTMLInputElement).value;
-  };
-
-  const handleRowClick = (index: number) => {
-    detailMode = 'edit';
-    selectRoute(index);
-  };
-
-  const handleViewRoute = (index: number) => {
-    detailMode = 'view';
-    selectRoute(index);
-  };
-
-  const handleEditRoute = (index: number) => {
-    detailMode = 'edit';
-    selectRoute(index);
-  };
-
-  const handleDeleteRoute = async (index: number) => {
-    if (isSaving) return;
+  const healthStatus = (index: number): UpstreamStatus => {
     const route = routes[index];
-    if (!route) return;
+    if (route && !route.enabled) return 'disabled';
+    const health = routeHealthByIndex[index];
+    if (!health) return 'unknown';
+    if (health.healthy) return 'healthy';
+    return health.reachable_upstreams > 0 ? 'degraded' : 'down';
+  };
 
-    isSaving = true;
-    errorMessage = '';
-    try {
-      await deleteRoute(route.name);
-      selectRoute(null);
-      await refreshConfig();
-    } catch (err) {
-      errorMessage = (err as Error).message || 'Failed to delete route';
-    } finally {
-      isSaving = false;
+  const healthReason = (index: number): string => {
+    const route = routes[index];
+    if (route && !route.enabled) return 'Disabled: this route is not in the matcher.';
+    const health = routeHealthByIndex[index];
+    if (!health) return 'No probe has run since the last config load.';
+    return `${health.reachable_upstreams} of ${health.total_upstreams} upstream${
+      health.total_upstreams === 1 ? '' : 's'
+    } reachable.`;
+  };
+
+  const matches = (insight: RouteInsight, needle: string): boolean =>
+    !needle || insight.haystack.includes(needle);
+
+  const matchesStatus = (insight: RouteInsight): boolean => {
+    switch (statusFilter) {
+      case 'all':
+        return true;
+      case 'warnings':
+        return insight.warnings.some((warning) => warning.kind !== 'disabled');
+      case 'disabled':
+        return !insight.route.enabled;
+      default:
+        return healthStatus(insight.index) === statusFilter;
     }
   };
 
-  const handleDuplicateRoute = async (index: number) => {
-    if (isSaving) return;
-    const originalRoute = routes[index];
-    if (!originalRoute) return;
+  const filtered = $derived.by(() => {
+    const needle = query.trim().toLowerCase();
+    return insights.filter(
+      (insight) =>
+        matches(insight, needle) &&
+        (serviceFilter === 'all' || insight.route.service === serviceFilter) &&
+        matchesStatus(insight)
+    );
+  });
 
-    const newRoute: RouteConfig = {
-      ...originalRoute,
-      name: `${originalRoute.name}-copy`,
-      is_default: false,
+  const sorted = $derived.by(() => {
+    const direction = sortAscending ? 1 : -1;
+    const value = (insight: RouteInsight): string | number => {
+      switch (sortKey) {
+        case 'name':
+          return insight.route.name;
+        case 'host':
+          return insight.route.host || '￿'; // "any host" sorts last
+        case 'path':
+          return insight.route.path_prefix;
+        case 'service':
+          return insight.route.service;
+        case 'priority':
+          return insight.precedence;
+        default:
+          return insight.index;
+      }
     };
 
-    isSaving = true;
-    errorMessage = '';
+    return [...filtered].sort((a, b) => {
+      const left = value(a);
+      const right = value(b);
+      if (typeof left === 'number' && typeof right === 'number') {
+        return (left - right) * direction;
+      }
+      return String(left).localeCompare(String(right)) * direction;
+    });
+  });
+
+  const pageCount = $derived(Math.max(1, Math.ceil(sorted.length / pageSize)));
+  const currentPage = $derived(Math.min(page, pageCount));
+  const visible = $derived(
+    sorted.slice((currentPage - 1) * pageSize, (currentPage - 1) * pageSize + pageSize)
+  );
+
+  const allVisibleSelected = $derived(
+    visible.length > 0 && visible.every((insight) => selection.has(insight.route.name))
+  );
+
+  const withWarnings = $derived(
+    insights.filter((insight) => insight.warnings.some((warning) => warning.kind !== 'disabled'))
+      .length
+  );
+
+  // Anything that changes the list also changes which page makes sense.
+  $effect(() => {
+    void query;
+    void serviceFilter;
+    void statusFilter;
+    page = 1;
+  });
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) sortAscending = !sortAscending;
+    else {
+      sortKey = key;
+      sortAscending = true;
+    }
+  }
+
+  function toggleSelection(name: string, checked: boolean) {
+    const next = new Set(selection);
+    if (checked) next.add(name);
+    else next.delete(name);
+    selection = next;
+  }
+
+  function toggleAllVisible(checked: boolean) {
+    const next = new Set(selection);
+    for (const insight of visible) {
+      if (checked) next.add(insight.route.name);
+      else next.delete(insight.route.name);
+    }
+    selection = next;
+  }
+
+  // --- the sheet ----------------------------------------------------------
+
+  function openCreate() {
+    const base = createDefaultRoute(routes.length + 1, services[0]?.name);
+    base.is_default = false;
+    // A new route should not collide with an existing name on the first try.
+    let candidate = base.name;
+    let suffix = routes.length + 1;
+    while (routes.some((route) => route.name === candidate)) {
+      suffix += 1;
+      candidate = `route-${suffix}`;
+    }
+    base.name = candidate;
+    sheetRoute = base;
+    sheetMode = 'create';
+    serverError = null;
+    sheetOpen = true;
+  }
+
+  function openEdit(name: string) {
+    const route = routes.find((entry) => entry.name === name);
+    if (!route) return;
+    sheetRoute = route;
+    sheetMode = 'edit';
+    serverError = null;
+    sheetOpen = true;
+  }
+
+  // The URL owns which route is open, so the sheet follows it rather than the
+  // other way round (T303).
+  $effect(() => {
+    const name = selectedRouteName;
+    if (!name) {
+      if (sheetMode === 'edit' && sheetOpen) sheetOpen = false;
+      return;
+    }
+    if (routes.length === 0) return;
+    const route = routes.find((entry) => entry.name === name);
+    if (!route) return;
+    sheetRoute = route;
+    sheetMode = 'edit';
+    sheetOpen = true;
+  });
+
+  // Starts where the shell starts, so mounting never counts as a request.
+  let lastCreateRequest = $state(0);
+  $effect(() => {
+    if (createRequest !== lastCreateRequest) {
+      lastCreateRequest = createRequest;
+      openCreate();
+    }
+  });
+
+  function closeSheet() {
+    sheetOpen = false;
+    serverError = null;
+    if (selectedRouteName) onselect?.(null);
+  }
+
+  async function saveRoute(route: RouteConfig) {
+    saving = true;
+    serverError = null;
     try {
-      await createRoute(newRoute);
-      await refreshConfig();
+      if (sheetMode === 'create') {
+        await createRoute(route);
+        toast.success(`Route “${route.name}” created`);
+      } else {
+        const original = sheetRoute?.name ?? route.name;
+        await updateRoute(original, route);
+        toast.success(`Route “${route.name}” saved`);
+      }
+      sheetOpen = false;
+      if (selectedRouteName) onselect?.(null);
+      onchanged?.();
     } catch (err) {
-      errorMessage = (err as Error).message || 'Failed to duplicate route';
+      // Straight from the admin API; the sheet decides which field it belongs to.
+      serverError = err instanceof Error ? err.message : String(err);
     } finally {
-      isSaving = false;
+      saving = false;
     }
-  };
+  }
 
-  const handleCloseDetail = () => {
-    selectRoute(null);
-    clearError();
-  };
+  // --- row and bulk actions ------------------------------------------------
 
-  const handleDetailDelete = async (e: CustomEvent<number>) => {
-    await handleDeleteRoute(e.detail);
-  };
+  async function duplicate(name: string) {
+    const route = routes.find((entry) => entry.name === name);
+    if (!route || busy) return;
+    const copy = JSON.parse(JSON.stringify(route)) as RouteConfig;
+    let candidate = `${route.name}-copy`;
+    let n = 1;
+    while (routes.some((entry) => entry.name === candidate)) {
+      n += 1;
+      candidate = `${route.name}-copy-${n}`;
+    }
+    copy.name = candidate;
+    // Two default routes is a config the proxy refuses, so the copy is not one.
+    copy.is_default = false;
 
-  const handleDetailSave = async (e: CustomEvent<RouteConfig>) => {
-    if (isSaving) return;
-    const route = e.detail;
-    const originalName = routes[selectedRouteIndex ?? 0]?.name;
-    if (!originalName) return;
-
-    isSaving = true;
-    errorMessage = '';
+    busy = true;
     try {
-      await updateRoute(originalName, route);
-      selectRoute(null);
-      await refreshConfig();
+      await createRoute(copy);
+      toast.success(`Duplicated as “${candidate}”`);
+      onchanged?.();
     } catch (err) {
-      errorMessage = (err as Error).message || 'Failed to update route';
+      toast.error(err instanceof Error ? err.message : String(err));
     } finally {
-      isSaving = false;
+      busy = false;
     }
-  };
+  }
 
-  const handleNavigateServices = () => {
-    dispatch('navigate', 'services');
-  };
+  async function setEnabled(names: string[], enabled: boolean) {
+    if (busy || names.length === 0) return;
+    busy = true;
+    let changed = 0;
+    const failures: string[] = [];
 
-  // ---------------------------------------------------------------------------
-  // Create Modal Handlers
-  // ---------------------------------------------------------------------------
-
-  const handleOpenCreateModal = () => {
-    clearError();
-    showCreateModal = true;
-  };
-
-  const handleModalSave = async (e: CustomEvent<RouteConfig>) => {
-    showCreateModal = false;
-    const route = e.detail;
-    isSaving = true;
-    errorMessage = '';
-    try {
-      await createRoute(route);
-      await refreshConfig();
-    } catch (err) {
-      errorMessage = (err as Error).message || 'Failed to create route';
-    } finally {
-      isSaving = false;
+    for (const name of names) {
+      const route = routes.find((entry) => entry.name === name);
+      if (!route || route.enabled === enabled) continue;
+      try {
+        await updateRoute(name, { ...route, enabled });
+        changed += 1;
+      } catch (err) {
+        failures.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
-  };
 
-  const handleModalCancel = () => {
-    showCreateModal = false;
-  };
-
-  const goToPage = (page: number) => {
-    if (page >= 1 && page <= totalPages) {
-      currentPage = page;
+    busy = false;
+    if (changed > 0) {
+      toast.success(`${changed} route${changed === 1 ? '' : 's'} ${enabled ? 'enabled' : 'disabled'}`);
+      onchanged?.();
     }
-  };
+    for (const failure of failures) toast.error(failure);
+  }
 
-  const getPageNumbers = (): (number | '...')[] => {
-    const pages: (number | '...')[] = [];
-    if (totalPages <= 7) {
-      for (let i = 1; i <= totalPages; i++) pages.push(i);
-    } else {
-      pages.push(1);
-      if (currentPage > 3) pages.push('...');
-      const start = Math.max(2, currentPage - 1);
-      const end = Math.min(totalPages - 1, currentPage + 1);
-      for (let i = start; i <= end; i++) pages.push(i);
-      if (currentPage < totalPages - 2) pages.push('...');
-      pages.push(totalPages);
+  function askDelete(names: string[]) {
+    if (names.length === 0) return;
+    confirmTargets = names;
+    confirmOpen = true;
+  }
+
+  async function confirmDelete() {
+    if (busy) return;
+    busy = true;
+    const failures: string[] = [];
+    let removed = 0;
+
+    for (const name of confirmTargets) {
+      try {
+        await deleteRoute(name);
+        removed += 1;
+      } catch (err) {
+        failures.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
-    return pages;
-  };
+
+    busy = false;
+    confirmOpen = false;
+    selection = new Set();
+    if (removed > 0) {
+      toast.success(`${removed} route${removed === 1 ? '' : 's'} deleted`);
+      if (selectedRouteName && confirmTargets.includes(selectedRouteName)) onselect?.(null);
+      onchanged?.();
+    }
+    for (const failure of failures) toast.error(failure);
+    confirmTargets = [];
+  }
+
+  function openTesterFor(insight: RouteInsight) {
+    testerHost = insight.route.host || '';
+    testerPath = insight.route.path_prefix;
+    testerOpen = true;
+  }
 </script>
 
-<AppLayout title="Routes" subtitle="Manage routing rules that match requests to services">
-  <svelte:fragment slot="header-actions">
-    <button
-      class="rounded-md border border-border bg-muted px-3 py-1.5 text-xs font-semibold text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
-      disabled={isRefreshing || isSaving}
-      on:click={refreshConfig}
-      title="Refresh from server"
-    >
-      {isRefreshing ? '⟳' : '↻'} Refresh
-    </button>
-    <button
-      class="rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
-      disabled={isSaving}
-      on:click={handleOpenCreateModal}
-    >
-      + Add Route
-    </button>
-    <button
-      class="rounded-md border border-success/40 bg-success/10 px-3 py-1.5 text-xs font-semibold text-success transition-colors hover:bg-success/20 disabled:cursor-not-allowed disabled:opacity-60"
-      disabled={healthLoading || isSaving}
-      on:click={() => dispatch('refreshHealth')}
-    >
-      {healthLoading ? 'Checking...' : '↻ Check Health'}
-    </button>
-  </svelte:fragment>
+<div class="flex h-full min-h-0 flex-col">
+  <header
+    class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-6"
+  >
+    <div class="min-w-0">
+      <h1 class="truncate text-xl font-semibold">Routes</h1>
+      <p class="mt-0.5 text-sm text-muted-foreground">
+        {routes.length} route{routes.length === 1 ? '' : 's'}, matched most specific first
+        {#if withWarnings > 0}
+          · <span class="text-warning-emphasis">{withWarnings} need attention</span>
+        {/if}
+      </p>
+    </div>
 
-  <div class="p-6">
-    {#if isDetailView && selectedRoute}
-      <!-- Detail View -->
-      <div class="mx-auto max-w-4xl">
-        <RouteDetailPanel
-          route={selectedRoute}
-          routeIndex={selectedRouteIndex ?? 0}
-          mode={detailMode}
-          services={services}
-          saving={isSaving}
-          errorMessage={errorMessage}
-          on:close={handleCloseDetail}
-          on:deleteRoute={handleDetailDelete}
-          on:save={handleDetailSave}
-        />
-      </div>
-    {:else}
-      <!-- List View -->
-      <div class="space-y-4">
-        <!-- Search Bar -->
-        <div class="flex items-center gap-4">
-          <div class="relative flex-1">
-            <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">⌕</span>
-            <input
-              type="text"
-              class="w-full rounded-lg border border-border bg-card py-2.5 pl-9 pr-4 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
-              placeholder="Search by name, host, path, service, or method..."
-              value={searchQuery}
-              on:input={handleSearch}
-            />
+    <div class="flex shrink-0 flex-wrap items-center gap-2">
+      <Button variant="outline" size="sm" onclick={() => (testerOpen = !testerOpen)}>
+        <FlaskConicalIcon aria-hidden="true" />
+        <span class="hidden sm:inline">Test a request</span>
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={healthLoading}
+        onclick={() => onrefreshHealth?.()}
+      >
+        <ActivityIcon aria-hidden="true" class={healthLoading ? 'animate-spin' : ''} />
+        <span class="hidden sm:inline">{healthLoading ? 'Checking...' : 'Check health'}</span>
+      </Button>
+      <Button variant="outline" size="sm" onclick={() => onchanged?.()}>
+        <RefreshCwIcon aria-hidden="true" />
+        <span class="hidden sm:inline">Reload</span>
+      </Button>
+      <Button size="sm" onclick={openCreate}>
+        <PlusIcon aria-hidden="true" />
+        Add route
+      </Button>
+    </div>
+  </header>
+
+  <div class="min-h-0 flex-1 overflow-y-auto">
+    <div class="grid gap-4 p-4 sm:p-6">
+      {#if testerOpen}
+        <section class="rounded-xl border border-border bg-card p-4">
+          <div class="mb-3 flex items-center justify-between gap-2">
+            <div>
+              <h2 class="text-sm font-semibold">Route tester</h2>
+              <p class="text-xs text-muted-foreground">
+                Runs through the proxy's own matcher, against the config it is serving right now.
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" onclick={() => (testerOpen = false)}>Close</Button>
           </div>
-          <div class="flex items-center gap-2 text-sm text-muted-foreground">
-            <span class="rounded-lg border border-border bg-muted/60 px-3 py-2 tabular-nums">
-              {filteredRoutes.length} route{filteredRoutes.length !== 1 ? 's' : ''}
-            </span>
-          </div>
+          <RouteTester
+            bind:host={testerHost}
+            bind:path={testerPath}
+            onopenRoute={(name) => onselect?.(name)}
+          />
+        </section>
+      {/if}
+
+      {#if healthError}
+        <p class="text-sm text-destructive-emphasis">{healthError}</p>
+      {/if}
+
+      <!-- Filters --------------------------------------------------------- -->
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="relative min-w-0 flex-1 sm:max-w-xs">
+          <SearchIcon
+            class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            class="pl-8"
+            placeholder="Search name, host, path, service"
+            aria-label="Search routes"
+            bind:value={query}
+          />
         </div>
 
-        <!-- Health Error Banner -->
-        {#if healthError}
-          <div class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive">
-            <span class="mr-2">⚠</span>
-            Health check failed: {healthError}
-          </div>
-        {/if}
+        <Select.Root type="single" bind:value={serviceFilter}>
+          <Select.Trigger size="sm" class="w-40" aria-label="Filter by service">
+            {serviceFilter === 'all' ? 'All services' : serviceFilter}
+          </Select.Trigger>
+          <Select.Content>
+            <Select.Item value="all" label="All services" />
+            {#each services as service (service.name)}
+              <Select.Item value={service.name} label={service.name} />
+            {/each}
+          </Select.Content>
+        </Select.Root>
 
-        {#if errorMessage}
-          <div class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive">
-            <span class="mr-2">⚠</span>
-            {errorMessage}
-            <button
-              class="ml-2 rounded border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-xs text-destructive transition-colors hover:bg-destructive/20"
-              on:click={clearError}
+        <Select.Root type="single" bind:value={statusFilter}>
+          <Select.Trigger size="sm" class="w-40" aria-label="Filter by status">
+            {statusFilter === 'all' ? 'Any status' : statusFilter}
+          </Select.Trigger>
+          <Select.Content>
+            <Select.Item value="all" label="Any status" />
+            <Select.Item value="healthy" label="Healthy" />
+            <Select.Item value="degraded" label="Degraded" />
+            <Select.Item value="down" label="Down" />
+            <Select.Item value="disabled" label="Disabled" />
+            <Select.Item value="warnings" label="Has warnings" />
+          </Select.Content>
+        </Select.Root>
+
+        <span class="ml-auto text-xs text-muted-foreground" data-testid="result-count">
+          {sorted.length} of {routes.length}
+        </span>
+      </div>
+
+      <!-- Bulk actions ---------------------------------------------------- -->
+      {#if selection.size > 0}
+        <div
+          class="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-accent/50 px-3 py-2"
+        >
+          <span class="text-sm font-medium">{selection.size} selected</span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onclick={() => setEnabled([...selection], true)}
+          >
+            <EyeIcon aria-hidden="true" />
+            Enable
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onclick={() => setEnabled([...selection], false)}
+          >
+            <EyeOffIcon aria-hidden="true" />
+            Disable
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={busy}
+            onclick={() => askDelete([...selection])}
+          >
+            <Trash2Icon aria-hidden="true" />
+            Delete
+          </Button>
+          <Button variant="ghost" size="sm" onclick={() => (selection = new Set())}>Clear</Button>
+        </div>
+      {/if}
+
+      <!-- Table ----------------------------------------------------------- -->
+      {#if routes.length === 0}
+        <EmptyState
+          icon={RouteIcon}
+          title="No routes yet"
+          description="A route decides which requests reach which service. Add one to start sending traffic."
+        >
+          {#snippet action()}
+            <Button size="sm" onclick={openCreate}>
+              <PlusIcon aria-hidden="true" />
+              Add route
+            </Button>
+          {/snippet}
+        </EmptyState>
+      {:else if sorted.length === 0}
+        <EmptyState
+          icon={SearchIcon}
+          title="Nothing matches those filters"
+          description="Try a different search, or clear the service and status filters."
+        >
+          {#snippet action()}
+            <Button
+              size="sm"
+              variant="outline"
+              onclick={() => {
+                query = '';
+                serviceFilter = 'all';
+                statusFilter = 'all';
+              }}
             >
-              Dismiss
-            </button>
-          </div>
-        {/if}
-
-        <!-- Routes Table -->
-        <div class="overflow-hidden rounded-xl border border-border bg-background/70">
-          {#if filteredRoutes.length === 0}
-            <!-- Empty State -->
-            <div class="flex flex-col items-center justify-center px-6 py-20">
-              <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-border bg-muted/60">
-                <span class="text-3xl text-muted-foreground">⇌</span>
-              </div>
-              {#if searchQuery}
-                <h3 class="text-base font-semibold text-foreground/80">No routes match your search</h3>
-                <p class="mt-1 text-sm text-muted-foreground">
-                  Try adjusting your search terms or
-                  <button
-                    class="ml-1 text-primary transition-colors hover:text-primary"
-                    on:click={() => (searchQuery = '')}
-                  >
-                    clear the filter
-                  </button>
-                </p>
-              {:else}
-                <h3 class="text-base font-semibold text-foreground/80">No routes configured</h3>
-                <p class="mt-1 text-sm text-muted-foreground">
-                  Get started by adding your first route.
-                </p>
-                <button
-                  class="mt-4 inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={isSaving}
-                  on:click={handleOpenCreateModal}
-                >
-                  <span>+</span>
-                  Add Route
-                </button>
-              {/if}
-            </div>
-          {:else}
-            <div class="overflow-x-auto">
-              <table class="min-w-full divide-y divide-border text-sm">
-                <thead class="bg-card text-foreground/80">
-                  <tr>
-                    <th class="px-4 py-3 text-left font-semibold">Name</th>
-                    <th class="px-4 py-3 text-left font-semibold">Service</th>
-                    <th class="px-4 py-3 text-left font-semibold">Host</th>
-                    <th class="px-4 py-3 text-left font-semibold">Path</th>
-                    <th class="px-4 py-3 text-left font-semibold">Methods</th>
-                    <th class="px-4 py-3 text-right font-semibold">Actions</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-border">
-                  {#each paginatedRoutes as { route, index } (index)}
-                    <tr
-                      class={rowClass(index)}
-                      on:click={() => handleRowClick(index)}
-                      on:keydown={(e) => e.key === 'Enter' && handleRowClick(index)}
-                      role="button"
-                      tabindex="0"
+              Clear filters
+            </Button>
+          {/snippet}
+        </EmptyState>
+      {:else}
+        <div class="rounded-xl border border-border bg-card">
+          <Table.Root>
+            <Table.Header>
+              <Table.Row>
+                <Table.Head class="w-10">
+                  <Checkbox
+                    checked={allVisibleSelected}
+                    aria-label="Select every route on this page"
+                    onCheckedChange={(checked) => toggleAllVisible(checked)}
+                  />
+                </Table.Head>
+                {#each [['name', 'Name'], ['host', 'Host'], ['path', 'Path prefix'], ['service', 'Service'], ['priority', 'Precedence']] as [key, label] (key)}
+                  <Table.Head>
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-1 rounded-sm hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                      onclick={() => toggleSort(key as SortKey)}
+                      aria-label={`Sort by ${label}`}
                     >
-                      <!-- Name with health dot and default badge -->
-                      <td class="px-4 py-3">
-                        <div class="flex items-center gap-2">
-                          <span
-                            class={healthDotClass(routeHealthStatus(index))}
-                            title={healthTooltip(index)}
-                          ></span>
-                          <span class="font-medium text-foreground">{route.name}</span>
-                          {#if route.is_default}
-                            <span class="rounded-full border border-success/40 bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success">
-                              default
-                            </span>
-                          {/if}
-                        </div>
-                      </td>
+                      {label}
+                      <ArrowUpDownIcon
+                        class={cn('size-3', sortKey === key ? 'opacity-100' : 'opacity-40')}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  </Table.Head>
+                {/each}
+                <Table.Head>Status</Table.Head>
+                <Table.Head class="w-10"><span class="sr-only">Actions</span></Table.Head>
+              </Table.Row>
+            </Table.Header>
 
-                      <!-- Service -->
-                      <td class="px-4 py-3">
-                        {#if serviceExists(route.service)}
-                          <button
-                            class="rounded-lg border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
-                            on:click|stopPropagation={handleNavigateServices}
-                            title="View in Services"
-                          >
-                            {route.service}
-                          </button>
-                        {:else}
-                          <span
-                            class="rounded-lg border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive"
-                            title="Service not found"
-                          >
-                            {route.service || '—'}
-                          </span>
-                        {/if}
-                      </td>
+            <Table.Body>
+              {#each visible as insight (insight.route.name)}
+                {@const route = insight.route}
+                {@const warning = insight.warnings.find((entry) => entry.kind !== 'disabled')}
+                <Table.Row
+                  class={cn(
+                    'cursor-pointer',
+                    !route.enabled && 'opacity-60',
+                    selectedRouteName === route.name && 'bg-accent/60'
+                  )}
+                  data-route={route.name}
+                  onclick={() => onselect?.(route.name)}
+                >
+                  <Table.Cell onclick={(event: MouseEvent) => event.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      class="size-4 accent-primary"
+                      checked={selection.has(route.name)}
+                      aria-label={`Select ${route.name}`}
+                      onchange={(event) =>
+                        toggleSelection(route.name, event.currentTarget.checked)}
+                    />
+                  </Table.Cell>
 
-                      <!-- Host -->
-                      <td class="px-4 py-3 text-foreground/80">
-                        {#if route.host}
-                          {route.host}
-                        {:else}
-                          <span class="text-muted-foreground/70">—</span>
-                        {/if}
-                      </td>
-
-                      <!-- Path -->
-                      <td class="px-4 py-3">
-                        <code class="rounded bg-muted/80 px-1.5 py-0.5 text-xs font-mono text-foreground/80">
-                          {route.path_prefix}
-                        </code>
-                      </td>
-
-                      <!-- Methods -->
-                      <td class="px-4 py-3">
-                        {#if route.methods.length === 0}
-                          <span class="text-xs text-muted-foreground">All</span>
-                        {:else}
-                          <div class="flex flex-wrap gap-1">
-                            {#each route.methods as method}
-                              <span class="rounded border px-1.5 py-0.5 text-[10px] font-semibold {methodBadgeColor(method)}">
-                                {method}
-                              </span>
-                            {/each}
-                          </div>
-                        {/if}
-                      </td>
-
-                      <!-- Actions -->
-                      <td class="px-4 py-3">
-                        <div class="flex items-center justify-end gap-1.5">
-                          <button
-                            class="rounded-md border border-border bg-card px-2 py-1 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={isSaving}
-                            on:click|stopPropagation={() => handleViewRoute(index)}
-                            title="View route"
-                          >
-                            View
-                          </button>
-                          <button
-                            class="rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={isSaving}
-                            on:click|stopPropagation={() => handleEditRoute(index)}
-                            title="Edit route"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            class="rounded-md border border-border bg-card px-2 py-1 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={isSaving}
-                            on:click|stopPropagation={() => handleDuplicateRoute(index)}
-                            title="Duplicate route"
-                          >
-                            Dup
-                          </button>
-                          <button
-                            class="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20 disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={isSaving}
-                            on:click|stopPropagation={() => handleDeleteRoute(index)}
-                            title="Delete route"
-                          >
-                            Del
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-
-            <!-- Pagination -->
-            {#if totalPages > 1}
-              <div class="flex items-center justify-between border-t border-border bg-card/50 px-4 py-3">
-                <p class="text-xs text-muted-foreground">
-                  Showing {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, filteredRoutes.length)} of {filteredRoutes.length}
-                </p>
-                <div class="flex items-center gap-1">
-                  <button
-                    class="rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                    disabled={currentPage === 1}
-                    on:click={() => goToPage(currentPage - 1)}
-                  >
-                    ←
-                  </button>
-                  {#each getPageNumbers() as page}
-                    {#if page === '...'}
-                      <span class="px-1 text-xs text-muted-foreground">…</span>
-                    {:else}
+                  <Table.Cell>
+                    <div class="flex items-center gap-1.5">
+                      <!-- The row is clickable for the mouse, but the name is
+                           the focusable control: a keyboard has to be able to
+                           open a route without a pointer. -->
                       <button
-                        class={pageBtnClass(page)}
-                        on:click={() => goToPage(page)}
+                        type="button"
+                        class="rounded-sm font-medium hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                        onclick={(event: MouseEvent) => {
+                          event.stopPropagation();
+                          onselect?.(route.name);
+                        }}
                       >
-                        {page}
+                        {route.name}
                       </button>
+                      {#if route.is_default}
+                        <Badge variant="outline">default</Badge>
+                      {/if}
+                      {#if !route.enabled}
+                        <Badge variant="secondary">disabled</Badge>
+                      {/if}
+                      {#if warning}
+                        <Tooltip.Root>
+                          <Tooltip.Trigger class="rounded-sm focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">
+                            <TriangleAlertIcon
+                              class="size-4 text-warning-emphasis"
+                              aria-label="This route has a warning"
+                            />
+                          </Tooltip.Trigger>
+                          <Tooltip.Content class="max-w-xs">{warning.message}</Tooltip.Content>
+                        </Tooltip.Root>
+                      {/if}
+                    </div>
+                  </Table.Cell>
+
+                  <Table.Cell class="font-mono text-xs">
+                    {#if route.host}
+                      {route.host}
+                    {:else}
+                      <span class="text-muted-foreground">any</span>
                     {/if}
-                  {/each}
-                  <button
-                    class="rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                    disabled={currentPage === totalPages}
-                    on:click={() => goToPage(currentPage + 1)}
-                  >
-                    →
-                  </button>
-                </div>
-              </div>
-            {/if}
-          {/if}
+                  </Table.Cell>
+                  <Table.Cell class="font-mono text-xs">{route.path_prefix}</Table.Cell>
+                  <Table.Cell>
+                    <!-- A plain button, not the Button component: this one is
+                         drawn once per row and the table is redrawn on every
+                         keystroke. -->
+                    <button
+                      type="button"
+                      class="rounded-sm text-primary underline-offset-4 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                      onclick={(event: MouseEvent) => {
+                        event.stopPropagation();
+                        onnavigate?.('services');
+                      }}
+                    >
+                      {route.service}
+                    </button>
+                  </Table.Cell>
+
+                  <Table.Cell>
+                    <span
+                      class="text-xs text-muted-foreground"
+                      title={`Exact host beats wildcard beats any host; inside one host the longest path prefix wins; ties go to whichever route comes first in the config. This one is #${insight.index + 1}.`}
+                    >
+                      {tierLabel[insight.tier]}
+                      {#if route.methods.length > 0}
+                        · {route.methods.join(', ')}
+                      {/if}
+                    </span>
+                  </Table.Cell>
+
+                  <Table.Cell>
+                    <StatusDot
+                      status={healthStatus(insight.index)}
+                      reason={healthReason(insight.index)}
+                      tooltip={false}
+                    />
+                  </Table.Cell>
+
+                  <Table.Cell onclick={(event: MouseEvent) => event.stopPropagation()}>
+                    {#if openMenuFor !== route.name}
+                      <!-- The menu is mounted only for the row being acted on.
+                           A dropdown per row is the single most expensive thing
+                           in this table, and the table is rebuilt on every
+                           keystroke in the search box. -->
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Actions for ${route.name}`}
+                        onclick={() => (openMenuFor = route.name)}
+                      >
+                        <MoreHorizontalIcon aria-hidden="true" />
+                      </Button>
+                    {:else}
+                    <DropdownMenu.Root
+                      open
+                      onOpenChange={(open) => {
+                        if (!open) openMenuFor = null;
+                      }}
+                    >
+                      <DropdownMenu.Trigger>
+                        {#snippet child({ props }: { props: Record<string, unknown> })}
+                          <Button
+                            {...props}
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Actions for ${route.name}`}
+                          >
+                            <MoreHorizontalIcon aria-hidden="true" />
+                          </Button>
+                        {/snippet}
+                      </DropdownMenu.Trigger>
+                      <DropdownMenu.Content align="end" class="w-48">
+                        <DropdownMenu.Group>
+                          <DropdownMenu.Item onSelect={() => onselect?.(route.name)}>
+                            Edit
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item onSelect={() => openTesterFor(insight)}>
+                            <FlaskConicalIcon aria-hidden="true" />
+                            Test this route
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item onSelect={() => duplicate(route.name)}>
+                            <CopyIcon aria-hidden="true" />
+                            Duplicate
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            onSelect={() => setEnabled([route.name], !route.enabled)}
+                          >
+                            {#if route.enabled}
+                              <EyeOffIcon aria-hidden="true" />
+                              Disable
+                            {:else}
+                              <EyeIcon aria-hidden="true" />
+                              Enable
+                            {/if}
+                          </DropdownMenu.Item>
+                        </DropdownMenu.Group>
+                        <DropdownMenu.Separator />
+                        <DropdownMenu.Item
+                          variant="destructive"
+                          onSelect={() => askDelete([route.name])}
+                        >
+                          <Trash2Icon aria-hidden="true" />
+                          Delete
+                        </DropdownMenu.Item>
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Root>
+                    {/if}
+                  </Table.Cell>
+                </Table.Row>
+              {/each}
+            </Table.Body>
+          </Table.Root>
         </div>
 
-        <!-- Table Footer Info -->
-        {#if routes.length > 0 && filteredRoutes.length === 0 && searchQuery}
-          <div class="text-center text-sm text-muted-foreground">
-            No results found for "<span class="text-muted-foreground">{searchQuery}</span>"
+        <!-- Pagination ---------------------------------------------------- -->
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Rows per page</span>
+            <Select.Root
+              type="single"
+              value={String(pageSize)}
+              onValueChange={(value) => {
+                pageSize = Number(value);
+                page = 1;
+              }}
+            >
+              <Select.Trigger size="sm" class="w-20" aria-label="Rows per page">
+                {pageSize}
+              </Select.Trigger>
+              <Select.Content>
+                {#each [10, 25, 50, 100] as size (size)}
+                  <Select.Item value={String(size)} label={String(size)} />
+                {/each}
+              </Select.Content>
+            </Select.Root>
           </div>
-        {/if}
-      </div>
-    {/if}
-  </div>
-</AppLayout>
 
-{#if showCreateModal}
-  <RouteFormModal
-    route={null}
-    existingNames={routes.map((r) => r.name)}
-    services={services}
-    on:save={handleModalSave}
-    on:cancel={handleModalCancel}
-  />
-{/if}
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-muted-foreground">
+              Page {currentPage} of {pageCount}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage <= 1}
+              onclick={() => (page = currentPage - 1)}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage >= pageCount}
+              onclick={() => (page = currentPage + 1)}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      {/if}
+    </div>
+  </div>
+</div>
+
+<RouteSheet
+  bind:open={sheetOpen}
+  route={sheetRoute}
+  mode={sheetMode}
+  {routes}
+  {services}
+  {saving}
+  {serverError}
+  onsave={saveRoute}
+  oncancel={closeSheet}
+  oncreateService={() => onnavigate?.('services')}
+/>
+
+<ConfirmDialog
+  bind:open={confirmOpen}
+  variant="destructive"
+  title={confirmTargets.length === 1
+    ? `Delete “${confirmTargets[0]}”?`
+    : `Delete ${confirmTargets.length} routes?`}
+  description="Traffic that matched them starts falling through to the next route, or to the fallback."
+  confirmLabel="Delete"
+  pending={busy}
+  onconfirm={confirmDelete}
+  oncancel={() => (confirmTargets = [])}
+/>

@@ -71,11 +71,18 @@
     reason,
     /** Show the status word next to the dot rather than only to screen readers. */
     showLabel = false,
+    /**
+     * A tooltip costs a floating-layer provider per instance, which adds up in
+     * a table of hundreds of rows. `false` keeps the glyph, the word and the
+     * reason, and hands the reason to the browser's own tooltip instead.
+     */
+    tooltip = true,
     class: className
   }: {
     status?: UpstreamStatus;
     reason?: string;
     showLabel?: boolean;
+    tooltip?: boolean;
     class?: string;
   } = $props();
 
@@ -96,28 +103,43 @@
   const spoken = $derived(reason ? `${meta.label}: ${reason}` : meta.label);
 </script>
 
-<Tooltip.Root>
-  <Tooltip.Trigger
+{#snippet marker()}
+  <!-- The glyph differs per status, not just its colour: a check, a warning
+       triangle, a cross, a struck-through bolt. -->
+  <Icon class={cn('size-4 shrink-0', meta.icon)} aria-hidden="true" />
+  {#if showLabel}
+    <span aria-hidden="true">{meta.label}</span>
+  {/if}
+  <span class="sr-only">{spoken}</span>
+{/snippet}
+
+{#if tooltip}
+  <Tooltip.Root>
+    <Tooltip.Trigger
+      data-slot="status-dot"
+      data-status={status}
+      class={cn(
+        'inline-flex cursor-default items-center gap-1.5 rounded-sm text-xs font-medium focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
+        meta.text,
+        className
+      )}
+    >
+      {@render marker()}
+    </Tooltip.Trigger>
+    <Tooltip.Content>
+      <span class="flex items-center gap-1.5">
+        <Icon class="size-3.5" aria-hidden="true" />
+        <span>{spoken}</span>
+      </span>
+    </Tooltip.Content>
+  </Tooltip.Root>
+{:else}
+  <span
     data-slot="status-dot"
     data-status={status}
-    class={cn(
-      'inline-flex cursor-default items-center gap-1.5 rounded-sm text-xs font-medium focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
-      meta.text,
-      className
-    )}
+    title={spoken}
+    class={cn('inline-flex items-center gap-1.5 text-xs font-medium', meta.text, className)}
   >
-    <!-- The glyph differs per status, not just its colour: a check, a warning
-         triangle, a cross, a struck-through bolt. -->
-    <Icon class={cn('size-4 shrink-0', meta.icon)} aria-hidden="true" />
-    {#if showLabel}
-      <span aria-hidden="true">{meta.label}</span>
-    {/if}
-    <span class="sr-only">{spoken}</span>
-  </Tooltip.Trigger>
-  <Tooltip.Content>
-    <span class="flex items-center gap-1.5">
-      <Icon class="size-3.5" aria-hidden="true" />
-      <span>{spoken}</span>
-    </span>
-  </Tooltip.Content>
-</Tooltip.Root>
+    {@render marker()}
+  </span>
+{/if}

@@ -4,6 +4,7 @@ import type { PrxConfig, ServiceConfig, RouteConfig } from '../types/config';
 
 const ADMIN_CONFIG_ENDPOINT = '/web/config';
 const ADMIN_ROUTE_HEALTH_ENDPOINT = '/web/health/routes';
+const ADMIN_ROUTE_TEST_ENDPOINT = '/web/routes/test';
 const ADMIN_SERVICES_ENDPOINT = '/admin/services';
 const ADMIN_ROUTES_ENDPOINT = '/admin/routes';
 const REQUEST_TIMEOUT_MS = 10000;
@@ -291,4 +292,66 @@ export const getRoute = async (name: string): Promise<RouteConfig> => {
   }
 
   return (await response.json()) as RouteConfig;
+};
+
+// Route tester (T304). The server runs the request through the same matcher
+// the proxy uses, so the answer cannot drift from live traffic.
+
+export interface RouteTestRequest {
+  method: string;
+  host: string;
+  path: string;
+}
+
+export interface RouteTestUpstream {
+  addr: string;
+  weight: number;
+  available: boolean;
+  circuit_open: boolean;
+  probe_healthy: boolean;
+  inflight: number;
+  ewma_us: number;
+}
+
+export interface RouteTestResponse {
+  outcome: 'matched' | 'method_not_allowed' | 'not_found';
+  request: {
+    method: string;
+    host: string;
+    normalized_host: string;
+    path: string;
+  };
+  route: {
+    index: number;
+    name: string;
+    host: string;
+    path_prefix: string;
+    methods: string[];
+    is_default: boolean;
+    enabled: boolean;
+    matched_by: 'exact_host' | 'wildcard_host' | 'any_host' | 'default_route';
+  } | null;
+  service: {
+    name: string;
+    lb: string;
+    selection: { deterministic: boolean; would_pick: string | null; note: string };
+    upstreams: RouteTestUpstream[];
+  } | null;
+}
+
+export const testRoute = async (request: RouteTestRequest): Promise<RouteTestResponse> => {
+  const response = await fetchWithTimeout(ADMIN_ROUTE_TEST_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify(request)
+  });
+
+  if (!response.ok) {
+    throw await buildHttpError('test_route', response);
+  }
+
+  return (await response.json()) as RouteTestResponse;
 };

@@ -158,9 +158,10 @@ check(
 await page.reload({ waitUntil: 'networkidle' });
 await settle();
 check(new URL(page.url()).pathname === '/routes/route-42', 'the route survives a refresh');
+const routeSheet = page.locator('[data-slot="sheet-content"]');
 check(
-  (await page.getByRole('button', { name: 'Back to Routes' }).count()) > 0 &&
-    (await page.locator('input').first().inputValue()) === 'route-42',
+  (await routeSheet.isVisible()) &&
+    (await routeSheet.getByLabel('Name').first().inputValue()) === 'route-42',
   'the refreshed page still shows the route detail'
 );
 
@@ -208,6 +209,10 @@ check((await hostHit.count()) > 0, 'the palette finds a route by its host');
 await hostHit.first().click();
 await settle();
 check(new URL(page.url()).pathname === '/routes/route-321', 'the palette navigates to the route');
+
+// A route opens in a modal sheet, which would swallow the clicks below.
+await page.goto(ORIGIN, { waitUntil: 'networkidle' });
+await settle();
 
 // --- 2b. the topbar menus --------------------------------------------------
 // Menus are built from context that only exists once they open, so a wrong
@@ -263,12 +268,14 @@ for (let i = 0; i < 40 && !openedDetail; i += 1) {
 check(openedDetail, 'a route opens from the keyboard');
 
 if (openedDetail) {
-  // And the detail form takes typing — the end of "open the app, edit a route".
-  const nameField = page.locator('input[type="text"]').first();
+  // And the form takes typing — the end of "open the app, edit a route".
+  const nameField = page.locator('[data-slot="sheet-content"]').getByLabel('Name').first();
   await nameField.focus();
   await page.keyboard.press('End');
   await page.keyboard.type('-edited');
   check((await nameField.inputValue()).endsWith('-edited'), 'the route form accepts typing');
+  await page.keyboard.press('Escape');
+  await settle();
 }
 
 // --- 4. 375px --------------------------------------------------------------

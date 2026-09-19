@@ -70,9 +70,11 @@ try {
     await page.goto(deepLink, { waitUntil: 'networkidle' });
     await page.waitForTimeout(400);
     if (page.url() !== deepLink) problems.push(`reloading ${deepLink} redirected to ${page.url()}`);
-    if ((await page.getByRole('button', { name: 'Back to Routes' }).count()) !== 1) {
+    if (!(await page.locator('[data-slot="sheet-content"]').isVisible())) {
       problems.push(`reloading ${deepLink} did not reopen the route`);
     }
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
   }
 
   // Opening and dismissing a modal covers the event plumbing (dispatch,
@@ -123,6 +125,54 @@ try {
   if (stored === 'dark' && !afterReload.dark) problems.push('stored dark theme was not applied on load');
   if (stored === 'light' && afterReload.dark) problems.push('stored light theme was not applied on load');
 
+  // The TOML this UI would write has to be a config the proxy accepts, and it
+  // has to still contain the parts of a route the forms never show. This is the
+  // one place that can be checked end to end: the page renders the TOML, the
+  // real server parses it.
+  await navLink('/settings').click();
+  await page.waitForTimeout(400);
+  // The preview lives behind the TOML tab of the settings page.
+  await page.getByRole('button', { name: /TOML Config/ }).click();
+  await page.waitForTimeout(400);
+  const toml = (await page.locator('pre').first().innerText()).trim();
+  if (!toml.includes('[[route]]')) {
+    problems.push('the settings page did not render a TOML preview');
+  } else {
+    const roundTrip = await page.evaluate(async (body) => {
+      const before = await (await fetch('/web/config?format=json')).json();
+      const put = await fetch('/web/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body
+      });
+      const status = put.status;
+      const detail = (await put.text()).trim();
+      const after = await (await fetch('/web/config?format=json')).json();
+      return { status, detail, before, after };
+    }, toml);
+
+    if (roundTrip.status !== 200) {
+      problems.push(`the proxy rejected the UI's own TOML (${roundTrip.status}): ${roundTrip.detail}`);
+    }
+    if (roundTrip.before.routes.length !== roundTrip.after.routes.length) {
+      problems.push('saving the UI\'s TOML changed how many routes exist');
+    }
+    for (const route of roundTrip.before.routes) {
+      const same = roundTrip.after.routes.find((entry) => entry.name === route.name);
+      if (!same) {
+        problems.push(`route ${route.name} disappeared after saving the UI's TOML`);
+        continue;
+      }
+      if (route.rate_limit?.enabled !== same.rate_limit?.enabled) {
+        problems.push(`route ${route.name} lost its rate limit after saving the UI's TOML`);
+      }
+      const hadHeaders = JSON.stringify(route.request_headers ?? {});
+      if (hadHeaders !== JSON.stringify(same.request_headers ?? {})) {
+        problems.push(`route ${route.name} lost its header rules after saving the UI's TOML`);
+      }
+    }
+  }
+
   // Fonts must come from the binary, never a CDN.
   const fontRequests = await page.evaluate(() =>
     performance.getEntriesByType('resource').filter((r) => r.name.includes('.woff')).map((r) => r.name)
@@ -146,6 +196,6 @@ if (problems.length) {
 }
 console.log(
   `smoke passed against ${base}: 4 pages with real URLs, a deep link through the server, ` +
-    'modal open/close, command palette, theme menu + persistence, self-hosted fonts, ' +
-    'no console errors, no external requests'
+    'modal open/close, command palette, theme menu + persistence, a TOML round trip ' +
+    'through the server, self-hosted fonts, no console errors, no external requests'
 );

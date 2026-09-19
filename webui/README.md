@@ -17,6 +17,7 @@ npm run build          # vite build + ตรวจ bundle budget
 npm run check          # svelte-check + ตรวจ contrast ของ token
 npm run styleguide     # เปิดหน้ารวม component ทั้งหมด (dev เท่านั้น)
 npm run shell:check    # ขับ app shell ใน Chromium: deep link / keyboard / 375px / palette
+npm run routes:check   # ขับหน้า Routes: search budget / คำเตือน / ฟอร์ม / bulk / tester
 npm run styleguide:check  # วัด contrast จากหน้าที่ render จริง
 npm run smoke          # ขับ UI ที่ฝังใน binary จริง (ต้องมี prx รันอยู่)
 ```
@@ -87,6 +88,61 @@ npm run smoke          # ขับ UI ที่ฝังใน binary จริ�
 | `Esc` | ปิด dialog, drawer, palette |
 
 `npm run shell:check` ยืนยันว่าเดินจากหน้าเปล่าไปถึงพิมพ์แก้ route ได้ด้วยคีย์บอร์ดล้วน
+
+---
+
+# หน้า Routes
+
+## ตาราง
+
+ค้นหาจากชื่อ/host/path/service (haystack ถูก lowercase ไว้ล่วงหน้าตอน analyze ไม่ใช่ทุก keystroke),
+filter ตาม service และสถานะ, เรียงได้ทุกคอลัมน์, แบ่งหน้า 25 แถว (เลือก 10/50/100 ได้)
+
+**งบเวลา:** พิมพ์ค้นหาที่ 500 routes ต้องตอบสนองใน < 50 ms
+`npm run routes:check` วัดจาก build จริง (ไม่ใช่ dev server ซึ่งช้ากว่าเพราะ dev check ของ Svelte)
+ตอนนี้อยู่ที่ ~32 ms
+
+สิ่งที่ทำให้อยู่ในงบ: ต้นทุนเกือบทั้งหมดคือการวาดแถว ไม่ใช่การกรอง
+จึงตัด component ที่แพงออกจากแถว — checkbox ใช้ native, ลิงก์ service เป็น `<button>` ธรรมดา,
+`StatusDot` ในตารางใช้ `tooltip={false}` (ไม่งั้นได้ floating-layer provider ต่อแถว)
+และเมนู action ของแถวจะ mount เฉพาะแถวที่กดเปิด
+
+## ลำดับการ match และคำเตือน
+
+คอลัมน์ Precedence บอกว่า route นั้นชนะด้วยกติกาข้อไหน (exact host > wildcard > any host)
+ส่วน `src/lib/routeAnalysis.ts` หา route ที่ **ไม่มีวันถูก match**: host+path_prefix ซ้ำกับ route
+ที่อยู่เหนือกว่าและ method ครอบคลุมกัน — ขึ้นไอคอนเตือนในตารางพร้อมบอกว่าใครบัง
+
+ไฟล์นี้เป็นการเขียนกติกาของ `src/router.rs` ซ้ำอีกรอบ ซึ่งเป็นสิ่งที่ต้องระวัง
+จึงจำกัดไว้แค่การอ่านตารางแบบ static ส่วนคำตอบที่ผู้ใช้จะเอาไปตัดสินใจจริงมาจาก **route tester**
+ที่ถาม matcher ตัวจริงบน server
+
+## Route tester
+
+`POST /web/routes/test` ส่ง method + host + path แล้ว server รัน `select()` ตัวเดียวกับที่ proxy ใช้
+บน snapshot เดียวกัน คืนมาว่า match route ไหน ด้วยกติกาข้อไหน ไปที่ service ไหน
+และ upstream แต่ละตัวสถานะอะไร — ตัวที่จะถูกเลือกถัดไปมี badge "next"
+ถ้ากลยุทธ์เป็นแบบสุ่ม (random / least_conn / p2c_ewma) จะบอกตรงๆ ว่าไม่มีคำตอบล่วงหน้า
+
+การถามคำถามนี้ไม่ขยับ cursor ของ round-robin (ใช้ `peek_upstream` ที่อ่านอย่างเดียว)
+— เปิดหน้า UI แล้วทำให้ทราฟฟิกจริงเบี้ยวไม่ได้
+
+## ฟอร์ม
+
+อยู่ใน `Sheet` แบ่ง 4 แท็บ: Matching / Headers / Limits / Cache
+(แท็บที่มี error จะมีจุดกำกับ) validate ฝั่ง client ตาม `PrxConfig::validate` ใน `src/config.rs`
+แล้วถ้า server ปฏิเสธ ข้อความจะไปแปะที่ field ที่มันพูดถึง (`mapServerError`)
+พร้อมแสดงเป็น alert ด้านบนเสมอ เพราะ field นั้นอาจอยู่คนละแท็บหรือถูกซ่อนอยู่
+
+**ยังไม่ได้ generate จาก JSON Schema** — T205 (schema + typed client) ยังไม่เสร็จ
+`routeValidation.ts` จึงเขียนกฎซ้ำไว้เอง และผูกไว้กับ `src/config.rs` ด้วยความตั้งใจว่า
+เมื่อ T205 มาถึงไฟล์นี้จะเหลือแค่ wrapper บางๆ
+
+## CRUD กับ draft
+
+route ใช้ `/admin/routes*` ซึ่ง **apply ทันที** — ไม่ใช่ draft
+ส่วน draft ในแถบบน (T303) มาจากการแก้ config ในหน้า Settings ซึ่งยังต้องกด Save
+และตอนนี้ปิดแท็บทั้งที่มี draft ค้างจะโดน browser ถามก่อน
 
 ---
 
