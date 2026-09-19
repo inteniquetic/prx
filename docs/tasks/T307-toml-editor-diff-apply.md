@@ -12,8 +12,8 @@
 
 ## สถานะปัจจุบัน
 
-มี `TomlPreviewCard.svelte` แสดงผลอย่างเดียว และมี `configCodec.ts` / `configNormalize.ts` ฝั่ง client
-ยังแก้ไม่ได้ ไม่มี diff ไม่มี syntax highlight
+แท็บ "TOML Config" ใน `SettingsPage.svelte` แสดง TOML ที่ `configCodec.ts` / `configNormalize.ts`
+เรนเดอร์ออกมา อ่านอย่างเดียว (คัดลอกได้) ยังแก้ไม่ได้ ไม่มี diff ไม่มี syntax highlight
 
 ## ขอบเขตงาน
 
