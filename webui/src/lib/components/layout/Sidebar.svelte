@@ -13,6 +13,7 @@
     type NavPage
   } from '$lib/stores/navigation';
   import { cn } from '$lib/utils';
+  import { t } from '$lib/i18n';
 
   let { badges = {} }: { badges?: Partial<Record<NavPage, NavBadge>> } = $props();
 
@@ -44,7 +45,9 @@
       </span>
       <span class={cn('flex flex-col leading-tight', collapsed && 'sr-only')}>
         <span class="text-base font-semibold tracking-tight">PRX</span>
-        <span class="text-[10px] uppercase tracking-widest text-muted-foreground">Proxy</span>
+        <span class="text-[10px] uppercase tracking-widest text-muted-foreground">
+          {$t('shell.brandSubtitle')}
+        </span>
       </span>
     </a>
   </div>
@@ -57,14 +60,14 @@
       size={collapsed ? 'icon-sm' : 'sm'}
       class={collapsed ? '' : 'justify-start'}
       onclick={toggleSidebar}
-      aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      aria-label={collapsed ? $t('shell.expandSidebar') : $t('shell.collapseSidebar')}
       aria-expanded={!collapsed}
     >
       {#if collapsed}
         <PanelLeftOpenIcon aria-hidden="true" />
       {:else}
         <PanelLeftCloseIcon aria-hidden="true" />
-        <span>Collapse</span>
+        <span>{$t('shell.collapse')}</span>
       {/if}
     </Button>
   </div>

@@ -22,19 +22,23 @@
   import { formatCount, formatLatency, formatPercent, formatThroughput } from '$lib/format';
   import { liveStats, startLiveStats } from '$lib/stores/stats';
   import type { PrxConfig } from '$lib/types/config';
+  import { plural, t } from '$lib/i18n';
 
   let {
     config,
     onnavigate,
     onselectRoute,
     onselectService,
-    onaddRoute
+    onaddRoute,
+    /** Opens the setup wizard, which lives in the shell. */
+    onsetup
   }: {
     config: PrxConfig;
     onnavigate?: (page: 'routes' | 'services' | 'settings') => void;
     onselectRoute?: (name: string) => void;
     onselectService?: (name: string) => void;
     onaddRoute?: () => void;
+    onsetup?: () => void;
   } = $props();
 
   // The stream lives exactly as long as this page is on screen: leaving the
@@ -149,13 +153,17 @@
       if (service.total === 0) continue;
       if (service.healthy === 0) {
         found.push({
-          text: `Every upstream in “${service.name}” is out of the pool.`,
-          action: { label: 'Open service', go: () => onselectService?.(service.name) }
+          text: $t('banner.problem.allDown', { service: service.name }),
+          action: { label: $t('banner.action.service'), go: () => onselectService?.(service.name) }
         });
       } else if (service.healthy < service.total) {
         found.push({
-          text: `“${service.name}” is down to ${service.healthy} of ${service.total} upstreams.`,
-          action: { label: 'Open service', go: () => onselectService?.(service.name) }
+          text: $t('banner.problem.someDown', {
+            service: service.name,
+            healthy: service.healthy,
+            total: service.total
+          }),
+          action: { label: $t('banner.action.service'), go: () => onselectService?.(service.name) }
         });
       }
     }
@@ -166,11 +174,14 @@
         .sort((a, b) => b.requests_5xx - a.requests_5xx)
         .find((route) => route.requests_5xx > 0);
       found.push({
-        text: `${formatPercent(sample.error_ratio_5xx)} of requests are answering 5xx${
-          worst ? `, worst on “${worst.name}”` : ''
-        }.`,
+        text: worst
+          ? $t('banner.problem.errorsWorst', {
+              percent: formatPercent(sample.error_ratio_5xx),
+              route: worst.name
+            })
+          : $t('banner.problem.errors', { percent: formatPercent(sample.error_ratio_5xx) }),
         action: worst
-          ? { label: 'Open route', go: () => onselectRoute?.(worst.name) }
+          ? { label: $t('banner.action.route'), go: () => onselectRoute?.(worst.name) }
           : undefined
       });
     }
@@ -179,7 +190,7 @@
       if (event.kind === 'cert_expiry' && event.level !== 'info') {
         found.push({
           text: event.message,
-          action: { label: 'Open settings', go: () => onnavigate?.('settings') }
+          action: { label: $t('banner.action.settings'), go: () => onnavigate?.('settings') }
         });
         break;
       }
@@ -197,17 +208,7 @@
   const routes = $derived(config.routes ?? []);
   const services = $derived(config.services ?? []);
 
-  const connectionNote = $derived(
-    live.status === 'live'
-      ? 'live'
-      : live.status === 'polling'
-        ? 'polling'
-        : live.status === 'connecting'
-          ? 'connecting'
-          : live.status === 'reconnecting'
-            ? 'reconnecting'
-            : 'offline'
-  );
+  const connectionNote = $derived($t(`dashboard.live.${live.status}`));
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -215,10 +216,10 @@
     class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-6"
   >
     <div class="min-w-0">
-      <h1 class="truncate text-xl font-semibold">Dashboard</h1>
+      <h1 class="truncate text-xl font-semibold">{$t('dashboard.title')}</h1>
       <p class="mt-0.5 text-sm text-muted-foreground">
-        {routes.length} route{routes.length === 1 ? '' : 's'} ·
-        {services.length} service{services.length === 1 ? '' : 's'} ·
+        {$plural('dashboard.routeCount', routes.length)} ·
+        {$plural('dashboard.serviceCount', services.length)} ·
         <span data-slot="live-status">{connectionNote}</span>
       </p>
     </div>
@@ -226,17 +227,28 @@
     <div class="flex shrink-0 flex-wrap items-center gap-2">
       <Button variant="outline" size="sm" onclick={() => onnavigate?.('routes')}>
         <ActivityIcon aria-hidden="true" />
-        <span class="hidden sm:inline">All routes</span>
+        <span class="hidden sm:inline">{$t('dashboard.allRoutes')}</span>
       </Button>
       <Button size="sm" onclick={() => onaddRoute?.()}>
         <PlusIcon aria-hidden="true" />
-        Add route
+        {$t('dashboard.addRoute')}
       </Button>
     </div>
   </header>
 
   <div class="min-h-0 flex-1 overflow-y-auto">
     <div class="grid gap-4 p-4 sm:p-6">
+      {#if services.length === 0}
+        <section
+          class="rounded-xl border border-primary/40 bg-primary/5 p-5"
+          data-slot="unconfigured"
+        >
+          <h2 class="text-sm font-semibold text-foreground">{$t('wizard.emptyTitle')}</h2>
+          <p class="mt-1 max-w-2xl text-sm text-muted-foreground">{$t('wizard.emptyBody')}</p>
+          <Button size="sm" class="mt-3" onclick={() => onsetup?.()}>{$t('wizard.open')}</Button>
+        </section>
+      {/if}
+
       <StatusBanner
         state={systemState}
         {problems}
@@ -248,57 +260,58 @@
            means four different things depending on what you counted. -->
       <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         <MetricTile
-          label="Requests"
+          loading={!live.loaded}
+          label={$t('dashboard.tile.requests')}
           icon={GaugeIcon}
           value={formatThroughput(sample?.rps ?? null)}
           delta={delta((entry) => entry.rps)}
           deltaLabel="vs a minute ago"
           history={spark((entry) => entry.rps)}
-          hint="Requests finished per second, from prx_requests_total across every route."
+          hint={$t('dashboard.tile.requestsHint')}
         />
         <MetricTile
-          label="p99 latency"
+          label={$t('dashboard.tile.p99')}
           icon={TimerIcon}
           value={formatLatency(sample?.p99_ms ?? null)}
           betterWhen="lower"
           delta={delta((entry) => entry.p99_ms)}
           deltaLabel="vs a minute ago"
           history={spark((entry) => entry.p99_ms)}
-          hint="99th percentile over this second, interpolated from the prx_request_latency_ms histogram."
+          hint={$t('dashboard.tile.p99Hint')}
         />
         <MetricTile
-          label="5xx rate"
+          label={$t('dashboard.tile.fivexx')}
           icon={TriangleAlertIcon}
           value={formatPercent(sample?.error_ratio_5xx ?? null)}
           betterWhen="lower"
           delta={delta((entry) => entry.error_ratio_5xx * 100)}
           deltaLabel="points vs a minute ago"
           history={spark((entry) => entry.error_ratio_5xx)}
-          hint="Share of requests answering 5xx, from prx_requests_total split by status class. 4xx is counted separately."
+          hint={$t('dashboard.tile.fivexxHint')}
         />
         <MetricTile
-          label="4xx rate"
+          label={$t('dashboard.tile.fourxx')}
           icon={TriangleAlertIcon}
           value={formatPercent(sample?.error_ratio_4xx ?? null)}
           betterWhen="lower"
           delta={delta((entry) => entry.error_ratio_4xx * 100)}
           deltaLabel="points vs a minute ago"
           history={spark((entry) => entry.error_ratio_4xx)}
-          hint="Share of requests answering 4xx — usually the client's doing, not the proxy's."
+          hint={$t('dashboard.tile.fourxxHint')}
         />
         <MetricTile
-          label="In flight"
+          label={$t('dashboard.tile.inflight')}
           icon={ActivityIcon}
           value={formatCount(sample?.inflight ?? null)}
           betterWhen="neutral"
           delta={delta((entry) => entry.inflight)}
           deltaLabel="vs a minute ago"
           history={spark((entry) => entry.inflight)}
-          hint="Requests being served right now, from the prx_inflight_requests gauge."
+          hint={$t('dashboard.tile.inflightHint')}
         />
         {#if cacheEnabled}
           <MetricTile
-            label="Cache hits"
+            label={$t('dashboard.tile.cache')}
             icon={DatabaseZapIcon}
             value={formatPercent(sample?.cache_hit_ratio ?? null)}
             delta={delta((entry) =>
@@ -306,24 +319,24 @@
             )}
             deltaLabel="points vs a minute ago"
             history={spark((entry) => entry.cache_hit_ratio)}
-            hint="Hits as a share of cache lookups in this second, from prx_cache_total."
+            hint={$t('dashboard.tile.cacheHint')}
           />
         {:else}
           <MetricTile
-            label="Upstreams ready"
+            label={$t('dashboard.tile.upstreams')}
             icon={ServerIcon}
             value={sample ? `${sample.upstreams_healthy}/${sample.upstreams_total}` : '—'}
             betterWhen="higher"
             history={spark((entry) => entry.upstreams_healthy)}
-            hint="Upstreams taking traffic, counted from the running config: drained ones are left out, circuit-open and failing ones count as not ready."
+            hint={$t('dashboard.tile.upstreamsHint')}
           />
         {/if}
       </section>
 
       <section class="grid gap-4 xl:grid-cols-2">
         <TimeseriesChart
-          title="Requests per second"
-          description="Stacked by status class, so the error share is the coloured band."
+          title={$t('dashboard.chart.rps')}
+          description={$t('dashboard.chart.rpsHelp')}
           series={trafficSeries}
           {timestamps}
           mode="stacked"
@@ -332,8 +345,8 @@
           floor={1}
         />
         <TimeseriesChart
-          title="Latency percentiles"
-          description="From the request histogram — a gap means no request finished that second."
+          title={$t('dashboard.chart.latency')}
+          description={$t('dashboard.chart.latencyHelp')}
           series={latencySeries}
           {timestamps}
           format={(value) => (value === null ? '—' : formatLatency(value))}
@@ -344,15 +357,15 @@
 
       <section class="grid gap-4 xl:grid-cols-2">
         <RouteLeaderboard
-          title="Top routes"
-          description="Most traffic in the last minute."
+          title={$t('dashboard.top.title')}
+          description={$t('dashboard.top.help')}
           routes={live.routes}
           rank="traffic"
           onselect={(name) => onselectRoute?.(name)}
         />
         <RouteLeaderboard
-          title="Worst routes"
-          description="Highest error rate, then slowest p99."
+          title={$t('dashboard.worst.title')}
+          description={$t('dashboard.worst.help')}
           routes={live.routes}
           rank="trouble"
           onselect={(name) => onselectRoute?.(name)}
@@ -367,11 +380,7 @@
         <EventStrip events={live.events} />
       </section>
 
-      <p class="text-xs text-muted-foreground">
-        Live numbers cover the last five minutes and are held in memory only —
-        restarting prx starts them over. For anything longer, scrape
-        <code class="rounded bg-muted px-1">/metrics</code>.
-      </p>
+      <p class="text-xs text-muted-foreground">{$t('dashboard.footnote')}</p>
     </div>
   </div>
 </div>

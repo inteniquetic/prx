@@ -7,6 +7,7 @@
 
   import type { StatsEvent } from '$lib/api/stats';
   import { cn } from '$lib/utils';
+  import { t } from '$lib/i18n';
 
   let {
     events,
@@ -43,15 +44,15 @@
 
 <section class={cn('rounded-xl border border-border bg-card shadow-sm', className)}>
   <header class="border-b border-border px-4 py-3">
-    <h3 class="text-sm font-semibold">Recent events</h3>
+    <h2 class="text-sm font-semibold">{$t('dashboard.events.title')}</h2>
     <p class="text-xs text-muted-foreground">
-      Config applies and reloads, circuits, upstreams and certificates.
+      {$t('dashboard.events.help')}
     </p>
   </header>
 
   {#if shown.length === 0}
     <p class="px-4 py-8 text-center text-sm text-muted-foreground">
-      Nothing has happened since prx started.
+      {$t('dashboard.events.empty')}
     </p>
   {:else}
     <ul class="divide-y divide-border" data-slot="event-strip">

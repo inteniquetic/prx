@@ -47,6 +47,10 @@ fn run() -> anyhow::Result<()> {
     // challenges for the TLS listener's certificates.
     let acme_challenges = Arc::new(ChallengeStore::new());
     let acme_status: Arc<std::sync::RwLock<AcmeStatus>> = Arc::default();
+    // Handed to both the ACME loop and the admin API, which is what lets
+    // "renew now" in the Web UI reach the loop (T308).
+    let acme_renew: prx::acme::SharedRenew = Arc::default();
+    let mut acme_running = false;
 
     let mut proxy_service = http_proxy_service(
         &server.configuration,
@@ -113,11 +117,13 @@ fn run() -> anyhow::Result<()> {
                     status.staging = tls.acme.directory_url.contains("staging");
                 }
 
+                acme_running = true;
                 spawn_acme(
                     tls.acme.clone(),
                     resolver.clone(),
                     acme_challenges.clone(),
                     acme_status.clone(),
+                    acme_renew.clone(),
                 )
                 .context("failed to start the ACME task")?;
                 info!(
@@ -192,6 +198,7 @@ fn run() -> anyhow::Result<()> {
         runtime_config.clone(),
         acme_status.clone(),
         tls_resolver.clone(),
+        acme_running.then(|| acme_renew.clone()),
     ));
     spawn_config_watcher(
         config_path.clone(),

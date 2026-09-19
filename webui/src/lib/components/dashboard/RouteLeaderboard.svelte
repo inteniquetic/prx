@@ -4,6 +4,7 @@
   import { formatCount, formatLatency, formatPercent, formatThroughput } from '$lib/format';
   import type { RouteStats } from '$lib/api/stats';
   import { cn } from '$lib/utils';
+  import { t } from '$lib/i18n';
 
   let {
     title,
@@ -62,25 +63,27 @@
 >
   <header class="flex items-baseline justify-between gap-2 border-b border-border px-4 py-3">
     <div>
-      <h3 class="text-sm font-semibold">{title}</h3>
+      <h2 class="text-sm font-semibold">{title}</h2>
       <p class="text-xs text-muted-foreground">{description}</p>
     </div>
-    <span class="text-xs text-muted-foreground">last {window}s</span>
+    <span class="text-xs text-muted-foreground">
+      {$t('dashboard.leaderboard.window', { seconds: window })}
+    </span>
   </header>
 
   {#if ranked.length === 0}
     <p class="px-4 py-8 text-center text-sm text-muted-foreground">
       {rank === 'traffic'
-        ? 'No requests in the last minute.'
-        : 'No route is erroring or slow right now.'}
+        ? $t('dashboard.leaderboard.emptyTraffic')
+        : $t('dashboard.leaderboard.emptyErrors')}
     </p>
   {:else}
     <Table.Root>
       <Table.Header>
         <Table.Row>
-          <Table.Head>Route</Table.Head>
-          <Table.Head class="text-right">Traffic</Table.Head>
-          <Table.Head class="text-right">Errors</Table.Head>
+          <Table.Head>{$t('dashboard.leaderboard.route')}</Table.Head>
+          <Table.Head class="text-right">{$t('dashboard.leaderboard.traffic')}</Table.Head>
+          <Table.Head class="text-right">{$t('dashboard.leaderboard.errors')}</Table.Head>
           <Table.Head class="text-right">p99</Table.Head>
         </Table.Row>
       </Table.Header>
@@ -104,13 +107,16 @@
             <Table.Cell class="text-right tabular-nums">
               {formatThroughput(route.rps)}
               <span class="block text-xs text-muted-foreground">
-                {formatCount(route.requests)} reqs
+                {$t('dashboard.leaderboard.requests', { count: formatCount(route.requests) })}
               </span>
             </Table.Cell>
             <Table.Cell class={cn('text-right tabular-nums', errorTone(route.error_ratio))}>
               {formatPercent(route.error_ratio)}
               <span class="block text-xs text-muted-foreground">
-                {formatCount(route.requests_5xx)} 5xx · {formatCount(route.requests_4xx)} 4xx
+                {$t('dashboard.leaderboard.errorSplit', {
+                  fivexx: formatCount(route.requests_5xx),
+                  fourxx: formatCount(route.requests_4xx)
+                })}
               </span>
             </Table.Cell>
             <Table.Cell class="text-right tabular-nums">

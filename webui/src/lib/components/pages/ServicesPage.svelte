@@ -18,6 +18,8 @@
   import { toast } from '$lib/components/ui/sonner';
 
   import ServiceSheet from '../services/ServiceSheet.svelte';
+  import TemplatePicker from '../onboarding/TemplatePicker.svelte';
+  import { SkeletonTable } from '$lib/components/ui/skeleton';
 
   import {
     createService,
@@ -31,22 +33,29 @@
   import { routesUsing } from '$lib/serviceValidation';
   import { createDefaultService, type PrxConfig, type ServiceConfig } from '$lib/types/config';
   import { cn } from '$lib/utils';
+  import { plural, t } from '$lib/i18n';
 
   let {
     config,
     /** The service the URL is pointing at — `/services/:name`. */
     selectedServiceName = null,
     createRequest = 0,
+    /** True until the admin API has answered for the first time. */
+    loading = false,
     onselect,
     onchanged,
-    onnavigate
+    onnavigate,
+    /** Opens the setup wizard, which lives in the shell. */
+    onsetup
   }: {
     config: PrxConfig;
     selectedServiceName?: string | null;
     createRequest?: number;
+    loading?: boolean;
     onselect?: (name: string | null) => void;
     onchanged?: () => void;
-    onnavigate?: (page: 'routes') => void;
+    onnavigate?: (page: 'routes' | 'settings') => void;
+    onsetup?: () => void;
   } = $props();
 
   let query = $state('');
@@ -107,11 +116,11 @@
 
   const serviceReason = (service: ServiceConfig): string => {
     const { healthy, total } = healthOf(service);
-    if (total === 0) return 'Every upstream is drained, so this service takes no traffic.';
+    if (total === 0) return $t('services.reason.allDrained');
     if (!statusByService.has(service.name)) {
-      return 'The proxy has not reported on this service yet.';
+      return $t('services.reason.unknown');
     }
-    return `${healthy} of ${total} upstream${total === 1 ? '' : 's'} ready.`;
+    return $t('services.reason.ready', { healthy, total });
   };
 
   // --- live status ---------------------------------------------------------
@@ -206,10 +215,10 @@
     try {
       if (sheetMode === 'create') {
         await createService(service);
-        toast.success(`Service “${service.name}” created`);
+        toast.success($t('services.toast.created', { name: service.name }));
       } else {
         await updateService(sheetService?.name ?? service.name, service);
-        toast.success(`Service “${service.name}” saved`);
+        toast.success($t('services.toast.saved', { name: service.name }));
       }
       sheetOpen = false;
       if (selectedServiceName) onselect?.(null);
@@ -241,7 +250,7 @@
     saving = true;
     try {
       await deleteService(confirmTarget);
-      toast.success(`Service “${confirmTarget}” deleted`);
+      toast.success($t('services.toast.deleted', { name: confirmTarget }));
       confirmOpen = false;
       sheetOpen = false;
       if (selectedServiceName === confirmTarget) onselect?.(null);
@@ -260,11 +269,14 @@
     class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-6"
   >
     <div class="min-w-0">
-      <h1 class="truncate text-xl font-semibold">Services</h1>
+      <h1 class="truncate text-xl font-semibold">{$t('services.title')}</h1>
       <p class="mt-0.5 text-sm text-muted-foreground">
-        {services.length} service{services.length === 1 ? '' : 's'}
+        {$plural('services.count', services.length)}
         {#if statusAt}
-          · live state {statusError ? 'stale' : 'updating'}
+          ·
+          {$t('services.liveState', {
+            state: statusError ? $t('services.liveState.stale') : $t('services.liveState.updating')
+          })}
         {/if}
         {#if statusError}
           · <span class="text-warning-emphasis">{statusError}</span>
@@ -275,15 +287,15 @@
     <div class="flex shrink-0 flex-wrap items-center gap-2">
       <Button variant="outline" size="sm" onclick={() => void refreshStatus()}>
         <ActivityIcon aria-hidden="true" />
-        <span class="hidden sm:inline">Refresh state</span>
+        <span class="hidden sm:inline">{$t('services.refresh')}</span>
       </Button>
       <Button variant="outline" size="sm" onclick={() => onchanged?.()}>
         <RefreshCwIcon aria-hidden="true" />
-        <span class="hidden sm:inline">Reload config</span>
+        <span class="hidden sm:inline">{$t('services.reload')}</span>
       </Button>
       <Button size="sm" onclick={openCreate}>
         <PlusIcon aria-hidden="true" />
-        Add service
+        {$t('services.add')}
       </Button>
     </div>
   </header>
@@ -297,30 +309,40 @@
         />
         <Input
           class="pl-8"
-          placeholder="Search name or upstream"
-          aria-label="Search services"
+          placeholder={$t('services.searchNameOrUpstream')}
+          aria-label={$t('services.searchServices')}
           bind:value={query}
         />
       </div>
 
-      {#if services.length === 0}
+      {#if loading}
+        <SkeletonTable rows={3} columns={5} label={$t('loading.services')} />
+      {:else if services.length === 0}
         <EmptyState
           icon={ServerIcon}
-          title="No services yet"
-          description="A service is a pool of upstreams that routes send traffic to."
+          title={$t('services.noServicesYet')}
+          description={$t('services.aServiceIsA')}
         >
           {#snippet action()}
-            <Button size="sm" onclick={openCreate}>
-              <PlusIcon aria-hidden="true" />
-              Add service
-            </Button>
+            <div class="grid w-full max-w-3xl gap-4">
+              <div class="flex justify-center gap-2">
+                <Button size="sm" onclick={openCreate}>
+                  <PlusIcon aria-hidden="true" />
+                  {$t('services.add')}
+                </Button>
+                <Button variant="outline" size="sm" onclick={() => onsetup?.()}>
+                  {$t('wizard.open')}
+                </Button>
+              </div>
+              <TemplatePicker class="text-left" onpicked={() => onnavigate?.('settings')} />
+            </div>
           {/snippet}
         </EmptyState>
       {:else if filtered.length === 0}
         <EmptyState
           icon={SearchIcon}
-          title="Nothing matches that search"
-          description="Try a different name or upstream address."
+          title={$t('services.nothingMatchesThatSearch')}
+          description={$t('services.tryADifferentName')}
         />
       {:else}
         {#each filtered as service (service.name)}
@@ -352,29 +374,31 @@
                   />
                   <Badge variant="outline">{service.lb}</Badge>
                   {#if service.health_check.enabled}
-                    <Badge variant="secondary">probed</Badge>
+                    <Badge variant="secondary">{$t('services.badge.probed')}</Badge>
                   {/if}
                   {#if service.sticky.enabled}
-                    <Badge variant="secondary">sticky</Badge>
+                    <Badge variant="secondary">{$t('services.badge.sticky')}</Badge>
                   {/if}
                   {#if live?.circuit_breaker_enabled}
-                    <Badge variant="secondary">breaker</Badge>
+                    <Badge variant="secondary">{$t('services.badge.breaker')}</Badge>
                   {/if}
                 </div>
                 <p class="text-xs text-muted-foreground">
-                  {health.healthy}/{health.total} ready ·
-                  {service.max_retries} retr{service.max_retries === 1 ? 'y' : 'ies'} ·
+                  {$t('services.meta.ready', { healthy: health.healthy, total: health.total })} ·
+                  {$plural('services.meta.retries', service.max_retries)} ·
                   {#if using.length > 0}
-                    used by {using.map((route) => route.name).join(', ')}
+                    {$t('services.meta.usedBy', {
+                      routes: using.map((route) => route.name).join(', ')
+                    })}
                   {:else}
-                    no route points here
+                    {$t('services.meta.unused')}
                   {/if}
                 </p>
               </div>
 
               <div class="flex shrink-0 items-center gap-1">
                 <Button variant="outline" size="sm" onclick={() => onselect?.(service.name)}>
-                  Edit
+                  {$t('routes.action.edit')}
                 </Button>
                 <DropdownMenu.Root>
                   <DropdownMenu.Trigger>
@@ -383,7 +407,7 @@
                         {...props}
                         variant="ghost"
                         size="icon-sm"
-                        aria-label={`Actions for ${service.name}`}
+                        aria-label={$t('services.actionsFor', { name: service.name })}
                       >
                         <MoreHorizontalIcon aria-hidden="true" />
                       </Button>
@@ -392,10 +416,10 @@
                   <DropdownMenu.Content align="end" class="w-52">
                     <DropdownMenu.Group>
                       <DropdownMenu.Item onSelect={() => onselect?.(service.name)}>
-                        Edit service
+                        {$t('services.action.edit')}
                       </DropdownMenu.Item>
                       <DropdownMenu.Item onSelect={() => onnavigate?.('routes')}>
-                        Routes using it
+                        {$t('services.action.routes')}
                       </DropdownMenu.Item>
                     </DropdownMenu.Group>
                     <DropdownMenu.Separator />
@@ -404,7 +428,7 @@
                       onSelect={() => askDelete(service.name)}
                     >
                       <Trash2Icon aria-hidden="true" />
-                      Delete
+                      {$t('common.delete')}
                     </DropdownMenu.Item>
                   </DropdownMenu.Content>
                 </DropdownMenu.Root>
@@ -414,11 +438,11 @@
             <Table.Root>
               <Table.Header>
                 <Table.Row>
-                  <Table.Head>Upstream</Table.Head>
-                  <Table.Head class="text-right">Share</Table.Head>
-                  <Table.Head>State</Table.Head>
-                  <Table.Head class="text-right">In flight</Table.Head>
-                  <Table.Head class="text-right">Latency</Table.Head>
+                  <Table.Head>{$t('services.column.upstream')}</Table.Head>
+                  <Table.Head class="text-right">{$t('services.column.share')}</Table.Head>
+                  <Table.Head>{$t('services.column.state')}</Table.Head>
+                  <Table.Head class="text-right">{$t('services.column.inflight')}</Table.Head>
+                  <Table.Head class="text-right">{$t('services.column.latency')}</Table.Head>
                 </Table.Row>
               </Table.Header>
               <Table.Body>
@@ -435,7 +459,7 @@
                       {#if upstream.enabled}
                         {liveUpstream ? `${(liveUpstream.share * 100).toFixed(0)}%` : '—'}
                       {:else}
-                        drained
+                        {$t('services.drained')}
                       {/if}
                     </Table.Cell>
                     <Table.Cell>
@@ -450,16 +474,19 @@
                                 ? 'healthy'
                                 : 'down'}
                         reason={!upstream.enabled
-                          ? 'Drained: still configured, taking no traffic.'
+                          ? $t('upstreamEditor.reason.drained')
                           : liveUpstream?.circuit_open
-                            ? `Circuit open after ${liveUpstream.consecutive_failures} failures${
-                                liveUpstream.circuit_reopens_in_ms
-                                  ? `, retrying in ${Math.ceil(liveUpstream.circuit_reopens_in_ms / 1000)}s`
-                                  : ''
-                              }.`
+                            ? liveUpstream.circuit_reopens_in_ms
+                              ? $t('upstreamEditor.reason.circuitRetry', {
+                                  failures: liveUpstream.consecutive_failures,
+                                  seconds: Math.ceil(liveUpstream.circuit_reopens_in_ms / 1000)
+                                })
+                              : $t('upstreamEditor.reason.circuit', {
+                                  failures: liveUpstream.consecutive_failures
+                                })
                             : liveUpstream?.probe_healthy
-                              ? 'Probes are passing and the circuit is closed.'
-                              : 'The last health probe failed.'}
+                              ? $t('upstreamEditor.reason.healthy')
+                              : $t('upstreamEditor.reason.down')}
                         showLabel
                         tooltip={false}
                       />
@@ -500,9 +527,9 @@
 <ConfirmDialog
   bind:open={confirmOpen}
   variant="destructive"
-  title={`Delete “${confirmTarget}”?`}
-  description="The upstreams behind it stop being probed, and the config loses how they were set up."
-  confirmLabel="Delete"
+  title={$t('services.confirmDelete', { name: confirmTarget ?? '' })}
+  description={$t('services.theUpstreamsBehindIt')}
+  confirmLabel={$t('services.delete')}
   pending={saving}
   onconfirm={confirmDelete}
   oncancel={() => (confirmTarget = null)}

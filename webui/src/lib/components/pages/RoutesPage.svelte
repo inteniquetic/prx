@@ -28,11 +28,14 @@
 
   import RouteSheet from '../routes/RouteSheet.svelte';
   import RouteTester from '../routes/RouteTester.svelte';
+  import TemplatePicker from '../onboarding/TemplatePicker.svelte';
+  import { SkeletonTable } from '$lib/components/ui/skeleton';
 
   import { createRoute, deleteRoute, updateRoute, type RouteHealthItem } from '$lib/api/admin';
   import { analyzeRoutes, tierLabel, type RouteInsight } from '$lib/routeAnalysis';
   import { createDefaultRoute, type PrxConfig, type RouteConfig } from '$lib/types/config';
   import { cn } from '$lib/utils';
+  import { plural, t } from '$lib/i18n';
 
   let {
     config,
@@ -43,10 +46,14 @@
     healthError = '',
     /** Bumped by the shell when something asks for a new route. */
     createRequest = 0,
+    /** True until the admin API has answered for the first time. */
+    loading = false,
     onselect,
     onchanged,
     onrefreshHealth,
-    onnavigate
+    onnavigate,
+    /** Opens the setup wizard, which lives in the shell. */
+    onsetup
   }: {
     config: PrxConfig;
     selectedRouteName?: string | null;
@@ -54,10 +61,12 @@
     healthLoading?: boolean;
     healthError?: string;
     createRequest?: number;
+    loading?: boolean;
     onselect?: (name: string | null) => void;
     onchanged?: () => void;
     onrefreshHealth?: () => void;
-    onnavigate?: (page: 'services') => void;
+    onnavigate?: (page: 'services' | 'settings') => void;
+    onsetup?: () => void;
   } = $props();
 
   type SortKey = 'order' | 'name' | 'host' | 'path' | 'service' | 'priority';
@@ -281,11 +290,11 @@
     try {
       if (sheetMode === 'create') {
         await createRoute(route);
-        toast.success(`Route “${route.name}” created`);
+        toast.success($t('routes.toast.created', { name: route.name }));
       } else {
         const original = sheetRoute?.name ?? route.name;
         await updateRoute(original, route);
-        toast.success(`Route “${route.name}” saved`);
+        toast.success($t('routes.toast.saved', { name: route.name }));
       }
       sheetOpen = false;
       if (selectedRouteName) onselect?.(null);
@@ -317,7 +326,7 @@
     busy = true;
     try {
       await createRoute(copy);
-      toast.success(`Duplicated as “${candidate}”`);
+      toast.success($t('routes.toast.duplicated', { name: candidate }));
       onchanged?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
@@ -345,7 +354,7 @@
 
     busy = false;
     if (changed > 0) {
-      toast.success(`${changed} route${changed === 1 ? '' : 's'} ${enabled ? 'enabled' : 'disabled'}`);
+      toast.success($plural(enabled ? 'routes.toast.enabled' : 'routes.toast.disabled', changed));
       onchanged?.();
     }
     for (const failure of failures) toast.error(failure);
@@ -376,7 +385,7 @@
     confirmOpen = false;
     selection = new Set();
     if (removed > 0) {
-      toast.success(`${removed} route${removed === 1 ? '' : 's'} deleted`);
+      toast.success($plural('routes.toast.deleted', removed));
       if (selectedRouteName && confirmTargets.includes(selectedRouteName)) onselect?.(null);
       onchanged?.();
     }
@@ -396,11 +405,14 @@
     class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-6"
   >
     <div class="min-w-0">
-      <h1 class="truncate text-xl font-semibold">Routes</h1>
+      <h1 class="truncate text-xl font-semibold">{$t('routes.title')}</h1>
       <p class="mt-0.5 text-sm text-muted-foreground">
-        {routes.length} route{routes.length === 1 ? '' : 's'}, matched most specific first
+        {$plural('routes.count', routes.length)}
         {#if withWarnings > 0}
-          · <span class="text-warning-emphasis">{withWarnings} need attention</span>
+          ·
+          <span class="text-warning-emphasis">
+            {$t('routes.needAttention', { count: withWarnings })}
+          </span>
         {/if}
       </p>
     </div>
@@ -408,7 +420,7 @@
     <div class="flex shrink-0 flex-wrap items-center gap-2">
       <Button variant="outline" size="sm" onclick={() => (testerOpen = !testerOpen)}>
         <FlaskConicalIcon aria-hidden="true" />
-        <span class="hidden sm:inline">Test a request</span>
+        <span class="hidden sm:inline">{$t('routes.test')}</span>
       </Button>
       <Button
         variant="outline"
@@ -417,15 +429,17 @@
         onclick={() => onrefreshHealth?.()}
       >
         <ActivityIcon aria-hidden="true" class={healthLoading ? 'animate-spin' : ''} />
-        <span class="hidden sm:inline">{healthLoading ? 'Checking...' : 'Check health'}</span>
+        <span class="hidden sm:inline">
+          {healthLoading ? $t('common.checking') : $t('routes.checkHealth')}
+        </span>
       </Button>
       <Button variant="outline" size="sm" onclick={() => onchanged?.()}>
         <RefreshCwIcon aria-hidden="true" />
-        <span class="hidden sm:inline">Reload</span>
+        <span class="hidden sm:inline">{$t('common.reload')}</span>
       </Button>
       <Button size="sm" onclick={openCreate}>
         <PlusIcon aria-hidden="true" />
-        Add route
+        {$t('routes.add')}
       </Button>
     </div>
   </header>
@@ -436,12 +450,12 @@
         <section class="rounded-xl border border-border bg-card p-4">
           <div class="mb-3 flex items-center justify-between gap-2">
             <div>
-              <h2 class="text-sm font-semibold">Route tester</h2>
-              <p class="text-xs text-muted-foreground">
-                Runs through the proxy's own matcher, against the config it is serving right now.
-              </p>
+              <h2 class="text-sm font-semibold">{$t('routes.tester.title')}</h2>
+              <p class="text-xs text-muted-foreground">{$t('routes.tester.help')}</p>
             </div>
-            <Button variant="ghost" size="sm" onclick={() => (testerOpen = false)}>Close</Button>
+            <Button variant="ghost" size="sm" onclick={() => (testerOpen = false)}>
+              {$t('common.close')}
+            </Button>
           </div>
           <RouteTester
             bind:host={testerHost}
@@ -464,18 +478,18 @@
           />
           <Input
             class="pl-8"
-            placeholder="Search name, host, path, service"
-            aria-label="Search routes"
+            placeholder={$t('routes.search')}
+            aria-label={$t('routes.searchAria')}
             bind:value={query}
           />
         </div>
 
         <Select.Root type="single" bind:value={serviceFilter}>
-          <Select.Trigger size="sm" class="w-40" aria-label="Filter by service">
+          <Select.Trigger size="sm" class="w-40" aria-label={$t('routes.filterService')}>
             {serviceFilter === 'all' ? 'All services' : serviceFilter}
           </Select.Trigger>
           <Select.Content>
-            <Select.Item value="all" label="All services" />
+            <Select.Item value="all" label={$t('routes.allServices')} />
             {#each services as service (service.name)}
               <Select.Item value={service.name} label={service.name} />
             {/each}
@@ -483,21 +497,21 @@
         </Select.Root>
 
         <Select.Root type="single" bind:value={statusFilter}>
-          <Select.Trigger size="sm" class="w-40" aria-label="Filter by status">
+          <Select.Trigger size="sm" class="w-40" aria-label={$t('routes.filterStatus')}>
             {statusFilter === 'all' ? 'Any status' : statusFilter}
           </Select.Trigger>
           <Select.Content>
-            <Select.Item value="all" label="Any status" />
-            <Select.Item value="healthy" label="Healthy" />
-            <Select.Item value="degraded" label="Degraded" />
-            <Select.Item value="down" label="Down" />
-            <Select.Item value="disabled" label="Disabled" />
-            <Select.Item value="warnings" label="Has warnings" />
+            <Select.Item value="all" label={$t('routes.anyStatus')} />
+            <Select.Item value="healthy" label={$t('status.healthy')} />
+            <Select.Item value="degraded" label={$t('status.degraded')} />
+            <Select.Item value="down" label={$t('status.down')} />
+            <Select.Item value="disabled" label={$t('status.disabled')} />
+            <Select.Item value="warnings" label={$t('routes.hasWarnings')} />
           </Select.Content>
         </Select.Root>
 
         <span class="ml-auto text-xs text-muted-foreground" data-testid="result-count">
-          {sorted.length} of {routes.length}
+          {$t('routes.showing', { shown: sorted.length, total: routes.length })}
         </span>
       </div>
 
@@ -506,7 +520,9 @@
         <div
           class="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-accent/50 px-3 py-2"
         >
-          <span class="text-sm font-medium">{selection.size} selected</span>
+          <span class="text-sm font-medium">
+            {$t('routes.selected', { count: selection.size })}
+          </span>
           <Button
             variant="outline"
             size="sm"
@@ -514,7 +530,7 @@
             onclick={() => setEnabled([...selection], true)}
           >
             <EyeIcon aria-hidden="true" />
-            Enable
+            {$t('routes.enable')}
           </Button>
           <Button
             variant="outline"
@@ -523,7 +539,7 @@
             onclick={() => setEnabled([...selection], false)}
           >
             <EyeOffIcon aria-hidden="true" />
-            Disable
+            {$t('routes.disable')}
           </Button>
           <Button
             variant="destructive"
@@ -532,31 +548,45 @@
             onclick={() => askDelete([...selection])}
           >
             <Trash2Icon aria-hidden="true" />
-            Delete
+            {$t('common.delete')}
           </Button>
-          <Button variant="ghost" size="sm" onclick={() => (selection = new Set())}>Clear</Button>
+          <Button variant="ghost" size="sm" onclick={() => (selection = new Set())}>
+            {$t('routes.clearSelection')}
+          </Button>
         </div>
       {/if}
 
       <!-- Table ----------------------------------------------------------- -->
-      {#if routes.length === 0}
+      {#if loading}
+        <!-- The same shape the table will have, so nothing jumps when the
+             config arrives. -->
+        <SkeletonTable rows={5} columns={6} label={$t('loading.routes')} />
+      {:else if routes.length === 0}
         <EmptyState
           icon={RouteIcon}
-          title="No routes yet"
-          description="A route decides which requests reach which service. Add one to start sending traffic."
+          title={$t('routes.empty.title')}
+          description={$t('routes.empty.body')}
         >
           {#snippet action()}
-            <Button size="sm" onclick={openCreate}>
-              <PlusIcon aria-hidden="true" />
-              Add route
-            </Button>
+            <div class="grid w-full max-w-3xl gap-4">
+              <div class="flex justify-center gap-2">
+                <Button size="sm" onclick={openCreate}>
+                  <PlusIcon aria-hidden="true" />
+                  {$t('routes.add')}
+                </Button>
+                <Button variant="outline" size="sm" onclick={() => onsetup?.()}>
+                  {$t('wizard.open')}
+                </Button>
+              </div>
+              <TemplatePicker class="text-left" onpicked={() => onnavigate?.('settings')} />
+            </div>
           {/snippet}
         </EmptyState>
       {:else if sorted.length === 0}
         <EmptyState
           icon={SearchIcon}
-          title="Nothing matches those filters"
-          description="Try a different search, or clear the service and status filters."
+          title={$t('routes.noMatch.title')}
+          description={$t('routes.noMatch.body')}
         >
           {#snippet action()}
             <Button
@@ -568,7 +598,7 @@
                 statusFilter = 'all';
               }}
             >
-              Clear filters
+              {$t('routes.clearFilters')}
             </Button>
           {/snippet}
         </EmptyState>
@@ -580,17 +610,18 @@
                 <Table.Head class="w-10">
                   <Checkbox
                     checked={allVisibleSelected}
-                    aria-label="Select every route on this page"
+                    aria-label={$t('routes.selectAll')}
                     onCheckedChange={(checked) => toggleAllVisible(checked)}
                   />
                 </Table.Head>
-                {#each [['name', 'Name'], ['host', 'Host'], ['path', 'Path prefix'], ['service', 'Service'], ['priority', 'Precedence']] as [key, label] (key)}
+                {#each [['name', 'routes.column.name'], ['host', 'routes.column.host'], ['path', 'routes.column.path'], ['service', 'routes.column.service'], ['priority', 'routes.column.precedence']] as [key, labelKey] (key)}
+                  {@const label = $t(labelKey)}
                   <Table.Head>
                     <button
                       type="button"
                       class="inline-flex items-center gap-1 rounded-sm hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
                       onclick={() => toggleSort(key as SortKey)}
-                      aria-label={`Sort by ${label}`}
+                      aria-label={$t('routes.sortBy', { column: label })}
                     >
                       {label}
                       <ArrowUpDownIcon
@@ -600,8 +631,10 @@
                     </button>
                   </Table.Head>
                 {/each}
-                <Table.Head>Status</Table.Head>
-                <Table.Head class="w-10"><span class="sr-only">Actions</span></Table.Head>
+                <Table.Head>{$t('routes.column.status')}</Table.Head>
+                <Table.Head class="w-10">
+                  <span class="sr-only">{$t('routes.column.actions')}</span>
+                </Table.Head>
               </Table.Row>
             </Table.Header>
 
@@ -623,7 +656,7 @@
                       type="checkbox"
                       class="size-4 accent-primary"
                       checked={selection.has(route.name)}
-                      aria-label={`Select ${route.name}`}
+                      aria-label={$t('routes.select', { name: route.name })}
                       onchange={(event) =>
                         toggleSelection(route.name, event.currentTarget.checked)}
                     />
@@ -645,17 +678,17 @@
                         {route.name}
                       </button>
                       {#if route.is_default}
-                        <Badge variant="outline">default</Badge>
+                        <Badge variant="outline">{$t('routes.badge.default')}</Badge>
                       {/if}
                       {#if !route.enabled}
-                        <Badge variant="secondary">disabled</Badge>
+                        <Badge variant="secondary">{$t('routes.badge.disabled')}</Badge>
                       {/if}
                       {#if warning}
                         <Tooltip.Root>
                           <Tooltip.Trigger class="rounded-sm focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">
                             <TriangleAlertIcon
                               class="size-4 text-warning-emphasis"
-                              aria-label="This route has a warning"
+                              aria-label={$t('routes.hasWarning')}
                             />
                           </Tooltip.Trigger>
                           <Tooltip.Content class="max-w-xs">{warning.message}</Tooltip.Content>
@@ -668,7 +701,7 @@
                     {#if route.host}
                       {route.host}
                     {:else}
-                      <span class="text-muted-foreground">any</span>
+                      <span class="text-muted-foreground">{$t('routes.anyHost')}</span>
                     {/if}
                   </Table.Cell>
                   <Table.Cell class="font-mono text-xs">{route.path_prefix}</Table.Cell>
@@ -691,7 +724,7 @@
                   <Table.Cell>
                     <span
                       class="text-xs text-muted-foreground"
-                      title={`Exact host beats wildcard beats any host; inside one host the longest path prefix wins; ties go to whichever route comes first in the config. This one is #${insight.index + 1}.`}
+                      title={$t('routes.precedenceHint', { position: insight.index + 1 })}
                     >
                       {tierLabel[insight.tier]}
                       {#if route.methods.length > 0}
@@ -717,7 +750,7 @@
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        aria-label={`Actions for ${route.name}`}
+                        aria-label={$t('routes.actionsFor', { name: route.name })}
                         onclick={() => (openMenuFor = route.name)}
                       >
                         <MoreHorizontalIcon aria-hidden="true" />
@@ -735,7 +768,7 @@
                             {...props}
                             variant="ghost"
                             size="icon-sm"
-                            aria-label={`Actions for ${route.name}`}
+                            aria-label={$t('routes.actionsFor', { name: route.name })}
                           >
                             <MoreHorizontalIcon aria-hidden="true" />
                           </Button>
@@ -744,25 +777,25 @@
                       <DropdownMenu.Content align="end" class="w-48">
                         <DropdownMenu.Group>
                           <DropdownMenu.Item onSelect={() => onselect?.(route.name)}>
-                            Edit
+                            {$t('routes.action.edit')}
                           </DropdownMenu.Item>
                           <DropdownMenu.Item onSelect={() => openTesterFor(insight)}>
                             <FlaskConicalIcon aria-hidden="true" />
-                            Test this route
+                            {$t('routes.action.test')}
                           </DropdownMenu.Item>
                           <DropdownMenu.Item onSelect={() => duplicate(route.name)}>
                             <CopyIcon aria-hidden="true" />
-                            Duplicate
+                            {$t('routes.action.duplicate')}
                           </DropdownMenu.Item>
                           <DropdownMenu.Item
                             onSelect={() => setEnabled([route.name], !route.enabled)}
                           >
                             {#if route.enabled}
                               <EyeOffIcon aria-hidden="true" />
-                              Disable
+                              {$t('routes.disable')}
                             {:else}
                               <EyeIcon aria-hidden="true" />
-                              Enable
+                              {$t('routes.enable')}
                             {/if}
                           </DropdownMenu.Item>
                         </DropdownMenu.Group>
@@ -772,7 +805,7 @@
                           onSelect={() => askDelete([route.name])}
                         >
                           <Trash2Icon aria-hidden="true" />
-                          Delete
+                          {$t('common.delete')}
                         </DropdownMenu.Item>
                       </DropdownMenu.Content>
                     </DropdownMenu.Root>
@@ -787,7 +820,7 @@
         <!-- Pagination ---------------------------------------------------- -->
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>Rows per page</span>
+            <span>{$t('routes.rowsPerPage')}</span>
             <Select.Root
               type="single"
               value={String(pageSize)}
@@ -796,7 +829,7 @@
                 page = 1;
               }}
             >
-              <Select.Trigger size="sm" class="w-20" aria-label="Rows per page">
+              <Select.Trigger size="sm" class="w-20" aria-label={$t('routes.rowsPerPage')}>
                 {pageSize}
               </Select.Trigger>
               <Select.Content>
@@ -809,7 +842,7 @@
 
           <div class="flex items-center gap-2">
             <span class="text-xs text-muted-foreground">
-              Page {currentPage} of {pageCount}
+              {$t('routes.page', { page: currentPage, pages: pageCount })}
             </span>
             <Button
               variant="outline"
@@ -817,7 +850,7 @@
               disabled={currentPage <= 1}
               onclick={() => (page = currentPage - 1)}
             >
-              Previous
+              {$t('routes.previous')}
             </Button>
             <Button
               variant="outline"
@@ -825,7 +858,7 @@
               disabled={currentPage >= pageCount}
               onclick={() => (page = currentPage + 1)}
             >
-              Next
+              {$t('routes.next')}
             </Button>
           </div>
         </div>
@@ -851,10 +884,10 @@
   bind:open={confirmOpen}
   variant="destructive"
   title={confirmTargets.length === 1
-    ? `Delete “${confirmTargets[0]}”?`
-    : `Delete ${confirmTargets.length} routes?`}
-  description="Traffic that matched them starts falling through to the next route, or to the fallback."
-  confirmLabel="Delete"
+    ? $t('routes.confirmDelete.single', { name: confirmTargets[0] })
+    : $t('routes.confirmDelete.many', { count: confirmTargets.length })}
+  description={$t('routes.confirmDelete.body')}
+  confirmLabel={$t('common.delete')}
   pending={busy}
   onconfirm={confirmDelete}
   oncancel={() => (confirmTargets = [])}

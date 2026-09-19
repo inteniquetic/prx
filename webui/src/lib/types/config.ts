@@ -70,11 +70,43 @@ export interface AcmeConfig {
 
 export interface TlsConfig {
   listen: string;
+  /** Single-certificate form; blank when `certs` or ACME provides them. */
   cert_path: string;
   key_path: string;
   enable_h2: boolean;
-  acme?: AcmeConfig;
+  /** `[[server.tls.cert]]`, chosen by SNI. */
+  certs: TlsCertConfig[];
+  acme: AcmeConfig;
 }
+
+/** One `[[server.tls.cert]]` block. */
+export interface TlsCertConfig {
+  /** Names it serves. Empty reads them from the certificate itself. */
+  domains: string[];
+  cert_path: string;
+  key_path: string;
+  /** Used when the client sends no SNI, or a name nothing else covers. */
+  is_default: boolean;
+}
+
+export const createDefaultAcme = (): AcmeConfig => ({
+  enabled: false,
+  email: [],
+  directory_url: 'https://acme-v02.api.letsencrypt.org/directory',
+  domains: [],
+  storage_dir: '/var/lib/prx/acme',
+  renew_before_days: 30,
+  ca_root_path: null
+});
+
+export const createDefaultTls = (): TlsConfig => ({
+  listen: '0.0.0.0:8443',
+  cert_path: '',
+  key_path: '',
+  enable_h2: true,
+  certs: [],
+  acme: createDefaultAcme()
+});
 
 export interface UpstreamConfig {
   addr: string;
@@ -194,6 +226,8 @@ export interface PrxConfig {
     grace_period_seconds: number | null;
     graceful_shutdown_timeout_seconds: number | null;
     config_reload_debounce_ms: number;
+    /** Accept HTTP/2 over cleartext on the plaintext listeners. */
+    h2c: boolean;
     tls: TlsConfig | null;
   };
   observability: {
@@ -323,6 +357,7 @@ export const createDefaultConfig = (): PrxConfig => ({
     grace_period_seconds: null,
     graceful_shutdown_timeout_seconds: null,
     config_reload_debounce_ms: 250,
+    h2c: true,
     tls: null
   },
   observability: {

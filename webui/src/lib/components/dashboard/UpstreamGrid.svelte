@@ -4,6 +4,7 @@
   import { formatLatency } from '$lib/format';
   import type { ServiceHealth, UpstreamLiveState } from '$lib/api/stats';
   import { cn } from '$lib/utils';
+  import { plural, t } from '$lib/i18n';
 
   let {
     services,
@@ -23,33 +24,27 @@
     services.reduce((sum, service) => sum + service.upstreams.length, 0)
   );
 
-  const reason = (service: ServiceHealth, state: UpstreamLiveState): string => {
-    switch (state) {
-      case 'healthy':
-        return `Taking traffic for ${service.name}.`;
-      case 'degraded':
-        return `Still in the pool for ${service.name}, but failing some requests.`;
-      case 'down':
-        return `Out of the pool for ${service.name} — circuit open or failing health checks.`;
-      default:
-        return `Drained in the config, so ${service.name} sends it nothing.`;
-    }
-  };
+  const reason = (service: ServiceHealth, state: UpstreamLiveState): string =>
+    $t(`dashboard.upstreams.reason.${state === 'drained' ? 'drained' : state}`, {
+      service: service.name
+    });
 </script>
 
 <section class={cn('rounded-xl border border-border bg-card p-4 shadow-sm', className)}>
   <header class="mb-3 flex items-baseline justify-between gap-2">
     <div>
-      <h3 class="text-sm font-semibold">Upstream health</h3>
-      <p class="text-xs text-muted-foreground">
-        One square per upstream, grouped by service. Click one to open its service.
-      </p>
+      <h2 class="text-sm font-semibold">{$t('dashboard.upstreams.title')}</h2>
+      <p class="text-xs text-muted-foreground">{$t('dashboard.upstreams.help')}</p>
     </div>
-    <span class="text-xs tabular-nums text-muted-foreground">{total} upstreams</span>
+    <span class="text-xs tabular-nums text-muted-foreground">
+      {$plural('dashboard.upstreams.count', total)}
+    </span>
   </header>
 
   {#if services.length === 0}
-    <p class="py-6 text-center text-sm text-muted-foreground">No services are configured.</p>
+    <p class="py-6 text-center text-sm text-muted-foreground">
+      {$t('dashboard.upstreams.none')}
+    </p>
   {:else}
     <ul class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {#each services as service (service.name)}
@@ -72,7 +67,10 @@
                     : 'text-muted-foreground'
               )}
             >
-              {service.healthy}/{service.total} ready
+              {$t('dashboard.upstreams.ready', {
+                healthy: service.healthy,
+                total: service.total
+              })}
             </span>
           </div>
 
@@ -89,13 +87,21 @@
                     upstream.state === 'drained' && 'opacity-40'
                   )}
                   onclick={() => onselect?.(service.name)}
-                  aria-label="{upstream.addr}: {STATUS_META[status].label}"
+                  aria-label={$t('dashboard.upstreams.aria', {
+                    addr: upstream.addr,
+                    status: $t(STATUS_META[status].key)
+                  })}
                 ></Tooltip.Trigger>
                 <Tooltip.Content>
                   <span class="block font-medium">{upstream.addr}</span>
-                  <span class="block">{STATUS_META[status].label} — {reason(service, upstream.state)}</span>
+                  <span class="block">
+                    {$t(STATUS_META[status].key)} — {reason(service, upstream.state)}
+                  </span>
                   <span class="block text-tooltip-foreground/80">
-                    {upstream.inflight} in flight · {formatLatency(upstream.ewma_ms)} avg
+                    {$t('dashboard.upstreams.inflight', {
+                      count: upstream.inflight,
+                      latency: formatLatency(upstream.ewma_ms)
+                    })}
                   </span>
                 </Tooltip.Content>
               </Tooltip.Root>

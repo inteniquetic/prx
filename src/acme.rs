@@ -102,6 +102,36 @@ pub struct AcmeStatus {
 
 pub type SharedStatus = Arc<RwLock<AcmeStatus>>;
 
+/// A request to order a certificate now, instead of at the next check (T308).
+///
+/// The loop below sleeps twelve hours between checks, which is the right
+/// interval for renewal and the wrong one for somebody who has just fixed a
+/// DNS record and wants to know whether it worked.
+#[derive(Default)]
+pub struct RenewRequest {
+    forced: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+impl RenewRequest {
+    /// Wakes the ACME loop and tells it to order regardless of expiry.
+    pub fn request(&self) {
+        self.forced.store(true, Ordering::SeqCst);
+        self.notify.notify_one();
+    }
+
+    /// Takes the pending request, if there is one.
+    pub(crate) fn take(&self) -> bool {
+        self.forced.swap(false, Ordering::SeqCst)
+    }
+
+    async fn notified(&self) {
+        self.notify.notified().await;
+    }
+}
+
+pub type SharedRenew = Arc<RenewRequest>;
+
 /// Runs the ordering and renewal loop on its own thread and runtime, so a slow
 /// ACME server never competes with request handling.
 pub fn spawn_acme(
@@ -109,6 +139,7 @@ pub fn spawn_acme(
     resolver: Arc<CertResolver>,
     challenges: Arc<ChallengeStore>,
     status: SharedStatus,
+    renew: SharedRenew,
 ) -> anyhow::Result<()> {
     let storage = PathBuf::from(&config.storage_dir);
     std::fs::create_dir_all(&storage).with_context(|| {
@@ -132,7 +163,7 @@ pub fn spawn_acme(
                     return;
                 }
             };
-            runtime.block_on(run(config, storage, resolver, challenges, status));
+            runtime.block_on(run(config, storage, resolver, challenges, status, renew));
         })?;
     Ok(())
 }
@@ -143,17 +174,22 @@ async fn run(
     resolver: Arc<CertResolver>,
     challenges: Arc<ChallengeStore>,
     status: SharedStatus,
+    renew: SharedRenew,
 ) {
     let mut backoff = MIN_RETRY;
 
     loop {
-        let due = match certificate_due(&storage, &config) {
-            Ok(due) => due,
-            Err(err) => {
-                warn!(error = %err, "could not inspect the stored certificate; ordering a new one");
-                true
-            }
-        };
+        // An order asked for from the admin API happens whether or not the
+        // certificate is near expiry — that is the point of asking.
+        let forced = renew.take();
+        let due = forced
+            || match certificate_due(&storage, &config) {
+                Ok(due) => due,
+                Err(err) => {
+                    warn!(error = %err, "could not inspect the stored certificate; ordering a new one");
+                    true
+                }
+            };
 
         if due {
             record_attempt(&status);
@@ -178,7 +214,10 @@ async fn run(
             }
         }
 
-        tokio::time::sleep(CHECK_INTERVAL).await;
+        tokio::select! {
+            _ = tokio::time::sleep(CHECK_INTERVAL) => {}
+            _ = renew.notified() => {}
+        }
     }
 }
 

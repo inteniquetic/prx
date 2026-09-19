@@ -91,8 +91,8 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T305](T305-services-upstreams-ui.md) | หน้า Services/Upstreams + health badge | L | T304 | ✅ done (ปิดบั๊ก Save ลบ health check/sticky ทิ้ง) |
 | [T306](T306-dashboard-live-metrics.md) | Dashboard สถิติสด + กราฟ | L | T303, T207 | ✅ done (ทำ T207 ให้ด้วย; กราฟเขียนเอง ไม่พึ่งไลบรารี) |
 | [T307](T307-toml-editor-diff-apply.md) | TOML editor + diff ก่อน apply | M | T303, T203 | ✅ done (ทำแกนของ T203 + `If-Match` ของ T204 ให้ด้วย) |
-| [T308](T308-settings-tls-observability-ui.md) | หน้า Settings: server/TLS/observability | M | T303 |
-| [T309](T309-ux-polish-i18n.md) | Empty state, skeleton, toast, i18n th/en | M | T304, T305 |
+| [T308](T308-settings-tls-observability-ui.md) | หน้า Settings: server/TLS/observability | M | T303 | ✅ done (ฟอร์มแก้ไฟล์ผ่าน `toml_edit` ไม่ใช่เรนเดอร์ใหม่; แท็บ Admin รอ T201) |
+| [T309](T309-ux-polish-i18n.md) | Empty state, skeleton, toast, i18n th/en | M | T304, T305 | ✅ done (th/en 675 key พร้อมตัวตรวจข้อความที่ลืมแปล; wizard + เทมเพลตลง draft เดียวกัน; axe 0 critical/serious) |
 | [T310](T310-webui-testing-and-embed.md) | Vitest + Playwright + embed pipeline ใน CI | M | T309 |
 
 ### Phase 4 — Observability & Ops

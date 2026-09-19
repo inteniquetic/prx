@@ -7,6 +7,9 @@
     value = $bindable(),
     orientation = 'horizontal',
     class: className,
+    // bits-ui puts `role="slider"` on the thumb, not the root, so a label left
+    // on the root names nothing as far as assistive tech is concerned.
+    'aria-label': ariaLabel,
     ...restProps
   }: WithoutChildrenOrChild<SliderPrimitive.RootProps> = $props();
 </script>
@@ -36,6 +39,7 @@
     {#each thumbs as index (index)}
       <SliderPrimitive.Thumb
         {index}
+        aria-label={ariaLabel}
         data-slot="slider-thumb"
         class="block size-4 shrink-0 rounded-full border border-primary bg-background shadow-sm transition-[color,box-shadow] hover:ring-4 hover:ring-ring/50 focus-visible:ring-4 focus-visible:ring-ring/50 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50"
       />

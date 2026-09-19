@@ -17,8 +17,9 @@
     </div>
   </header>
 
-  <!-- Scrollable Content -->
-  <main class="flex-1 overflow-y-auto overflow-x-hidden">
+  <!-- Scrollable content. A plain div: the shell owns the page's one <main>,
+       and nesting a second inside it leaves neither of them nameable. -->
+  <div class="flex-1 overflow-y-auto overflow-x-hidden">
     <slot />
-  </main>
+  </div>
 </div>

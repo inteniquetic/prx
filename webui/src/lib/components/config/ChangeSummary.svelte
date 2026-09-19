@@ -13,6 +13,7 @@
   import PlusIcon from '@lucide/svelte/icons/plus';
 
   import type { ChangeSummary } from '$lib/configChanges';
+  import { t } from '$lib/i18n';
 
   let {
     summary,
@@ -49,14 +50,18 @@
           <p class="text-sm font-medium text-foreground">
             {change.subject}
             <span class="text-muted-foreground">
-              {change.kind === 'add' ? 'added' : change.kind === 'remove' ? 'removed' : 'changed'}
+              {change.kind === 'add'
+                ? $t('changes.added')
+                : change.kind === 'remove'
+                  ? $t('changes.removed')
+                  : $t('changes.changed')}
             </span>
             {#if change.traffic}
               <span
                 class="ml-1.5 inline-flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-warning-emphasis"
               >
                 <ArrowRightIcon class="size-2.5" aria-hidden="true" />
-                affects traffic
+                {$t('changes.affectsTraffic')}
               </span>
             {/if}
           </p>
@@ -72,11 +77,7 @@
     {/each}
   </ul>
 {:else if summary}
-  <p class="text-sm text-muted-foreground {className}">
-    Nothing in the config itself changed — only comments or formatting.
-  </p>
+  <p class="text-sm text-muted-foreground {className}">{$t('changes.cosmetic')}</p>
 {:else}
-  <p class="text-sm text-muted-foreground {className}">
-    The draft has to be valid before its changes can be described.
-  </p>
+  <p class="text-sm text-muted-foreground {className}">{$t('changes.needsValid')}</p>
 {/if}

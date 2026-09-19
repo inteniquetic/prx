@@ -16,10 +16,12 @@ import { derived, get, writable } from 'svelte/store';
 
 import {
   applyConfigText,
+  editConfigText,
   loadConfigEtag,
   loadConfigText,
   validateConfigText,
   type ApplyResult,
+  type ConfigEditOp,
   type ValidationReport
 } from '../api/configText';
 import { summarizeChanges, type ChangeSummary } from '../configChanges';
@@ -53,6 +55,8 @@ export const validating = writable(false);
 export const loading = writable(false);
 export const applying = writable(false);
 export const loadError = writable<string>('');
+/** Why the last field edit could not be applied, if it could not. */
+export const editError = writable<string>('');
 /**
  * The version on disk when it stopped matching what this draft is based on.
  * Set by the watcher, and by a validate round that noticed first.
@@ -62,6 +66,16 @@ export const externalEtag = writable<string | null>(null);
 export const restoredAt = writable<number | null>(null);
 
 export const isDirty = derived([base, draft], ([$base, $draft]) => $draft !== $base.toml);
+
+/**
+ * The draft as a config, for the Settings forms to read their values from.
+ *
+ * It is the last valid parse: a draft with a typo in it keeps showing the
+ * values the forms had a moment ago rather than emptying every field.
+ */
+export const draftConfig = derived([report, base], ([$report, $base]) =>
+  $report?.config ?? $base.config
+);
 
 export const diffOps = derived([base, draft], ([$base, $draft]) =>
   diffText($base.toml, $draft)
@@ -233,6 +247,56 @@ export function revertDraft(): void {
 /** Replaces the draft, e.g. when taking the other side of a conflict. */
 export function replaceDraft(text: string): void {
   setDraft(text);
+}
+
+/**
+ * Changes fields in the draft (T308).
+ *
+ * The rewrite happens on the server, where `toml_edit` can change the keys
+ * named without touching anything else in the file, and the answer carries the
+ * validation report so a form that has just broken the config says so at once.
+ *
+ * Edits are queued: two fields changed in quick succession are applied in
+ * order, each to the result of the one before, instead of racing to overwrite
+ * each other's text.
+ */
+export async function editDraft(ops: ConfigEditOp[]): Promise<boolean> {
+  if (ops.length === 0) return true;
+
+  editQueue = editQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const result = await editConfigText(get(draft), ops);
+      setDraftText(result.toml);
+      report.set(result.report);
+      noticeEtag(result.report.currentEtag);
+    });
+
+  try {
+    await editQueue;
+    editError.set('');
+    return true;
+  } catch (error) {
+    // A draft that is not valid TOML cannot be patched key by key; the editor
+    // is the place to fix that, and the message says so.
+    editError.set(toErrorMessage(error));
+    return false;
+  }
+}
+
+/** Serialises field edits so they compose instead of racing. */
+let editQueue: Promise<void> = Promise.resolve();
+
+/** Stores the text and persists it, without scheduling another validation. */
+function setDraftText(text: string): void {
+  draft.set(text);
+  const current = get(base);
+  if (text === current.toml) {
+    writeStoredDraft(null);
+    restoredAt.set(null);
+  } else {
+    writeStoredDraft({ toml: text, baseEtag: current.etag, savedAt: Date.now() });
+  }
 }
 
 export async function applyDraft(): Promise<ApplyResult> {

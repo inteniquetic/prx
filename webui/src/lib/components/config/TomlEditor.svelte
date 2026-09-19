@@ -11,6 +11,7 @@
   import { onMount, untrack } from 'svelte';
 
   import type { EditorDiagnostic, EditorHandle } from './editorSetup';
+  import { t } from '$lib/i18n';
 
   let {
     value,
@@ -102,8 +103,7 @@
       class="mb-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning-foreground"
       role="status"
     >
-      The rich editor could not be loaded ({failed}). The plain editor below
-      still applies the same validation and diff.
+      {$t('editor.fallbackNotice', { error: failed })}
     </div>
   {/if}
 
@@ -113,7 +113,7 @@
     <textarea
       class="h-full min-h-[24rem] w-full resize-none rounded-lg border border-border bg-background p-3 font-mono text-[0.8125rem] leading-relaxed text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
       spellcheck="false"
-      aria-label="Config file"
+      aria-label={$t('editor.ariaFile')}
       readonly={readOnly}
       {value}
       oninput={(event) => onchange((event.currentTarget as HTMLTextAreaElement).value)}
@@ -128,10 +128,10 @@
   ></div>
 
   <p class="mt-1.5 text-right text-[11px] tabular-nums text-muted-foreground">
-    Line {cursor.line}, column {cursor.column}
+    {$t('editor.cursor', { line: cursor.line, column: cursor.column })}
     <span class="mx-1 text-border">·</span>
     <kbd class="rounded border border-border px-1">Ctrl</kbd>+<kbd
       class="rounded border border-border px-1">F</kbd
-    > to search
+    > {$t('editor.searchHint')}
   </p>
 </div>

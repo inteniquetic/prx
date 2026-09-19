@@ -3,6 +3,7 @@
   import MenuIcon from '@lucide/svelte/icons/menu';
   import MonitorIcon from '@lucide/svelte/icons/monitor';
   import MoonIcon from '@lucide/svelte/icons/moon';
+  import LanguagesIcon from '@lucide/svelte/icons/languages';
   import SearchIcon from '@lucide/svelte/icons/search';
   import SunIcon from '@lucide/svelte/icons/sun';
   import UserIcon from '@lucide/svelte/icons/user';
@@ -12,6 +13,7 @@
   import ConnectionBadge from './ConnectionBadge.svelte';
   import { navigate } from '$lib/stores/navigation';
   import { setTheme, themeChoice, type ThemeChoice } from '$lib/stores/theme';
+  import { LOCALES, locale, setLocale, t, type Locale } from '$lib/i18n';
 
   let {
     /** True while the editor holds changes that have not been applied. */
@@ -24,13 +26,14 @@
     onopenNav?: () => void;
   } = $props();
 
-  const THEMES: { id: ThemeChoice; label: string; icon: typeof SunIcon }[] = [
-    { id: 'light', label: 'Light', icon: SunIcon },
-    { id: 'dark', label: 'Dark', icon: MoonIcon },
-    { id: 'system', label: 'System', icon: MonitorIcon }
+  const THEMES: { id: ThemeChoice; key: string; icon: typeof SunIcon }[] = [
+    { id: 'light', key: 'shell.theme.light', icon: SunIcon },
+    { id: 'dark', key: 'shell.theme.dark', icon: MoonIcon },
+    { id: 'system', key: 'shell.theme.system', icon: MonitorIcon }
   ];
 
   const theme = $derived(THEMES.find((entry) => entry.id === $themeChoice) ?? THEMES[2]);
+  const language = $derived(LOCALES.find((entry) => entry.id === $locale) ?? LOCALES[0]);
 </script>
 
 <header
@@ -42,7 +45,7 @@
     size="icon-sm"
     class="md:hidden"
     onclick={() => onopenNav?.()}
-    aria-label="Open navigation"
+    aria-label={$t('nav.open')}
   >
     <MenuIcon aria-hidden="true" />
   </Button>
@@ -60,9 +63,9 @@
       aria-keyshortcuts="Meta+K Control+K"
     >
       <SearchIcon aria-hidden="true" />
-      <span class="hidden sm:inline">Search</span>
+      <span class="hidden sm:inline">{$t('common.search')}</span>
       <kbd class="hidden rounded border border-border px-1 font-mono text-[10px] sm:inline">⌘K</kbd>
-      <span class="sr-only">Open the command palette</span>
+      <span class="sr-only">{$t('shell.openPalette')}</span>
     </Button>
 
     {#if hasDraft}
@@ -73,8 +76,8 @@
         onclick={() => navigate('settings')}
       >
         <FileClockIcon aria-hidden="true" />
-        <span class="hidden sm:inline">Draft not applied</span>
-        <span class="sr-only">Unapplied changes — go to Settings to review and apply</span>
+        <span class="hidden sm:inline">{$t('shell.draftPending')}</span>
+        <span class="sr-only">{$t('shell.draftPendingHint')}</span>
       </Button>
     {/if}
 
@@ -85,7 +88,12 @@
     <DropdownMenu.Root>
       <DropdownMenu.Trigger>
         {#snippet child({ props }: { props: Record<string, unknown> })}
-          <Button {...props} variant="ghost" size="icon-sm" aria-label={`Theme: ${theme.label}`}>
+          <Button
+            {...props}
+            variant="ghost"
+            size="icon-sm"
+            aria-label={$t('shell.themeLabel', { theme: $t(theme.key) })}
+          >
             <theme.icon aria-hidden="true" />
           </Button>
         {/snippet}
@@ -96,10 +104,41 @@
              The heading lives inside the group because bits-ui takes it from
              there — outside one it throws on open. -->
         <DropdownMenu.RadioGroup value={$themeChoice} onValueChange={(value) => setTheme(value as ThemeChoice)}>
-          <DropdownMenu.Label>Theme</DropdownMenu.Label>
+          <DropdownMenu.Label>{$t('shell.theme')}</DropdownMenu.Label>
           {#each THEMES as entry (entry.id)}
             <DropdownMenu.RadioItem value={entry.id}>
               <entry.icon aria-hidden="true" />
+              <span>{$t(entry.key)}</span>
+            </DropdownMenu.RadioItem>
+          {/each}
+        </DropdownMenu.RadioGroup>
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
+
+    <!-- Language: two of them, so a menu rather than a toggle — the next one
+         costs a dictionary, not a redesign. -->
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger>
+        {#snippet child({ props }: { props: Record<string, unknown> })}
+          <Button
+            {...props}
+            variant="ghost"
+            size="icon-sm"
+            aria-label={$t('shell.languageLabel', { language: language.english })}
+            data-slot="language-menu"
+          >
+            <LanguagesIcon aria-hidden="true" />
+          </Button>
+        {/snippet}
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content align="end" class="w-40">
+        <DropdownMenu.RadioGroup
+          value={$locale}
+          onValueChange={(value) => setLocale(value as Locale)}
+        >
+          <DropdownMenu.Label>{$t('shell.language')}</DropdownMenu.Label>
+          {#each LOCALES as entry (entry.id)}
+            <DropdownMenu.RadioItem value={entry.id}>
               <span>{entry.label}</span>
             </DropdownMenu.RadioItem>
           {/each}
@@ -110,23 +149,23 @@
     <DropdownMenu.Root>
       <DropdownMenu.Trigger>
         {#snippet child({ props }: { props: Record<string, unknown> })}
-          <Button {...props} variant="ghost" size="icon-sm" aria-label="Account">
+          <Button {...props} variant="ghost" size="icon-sm" aria-label={$t('shell.account')}>
             <UserIcon aria-hidden="true" />
           </Button>
         {/snippet}
       </DropdownMenu.Trigger>
       <DropdownMenu.Content align="end" class="w-64">
         <DropdownMenu.Group>
-          <DropdownMenu.Label>Account</DropdownMenu.Label>
+          <DropdownMenu.Label>{$t('shell.account')}</DropdownMenu.Label>
           <!-- The admin API takes no credentials yet, so there is no session to
                end. Saying that is more useful than a Sign out that does nothing. -->
-          <DropdownMenu.Item disabled>Sign out — no auth yet (T201)</DropdownMenu.Item>
+          <DropdownMenu.Item disabled>{$t('shell.signOutUnavailable')}</DropdownMenu.Item>
         </DropdownMenu.Group>
         <DropdownMenu.Separator />
         <DropdownMenu.Group>
-          <DropdownMenu.Label>Shortcuts</DropdownMenu.Label>
+          <DropdownMenu.Label>{$t('shell.shortcuts')}</DropdownMenu.Label>
           <DropdownMenu.Item onSelect={() => onopenPalette?.()}>
-            Command palette
+            {$t('shell.commandPalette')}
             <DropdownMenu.Shortcut>⌘K</DropdownMenu.Shortcut>
           </DropdownMenu.Item>
         </DropdownMenu.Group>

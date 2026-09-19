@@ -27,6 +27,7 @@
     type ServiceConfig,
     type UpstreamH2
   } from '$lib/types/config';
+  import { plural, t } from '$lib/i18n';
 
   let {
     open = $bindable(false),
@@ -134,7 +135,7 @@
     <Sheet.Header class="border-b border-border">
       <Sheet.Title>{mode === 'create' ? 'New service' : `Edit ${originalName}`}</Sheet.Title>
       <Sheet.Description>
-        Changes are applied to the running proxy as soon as you save.
+        {$t('serviceSheet.appliesImmediately')}
       </Sheet.Description>
     </Sheet.Header>
 
@@ -144,7 +145,7 @@
         {#if mappedServerError}
           <Alert.Root variant="destructive">
             <CircleAlertIcon />
-            <Alert.Title>The proxy rejected this service</Alert.Title>
+            <Alert.Title>{$t('serviceSheet.rejected')}</Alert.Title>
             <Alert.Description>{mappedServerError.message}</Alert.Description>
           </Alert.Root>
         {/if}
@@ -156,22 +157,26 @@
           </Alert.Root>
         {/each}
 
-        <Form.Field label="Name" errors={fieldErrors('name')} required>
+        <Form.Field label={$t('serviceSheet.name')} errors={fieldErrors('name')} required>
           {#snippet children({ props })}
-            <Input {...props} bind:value={form.name} placeholder="checkout-api" />
+            <Input {...props} bind:value={form.name} placeholder={$t('serviceSheet.checkoutApi')} />
           {/snippet}
         </Form.Field>
 
         <Tabs.Root bind:value={tab}>
           <Tabs.List class="w-full">
             <Tabs.Trigger value="upstreams">
-              Upstreams{tabErrors.upstreams ? ' •' : ''}
+              {$t('serviceSheet.tab.upstreams')}{tabErrors.upstreams ? ' •' : ''}
             </Tabs.Trigger>
             <Tabs.Trigger value="balancing">
-              Balancing{tabErrors.balancing ? ' •' : ''}
+              {$t('serviceSheet.tab.balancing')}{tabErrors.balancing ? ' •' : ''}
             </Tabs.Trigger>
-            <Tabs.Trigger value="retries">Retries{tabErrors.retries ? ' •' : ''}</Tabs.Trigger>
-            <Tabs.Trigger value="health">Health{tabErrors.health ? ' •' : ''}</Tabs.Trigger>
+            <Tabs.Trigger value="retries">
+              {$t('serviceSheet.tab.retries')}{tabErrors.retries ? ' •' : ''}
+            </Tabs.Trigger>
+            <Tabs.Trigger value="health">
+              {$t('serviceSheet.tab.health')}{tabErrors.health ? ' •' : ''}
+            </Tabs.Trigger>
           </Tabs.List>
 
           <!-- Upstreams ------------------------------------------------- -->
@@ -182,7 +187,7 @@
           <!-- Balancing ------------------------------------------------- -->
           <Tabs.Content value="balancing" class="grid gap-4 pt-4">
             <div class="grid gap-1.5">
-              <Label for="service-lb">Load balancing</Label>
+              <Label for="service-lb">{$t('serviceSheet.lb')}</Label>
               <Select.Root type="single" bind:value={form.lb as string}>
                 <Select.Trigger id="service-lb">
                   {LB_STRATEGIES.find((entry) => entry.id === form.lb)?.label ?? form.lb}
@@ -204,23 +209,28 @@
             </div>
 
             <div class="grid gap-1.5">
-              <Label for="service-h2">HTTP to upstreams</Label>
+              <Label for="service-h2">{$t('serviceSheet.h2')}</Label>
               <Select.Root type="single" bind:value={form.upstream_h2 as string}>
                 <Select.Trigger id="service-h2">{form.upstream_h2}</Select.Trigger>
                 <Select.Content>
-                  <Select.Item value="never" label="never">never — HTTP/1.1 only</Select.Item>
-                  <Select.Item value="always" label="always">always — HTTP/2 only</Select.Item>
-                  <Select.Item value="auto" label="auto">auto — h2 over TLS, else 1.1</Select.Item>
+                  <Select.Item value="never" label={$t('serviceSheet.never')}>
+                    {$t('serviceSheet.h2.never')}
+                  </Select.Item>
+                  <Select.Item value="always" label={$t('serviceSheet.always')}>
+                    {$t('serviceSheet.h2.always')}
+                  </Select.Item>
+                  <Select.Item value="auto" label={$t('serviceSheet.auto')}>
+                    {$t('serviceSheet.h2.auto')}
+                  </Select.Item>
                 </Select.Content>
               </Select.Root>
             </div>
 
             <div class="flex items-center justify-between rounded-lg border border-border p-3">
               <div class="grid gap-0.5">
-                <Label for="sticky-enabled">Session affinity</Label>
+                <Label for="sticky-enabled">{$t('serviceSheet.sticky')}</Label>
                 <p class="text-xs text-muted-foreground">
-                  Keep a client on the upstream it used last. Falls back to normal balancing when
-                  that upstream is unavailable.
+                  {$t('serviceSheet.stickyHelp')}
                 </p>
               </div>
               <Switch id="sticky-enabled" bind:checked={form.sticky.enabled} />
@@ -229,13 +239,19 @@
             {#if form.sticky.enabled}
               <div class="grid gap-4 sm:grid-cols-2">
                 <div class="grid gap-1.5">
-                  <Label for="sticky-mode">Pin by</Label>
+                  <Label for="sticky-mode">{$t('serviceSheet.pinBy')}</Label>
                   <Select.Root type="single" bind:value={form.sticky.mode as string}>
                     <Select.Trigger id="sticky-mode">{form.sticky.mode}</Select.Trigger>
                     <Select.Content>
-                      <Select.Item value="cookie" label="cookie">cookie — exact pin</Select.Item>
-                      <Select.Item value="client_ip" label="client_ip">client IP — hashed</Select.Item>
-                      <Select.Item value="header" label="header">header — hashed</Select.Item>
+                      <Select.Item value="cookie" label={$t('serviceSheet.cookie')}>
+                        {$t('serviceSheet.pin.cookie')}
+                      </Select.Item>
+                      <Select.Item value="client_ip" label={$t('serviceSheet.clientIp')}>
+                        {$t('serviceSheet.pin.clientIp')}
+                      </Select.Item>
+                      <Select.Item value="header" label={$t('serviceSheet.header')}>
+                        {$t('serviceSheet.pin.header')}
+                      </Select.Item>
                     </Select.Content>
                   </Select.Root>
                 </div>
@@ -250,7 +266,7 @@
                 </Form.Field>
 
                 {#if form.sticky.mode === 'cookie'}
-                  <Form.Field label="Cookie lifetime (s)">
+                  <Form.Field label={$t('serviceSheet.cookieLifetimeS')}>
                     {#snippet children({ props })}
                       <Input {...props} type="number" min="1" bind:value={form.sticky.ttl_s} />
                     {/snippet}
@@ -263,21 +279,21 @@
           <!-- Retries --------------------------------------------------- -->
           <Tabs.Content value="retries" class="grid gap-4 pt-4">
             <div class="grid gap-4 sm:grid-cols-2">
-              <Form.Field label="Max retries" description="Per request, on top of the first try.">
+              <Form.Field label={$t('serviceSheet.maxRetries')} description={$t('serviceSheet.perRequestOnTop')}>
                 {#snippet children({ props })}
                   <Input {...props} type="number" min="0" bind:value={form.max_retries} />
                 {/snippet}
               </Form.Field>
 
-              <Form.Field label="Backoff (ms)">
+              <Form.Field label={$t('serviceSheet.backoffMs')}>
                 {#snippet children({ props })}
                   <Input {...props} type="number" min="0" bind:value={form.retry_backoff_ms} />
                 {/snippet}
               </Form.Field>
 
               <Form.Field
-                label="Retry budget"
-                description="Share of recent successes that may be spent on retries. 0 turns the budget off."
+                label={$t('serviceSheet.retryBudget')}
+                description={$t('serviceSheet.shareOfRecentSuccesses')}
                 errors={fieldErrors('retry_budget_ratio')}
               >
                 {#snippet children({ props })}
@@ -293,7 +309,7 @@
               </Form.Field>
 
               <Form.Field
-                label="Budget window (ms)"
+                label={$t('serviceSheet.budgetWindowMs')}
                 errors={fieldErrors('retry_budget_window_ms')}
               >
                 {#snippet children({ props })}
@@ -307,8 +323,8 @@
               </Form.Field>
 
               <Form.Field
-                label="Free retries per window"
-                description="Below this many requests, retries are always allowed, so an idle service is not locked out by its own budget."
+                label={$t('serviceSheet.freeRetriesPerWindow')}
+                description={$t('serviceSheet.belowThisManyRequests')}
               >
                 {#snippet children({ props })}
                   <Input
@@ -321,8 +337,8 @@
               </Form.Field>
 
               <Form.Field
-                label="Request timeout (ms)"
-                description="Whole request including retries. 0 is off."
+                label={$t('serviceSheet.requestTimeoutMs')}
+                description={$t('serviceSheet.wholeRequestIncludingRetries')}
               >
                 {#snippet children({ props })}
                   <Input {...props} type="number" min="0" bind:value={form.request_timeout_ms} />
@@ -332,10 +348,9 @@
 
             <div class="flex items-center justify-between rounded-lg border border-border p-3">
               <div class="grid gap-0.5">
-                <Label for="retry-idempotent">Only retry idempotent methods</Label>
+                <Label for="retry-idempotent">{$t('serviceSheet.idempotent')}</Label>
                 <p class="text-xs text-muted-foreground">
-                  Once a request may have reached the upstream, replaying a POST can double an
-                  action. Connect failures are always retried — nothing was sent yet.
+                  {$t('serviceSheet.idempotentHelp')}
                 </p>
               </div>
               <Switch id="retry-idempotent" bind:checked={form.retry_idempotent_only} />
@@ -346,9 +361,9 @@
           <Tabs.Content value="health" class="grid gap-4 pt-4">
             <div class="flex items-center justify-between rounded-lg border border-border p-3">
               <div class="grid gap-0.5">
-                <Label for="hc-enabled">Active health checks</Label>
+                <Label for="hc-enabled">{$t('serviceSheet.healthChecks')}</Label>
                 <p class="text-xs text-muted-foreground">
-                  Probe upstreams in the background instead of finding out from a real request.
+                  {$t('serviceSheet.healthChecksHelp')}
                 </p>
               </div>
               <Switch id="hc-enabled" bind:checked={form.health_check.enabled} />
@@ -357,26 +372,30 @@
             {#if form.health_check.enabled}
               <div class="grid gap-4 sm:grid-cols-2">
                 <div class="grid gap-1.5">
-                  <Label for="hc-kind">Probe</Label>
+                  <Label for="hc-kind">{$t('serviceSheet.probe')}</Label>
                   <Select.Root type="single" bind:value={form.health_check.kind as string}>
                     <Select.Trigger id="hc-kind">{form.health_check.kind}</Select.Trigger>
                     <Select.Content>
-                      <Select.Item value="tcp" label="tcp">tcp — open a connection</Select.Item>
-                      <Select.Item value="http" label="http">http — GET and check the status</Select.Item>
+                      <Select.Item value="tcp" label={$t('serviceSheet.tcp')}>
+                        {$t('serviceSheet.probe.tcp')}
+                      </Select.Item>
+                      <Select.Item value="http" label={$t('serviceSheet.http')}>
+                        {$t('serviceSheet.probe.http')}
+                      </Select.Item>
                     </Select.Content>
                   </Select.Root>
                 </div>
 
                 {#if form.health_check.kind === 'http'}
-                  <Form.Field label="Path" errors={fieldErrors('health_check.path')}>
+                  <Form.Field label={$t('serviceSheet.path')} errors={fieldErrors('health_check.path')}>
                     {#snippet children({ props })}
                       <Input {...props} class="font-mono text-xs" bind:value={form.health_check.path} />
                     {/snippet}
                   </Form.Field>
 
                   <Form.Field
-                    label="Healthy statuses"
-                    description="Comma separated."
+                    label={$t('serviceSheet.healthyStatuses')}
+                    description={$t('serviceSheet.commaSeparated')}
                     errors={fieldErrors('health_check.expected_status')}
                   >
                     {#snippet children({ props })}
@@ -390,20 +409,20 @@
                   </Form.Field>
                 {/if}
 
-                <Form.Field label="Interval (ms)" errors={fieldErrors('health_check.interval_ms')}>
+                <Form.Field label={$t('serviceSheet.intervalMs')} errors={fieldErrors('health_check.interval_ms')}>
                   {#snippet children({ props })}
                     <Input {...props} type="number" min="1" bind:value={form.health_check.interval_ms} />
                   {/snippet}
                 </Form.Field>
 
-                <Form.Field label="Timeout (ms)" errors={fieldErrors('health_check.timeout_ms')}>
+                <Form.Field label={$t('serviceSheet.timeoutMs')} errors={fieldErrors('health_check.timeout_ms')}>
                   {#snippet children({ props })}
                     <Input {...props} type="number" min="1" bind:value={form.health_check.timeout_ms} />
                   {/snippet}
                 </Form.Field>
 
                 <Form.Field
-                  label="Probes to recover"
+                  label={$t('serviceSheet.probesToRecover')}
                   errors={fieldErrors('health_check.healthy_threshold')}
                 >
                   {#snippet children({ props })}
@@ -417,7 +436,7 @@
                 </Form.Field>
 
                 <Form.Field
-                  label="Probes to fail"
+                  label={$t('serviceSheet.probesToFail')}
                   errors={fieldErrors('health_check.unhealthy_threshold')}
                 >
                   {#snippet children({ props })}
@@ -434,11 +453,9 @@
 
             <div class="flex items-center justify-between rounded-lg border border-border p-3">
               <div class="grid gap-0.5">
-                <Label for="cb-enabled">Circuit breaker</Label>
+                <Label for="cb-enabled">{$t('serviceSheet.circuitBreaker')}</Label>
                 <p class="text-xs text-muted-foreground">
-                  Take an upstream out after consecutive failures, and let it back in after a
-                  cool-off. prx has no half-open state: when the time is up the upstream is simply
-                  used again.
+                  {$t('serviceSheet.circuitBreakerHelp')}
                 </p>
               </div>
               <Switch id="cb-enabled" bind:checked={form.circuit_breaker.enabled} />
@@ -447,7 +464,7 @@
             {#if form.circuit_breaker.enabled}
               <div class="grid gap-4 sm:grid-cols-2">
                 <Form.Field
-                  label="Failures before opening"
+                  label={$t('serviceSheet.failuresBeforeOpening')}
                   errors={fieldErrors('circuit_breaker.consecutive_failures')}
                 >
                   {#snippet children({ props })}
@@ -460,7 +477,7 @@
                   {/snippet}
                 </Form.Field>
 
-                <Form.Field label="Stay open for (ms)" errors={fieldErrors('circuit_breaker.open_ms')}>
+                <Form.Field label={$t('serviceSheet.stayOpenForMs')} errors={fieldErrors('circuit_breaker.open_ms')}>
                   {#snippet children({ props })}
                     <Input
                       {...props}
@@ -478,13 +495,14 @@
         {#if mode === 'edit'}
           <div class="grid gap-2 rounded-lg border border-destructive/30 p-3">
             <div class="grid gap-0.5">
-              <p class="text-sm font-medium">Delete this service</p>
+              <p class="text-sm font-medium">{$t('serviceSheet.delete')}</p>
               <p class="text-xs text-muted-foreground">
                 {#if usedBy.length > 0}
-                  Blocked: {usedBy.length} route{usedBy.length === 1 ? '' : 's'} still point here
-                  — {usedBy.map((route) => route.name).join(', ')}. Move them first.
+                  {$plural('serviceSheet.deleteBlocked', usedBy.length, {
+                    routes: usedBy.map((route) => route.name).join(', ')
+                  })}
                 {:else}
-                  Nothing routes here, so it is safe to remove.
+                  {$t('serviceSheet.deleteSafe')}
                 {/if}
               </p>
             </div>
@@ -495,7 +513,7 @@
                 disabled={saving || usedBy.length > 0}
                 onclick={() => ondelete?.(form)}
               >
-                Delete service
+                {$t('serviceSheet.deleteButton')}
               </Button>
             </div>
           </div>
@@ -504,7 +522,7 @@
     {/if}
 
     <Sheet.Footer class="flex-row justify-end gap-2 border-t border-border">
-      <Button variant="outline" onclick={cancel} disabled={saving}>Cancel</Button>
+      <Button variant="outline" onclick={cancel} disabled={saving}>{$t('common.cancel')}</Button>
       <Button onclick={save} disabled={saving || blocked}>
         {saving ? 'Saving...' : mode === 'create' ? 'Create service' : 'Save changes'}
       </Button>

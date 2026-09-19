@@ -5,6 +5,7 @@
   import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
   import InfoIcon from '@lucide/svelte/icons/info';
   import Sparkline from './sparkline.svelte';
+  import { Skeleton } from '$lib/components/ui/skeleton';
   import * as Tooltip from '$lib/components/ui/tooltip';
   import { formatDelta } from '$lib/format';
   import { cn } from '$lib/utils';
@@ -27,6 +28,8 @@
      */
     hint,
     history = [],
+    /** Before the first sample: the tile's own shape, without numbers in it. */
+    loading = false,
     class: className
   }: {
     label: string;
@@ -38,6 +41,7 @@
     deltaLabel?: string;
     hint?: string;
     history?: number[];
+    loading?: boolean;
     class?: string;
   } = $props();
 
@@ -82,14 +86,20 @@
     {/if}
   </div>
 
-  <div class="flex items-baseline gap-1.5">
-    <span class="text-2xl font-semibold tabular-nums tracking-tight">{value}</span>
-    {#if unit}
-      <span class="text-sm text-muted-foreground">{unit}</span>
+  <div class="flex items-baseline gap-1.5" aria-busy={loading || undefined}>
+    {#if loading}
+      <!-- Same line height as the number it stands in for, so nothing moves
+           when the first sample lands. -->
+      <Skeleton class="my-1 h-6 w-20" />
+    {:else}
+      <span class="text-2xl font-semibold tabular-nums tracking-tight">{value}</span>
+      {#if unit}
+        <span class="text-sm text-muted-foreground">{unit}</span>
+      {/if}
     {/if}
   </div>
 
-  {#if delta !== null && delta !== undefined}
+  {#if delta !== null && delta !== undefined && !loading}
     <!-- The arrow says which way it moved and the sign says it again, so the
          colour is confirmation rather than the message. -->
     <p
@@ -106,7 +116,7 @@
     </p>
   {/if}
 
-  {#if history.length > 1}
+  {#if history.length > 1 && !loading}
     <Sparkline values={history} class={tone === 'bad' ? 'text-destructive' : 'text-primary'} />
   {/if}
 </div>

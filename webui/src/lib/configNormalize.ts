@@ -9,6 +9,7 @@ import {
   createDefaultRoute,
   createDefaultRouteCache,
   createDefaultService,
+  createDefaultTls,
   createDefaultUpstream,
   type ConcurrencyLimitConfig,
   type HeaderRules,
@@ -16,8 +17,10 @@ import {
   type StickyConfig,
   type UpstreamH2,
   type LbStrategy,
+  type AcmeConfig,
   type PrxConfig,
   type RateLimitConfig,
+  type TlsConfig,
   type RouteCacheConfig,
   type RouteConfig,
   type ServiceConfig,
@@ -281,21 +284,49 @@ const normalizeRoute = (route: PartialRoute, routeIndex: number): RouteConfig =>
   };
 };
 
+/** `[server.tls]`, including the certificate list and ACME (T308). */
+const normalizeTls = (input: Partial<TlsConfig>): TlsConfig => {
+  const defaults = createDefaultTls();
+  const acme = (input.acme ?? {}) as Partial<AcmeConfig>;
+
+  return {
+    listen: String(input.listen ?? defaults.listen),
+    cert_path: String(input.cert_path ?? ''),
+    key_path: String(input.key_path ?? ''),
+    enable_h2: input.enable_h2 ?? defaults.enable_h2,
+    certs: (Array.isArray(input.certs) ? input.certs : []).map((cert) => ({
+      domains: Array.isArray(cert?.domains) ? cert.domains.map(String) : [],
+      cert_path: String(cert?.cert_path ?? ''),
+      key_path: String(cert?.key_path ?? ''),
+      is_default: cert?.is_default ?? false
+    })),
+    acme: {
+      enabled: acme.enabled ?? false,
+      email: Array.isArray(acme.email) ? acme.email.map(String) : [],
+      directory_url: String(acme.directory_url ?? defaults.acme.directory_url),
+      domains: Array.isArray(acme.domains) ? acme.domains.map(String) : [],
+      storage_dir: String(acme.storage_dir ?? defaults.acme.storage_dir),
+      renew_before_days: Number(acme.renew_before_days ?? defaults.acme.renew_before_days),
+      ca_root_path: acme.ca_root_path == null ? null : String(acme.ca_root_path)
+    }
+  };
+};
+
 export const normalizePrxConfig = (input: ConfigInput): PrxConfig => {
   const defaults = createDefaultConfig();
+  // `[[service]]` in the file arrives as `service`; `?format=json` calls the
+  // same thing `services`. Either may be absent, and absent is not the same as
+  // a starter service: a proxy with nothing in it has to look like one, or the
+  // empty states never show and the setup wizard never offers itself (T309).
   const serviceSource =
-    Array.isArray(input.services) && input.services.length > 0
-      ? input.services
-      : Array.isArray(input.service) && input.service.length > 0
-        ? input.service
-        : defaults.services;
+    (Array.isArray(input.services) ? input.services : undefined) ??
+    (Array.isArray(input.service) ? input.service : undefined) ??
+    defaults.services;
 
   const routeSource =
-    Array.isArray(input.routes) && input.routes.length > 0
-      ? input.routes
-      : Array.isArray(input.route) && input.route.length > 0
-        ? input.route
-        : defaults.routes;
+    (Array.isArray(input.routes) ? input.routes : undefined) ??
+    (Array.isArray(input.route) ? input.route : undefined) ??
+    defaults.routes;
 
   return {
     server: {
@@ -315,16 +346,12 @@ export const normalizePrxConfig = (input: ConfigInput): PrxConfig => {
       config_reload_debounce_ms:
         parseNullableNumber(input.server?.config_reload_debounce_ms) ??
         defaults.server.config_reload_debounce_ms,
+      h2c: input.server?.h2c ?? defaults.server.h2c,
       tls:
         input.server?.tls === null
           ? null
           : input.server?.tls
-            ? {
-                listen: String(input.server.tls.listen ?? '0.0.0.0:8443'),
-                cert_path: String(input.server.tls.cert_path ?? ''),
-                key_path: String(input.server.tls.key_path ?? ''),
-                enable_h2: input.server.tls.enable_h2 ?? true
-              }
+            ? normalizeTls(input.server.tls)
             : defaults.server.tls
     },
     observability: {

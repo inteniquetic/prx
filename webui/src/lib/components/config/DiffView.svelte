@@ -8,13 +8,14 @@
    * carries its `+`/`-` marker and its line numbers.
    */
   import { toHunks, toSideBySide, type DiffOp } from '$lib/configDiff';
+  import { t } from '$lib/i18n';
 
   let {
     ops,
     mode = 'unified',
     context = 3,
-    beforeLabel = 'Running config',
-    afterLabel = 'Draft',
+    beforeLabel = '',
+    afterLabel = '',
     class: className = ''
   }: {
     ops: DiffOp[];
@@ -27,6 +28,8 @@
   } = $props();
 
   const hunks = $derived(toHunks(ops, context));
+  const beforeHeading = $derived(beforeLabel || $t('diff.beforeLabel'));
+  const afterHeading = $derived(afterLabel || $t('diff.afterLabel'));
   const rows = $derived(toSideBySide(ops));
 
   const markerFor = (kind: DiffOp['kind']): string =>
@@ -45,9 +48,7 @@
 
 <div class="overflow-hidden rounded-lg border border-border bg-background {className}">
   {#if ops.every((op) => op.kind === 'equal')}
-    <p class="px-4 py-6 text-center text-sm text-muted-foreground">
-      The draft is identical to the config the proxy is running.
-    </p>
+    <p class="px-4 py-6 text-center text-sm text-muted-foreground">{$t('diff.identical')}</p>
   {:else if mode === 'unified'}
     <div class="max-h-[60vh] overflow-auto font-mono text-xs leading-6">
       {#each hunks as hunk (`${hunk.oldStart}-${hunk.newStart}`)}
@@ -73,7 +74,7 @@
           </div>
           {#if op.noNewline}
             <div class="px-1 pl-24 text-[11px] italic text-muted-foreground">
-              \ No newline at end of file
+              {$t('diff.noNewline')}
             </div>
           {/if}
         {/each}
@@ -84,8 +85,8 @@
       <div
         class="sticky top-0 z-10 grid grid-cols-2 border-b border-border bg-muted/70 text-[11px] font-semibold text-muted-foreground backdrop-blur"
       >
-        <div class="border-r border-border px-3 py-1">{beforeLabel}</div>
-        <div class="px-3 py-1">{afterLabel}</div>
+        <div class="border-r border-border px-3 py-1">{beforeHeading}</div>
+        <div class="px-3 py-1">{afterHeading}</div>
       </div>
       <div class="grid grid-cols-2 font-mono text-xs leading-6">
         {#each rows as row, index (index)}

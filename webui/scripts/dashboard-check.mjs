@@ -10,6 +10,19 @@
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
 
+import { mockDraftEndpoints } from './draft-mocks.mjs';
+
+const DRAFT_TOML = `[server]
+listen = ["0.0.0.0:8080"]
+health_path = "/healthz"
+ready_path = "/readyz"
+
+[observability]
+log_level = "info"
+access_log = true
+`;
+
+
 const PORT = Number(process.env.DASHBOARD_PORT ?? 5206);
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 
@@ -291,6 +304,7 @@ await waitForServer();
 const browser = await chromium.launch({ executablePath });
 const context = await browser.newContext({ viewport: { width: 1600, height: 1200 } });
 
+await mockDraftEndpoints(context, { toml: DRAFT_TOML, config });
 await context.route('**/web/config*', (route) =>
   route.fulfill({ contentType: 'application/json', body: JSON.stringify(config()) })
 );

@@ -9,6 +9,7 @@
   import * as Command from '$lib/components/ui/command';
   import { navigate, navItems, type NavPage } from '$lib/stores/navigation';
   import type { PrxConfig } from '$lib/types/config';
+  import { plural, t } from '$lib/i18n';
 
   let {
     open = $bindable(false),
@@ -46,9 +47,11 @@
   const pageEntries = $derived(
     navItems.map((item) => ({
       id: `page:${item.id}`,
-      label: item.label,
-      hint: item.pending ? `placeholder until ${item.pending}` : 'Page',
-      haystack: `${item.label} ${item.id}`.toLowerCase(),
+      label: $t(item.labelKey),
+      hint: item.pending
+        ? $t('palette.hint.placeholder', { task: item.pending })
+        : $t('palette.hint.page'),
+      haystack: `${$t(item.labelKey)} ${item.id}`.toLowerCase(),
       icon: item.icon,
       run: () => navigate(item.id as NavPage)
     }))
@@ -58,7 +61,7 @@
     (config.routes ?? []).map((route) => ({
       id: `route:${route.name}`,
       label: route.name,
-      hint: [route.host || 'any host', route.path_prefix, `→ ${route.service}`]
+      hint: [route.host || $t('common.anyHost'), route.path_prefix, `→ ${route.service}`]
         .filter(Boolean)
         .join('  '),
       haystack: `${route.name} ${route.host} ${route.path_prefix} ${route.service}`.toLowerCase(),
@@ -71,7 +74,7 @@
     (config.services ?? []).map((service) => ({
       id: `service:${service.name}`,
       label: service.name,
-      hint: `${service.upstreams.length} upstream${service.upstreams.length === 1 ? '' : 's'}  ${service.upstreams
+      hint: `${$plural('palette.upstreams', service.upstreams.length)}  ${service.upstreams
         .slice(0, 2)
         .map((upstream) => upstream.addr)
         .join(', ')}`,
@@ -85,16 +88,16 @@
     [
       {
         id: 'action:add-route',
-        label: 'Add a route',
-        hint: 'Create and open the new route',
+        label: $t('palette.action.addRoute'),
+        hint: $t('palette.action.addRouteHint'),
         haystack: 'add route new create',
         icon: PlusIcon,
         run: () => onaddRoute?.()
       },
       {
         id: 'action:health',
-        label: 'Check route health',
-        hint: 'Probe every upstream now',
+        label: $t('palette.action.health'),
+        hint: $t('palette.action.healthHint'),
         haystack: 'check health probe upstream',
         icon: ActivityIcon,
         run: () => onrefreshHealth?.()
@@ -103,16 +106,16 @@
         ? [
             {
               id: 'action:apply',
-              label: 'Apply the draft',
-              hint: 'Write the edited config back to the proxy',
+              label: $t('palette.action.apply'),
+              hint: $t('palette.action.applyHint'),
               haystack: 'apply draft save config',
               icon: UploadIcon,
               run: () => onapplyDraft?.()
             },
             {
               id: 'action:diff',
-              label: 'Review the draft',
-              hint: 'Open Settings to read the TOML before applying',
+              label: $t('palette.action.diff'),
+              hint: $t('palette.action.diffHint'),
               haystack: 'diff review draft toml settings',
               icon: FileDiffIcon,
               run: () => navigate('settings')
@@ -175,15 +178,20 @@
 <!-- Filtering is ours, not bits-ui's: matching on host and upstream address as
      well as name, and capping each group, is what keeps a 500-route config
      instant. -->
-<Command.Dialog bind:open shouldFilter={false} title="Command palette" description="Jump to a page, a route or a service, or run an action">
-  <Command.Input bind:value={query} placeholder="Search routes, services, pages, actions..." />
+<Command.Dialog
+  bind:open
+  shouldFilter={false}
+  title={$t('shell.commandPalette')}
+  description={$t('palette.placeholder')}
+>
+  <Command.Input bind:value={query} placeholder={$t('palette.placeholder')} />
   <Command.List>
     {#if empty}
-      <Command.Empty>Nothing matches “{query}”.</Command.Empty>
+      <Command.Empty>{$t('palette.empty')}</Command.Empty>
     {/if}
-    {@render group('Actions', actions)}
-    {@render group('Routes', routes)}
-    {@render group('Services', services)}
-    {@render group('Pages', pages)}
+    {@render group($t('palette.group.actions'), actions)}
+    {@render group($t('palette.group.routes'), routes)}
+    {@render group($t('palette.group.services'), services)}
+    {@render group($t('palette.group.pages'), pages)}
   </Command.List>
 </Command.Dialog>

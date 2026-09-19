@@ -10,6 +10,19 @@
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
 
+import { mockDraftEndpoints } from './draft-mocks.mjs';
+
+const DRAFT_TOML = `[server]
+listen = ["0.0.0.0:8080"]
+health_path = "/healthz"
+ready_path = "/readyz"
+
+[observability]
+log_level = "info"
+access_log = true
+`;
+
+
 const PORT = Number(process.env.ROUTES_PORT ?? 5204);
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 const ROUTE_COUNT = 500;
@@ -184,6 +197,7 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 1000
 /** Set to a message to make the next write fail, the way the proxy would. */
 let rejectNextWith = null;
 
+await mockDraftEndpoints(context, { toml: DRAFT_TOML, config });
 await context.route('**/web/config*', (route) =>
   route.fulfill({ contentType: 'application/json', body: JSON.stringify(config()) })
 );

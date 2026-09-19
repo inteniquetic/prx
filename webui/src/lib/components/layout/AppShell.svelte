@@ -8,6 +8,7 @@
   import Topbar from './Topbar.svelte';
   import { type NavBadge, type NavPage } from '$lib/stores/navigation';
   import type { PrxConfig } from '$lib/types/config';
+  import { t } from '$lib/i18n';
 
   let {
     config,
@@ -48,7 +49,7 @@
     href="#main-content"
     class="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-popover focus:px-3 focus:py-2 focus:text-sm focus:shadow-md focus:outline-none focus:ring-[3px] focus:ring-ring/50"
   >
-    Skip to content
+    {$t('shell.skipToContent')}
   </a>
 
   <Sidebar {badges} />
@@ -58,7 +59,7 @@
     <Sheet.Content side="left" class="w-64 p-0">
       <Sheet.Header class="border-b border-border">
         <Sheet.Title>PRX</Sheet.Title>
-        <Sheet.Description class="sr-only">Main navigation</Sheet.Description>
+        <Sheet.Description class="sr-only">{$t('shell.mainNavigation')}</Sheet.Description>
       </Sheet.Header>
       <SidebarNav {badges} onnavigate={() => (navOpen = false)} />
     </Sheet.Content>
