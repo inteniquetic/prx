@@ -377,7 +377,7 @@ check(
 );
 
 await page.goto(`${ORIGIN}/settings`, { waitUntil: 'networkidle' });
-await page.getByRole('button', { name: 'TOML Config' }).click();
+await page.getByRole('button', { name: 'TOML', exact: true }).click();
 await page.waitForSelector('[data-slot="toml-editor"] .cm-content');
 check(
   requested.some((url) => /\/editor-[^/]*\.js/.test(url)),
@@ -441,7 +441,7 @@ check(
 
 await settle(600);
 await page.reload({ waitUntil: 'networkidle' });
-await page.getByRole('button', { name: 'TOML Config' }).click();
+await page.getByRole('button', { name: 'TOML', exact: true }).click();
 await page.waitForSelector('[data-slot="toml-editor"] .cm-content');
 await settle(700);
 check(

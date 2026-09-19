@@ -63,14 +63,7 @@ export const navItems: NavItem[] = [
     section: 'traffic',
     detail: true
   },
-  {
-    id: 'tls',
-    label: 'TLS',
-    icon: ShieldCheckIcon,
-    path: '/tls',
-    section: 'operations',
-    pending: 'T308'
-  },
+  { id: 'tls', label: 'TLS', icon: ShieldCheckIcon, path: '/tls', section: 'operations' },
   { id: 'settings', label: 'Settings', icon: SettingsIcon, path: '/settings', section: 'operations' },
   {
     id: 'audit',

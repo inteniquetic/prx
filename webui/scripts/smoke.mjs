@@ -127,13 +127,13 @@ try {
   if (stored === 'dark' && !afterReload.dark) problems.push('stored dark theme was not applied on load');
   if (stored === 'light' && afterReload.dark) problems.push('stored light theme was not applied on load');
 
-  // Two things have to hold on the TOML tab, and only the binary can show
-  // either: the editor loads the file the proxy is actually running (T307), and
-  // the TOML the forms would write is still a config the proxy accepts with
-  // nothing dropped from it.
+  // The config editing path, end to end against the real parser (T307, T308):
+  // the editor shows the file the proxy is running, a form field changes that
+  // file key by key, and applying it writes a config the proxy accepts with
+  // nothing lost from the parts the forms never show.
   await navLink('/settings').click();
   await page.waitForTimeout(400);
-  await page.getByRole('button', { name: /TOML Config/ }).click();
+  await page.getByRole('button', { name: 'TOML', exact: true }).click();
   // CodeMirror is fetched on demand (T307), so wait for it to arrive — or for
   // the plain textarea it falls back to.
   await page.waitForSelector('[data-slot="toml-editor"] .cm-line, textarea');
@@ -156,43 +156,69 @@ try {
     );
   }
 
-  // The header's Save writes the config the forms hold, rendered by
-  // `configCodec.ts`. Round-tripping it through the real parser is the only
-  // check that catches a field the renderer quietly drops.
   const before = await page.evaluate(() => fetch('/web/config?format=json').then((r) => r.json()));
-  await page.getByRole('button', { name: /^Sav(e|ing)/ }).first().click();
-  await page.waitForTimeout(1200);
+
+  // A setting the proxy only reads at startup, so applying it changes the file
+  // and nothing about the traffic this smoke run is not sending anyway.
+  const listener = before.observability.prometheus_listen === '127.0.0.1:9199'
+    ? '127.0.0.1:9198'
+    : '127.0.0.1:9199';
+
+  await page.getByRole('button', { name: 'Observability', exact: true }).click();
+  await page.waitForTimeout(300);
+  await page.getByLabel('Prometheus listener').fill(listener);
+  await page.getByLabel('Prometheus listener').blur();
+  await page.waitForTimeout(900);
+
+  await page.getByRole('button', { name: /Review & apply/ }).click();
+  await page.waitForSelector('[aria-label="Review config changes"]');
+  await page
+    .locator('[aria-label="Review config changes"]')
+    .getByRole('button', { name: /Apply to the proxy/ })
+    .click();
+  await page.waitForTimeout(1500);
+
   const after = await page.evaluate(() => fetch('/web/config?format=json').then((r) => r.json()));
+  const appliedToml = await (await fetch(`${base}/web/config`)).text();
   const roundTrip = { before, after };
+
+  if (after.observability.prometheus_listen !== listener) {
+    problems.push(
+      `applying a form change did not reach the file (${after.observability.prometheus_listen})`
+    );
+  }
+  if (!appliedToml.includes('#') && fileToml.includes('#')) {
+    problems.push('applying a form change stripped the comments out of the config file');
+  }
 
   {
     if (roundTrip.before.routes.length !== roundTrip.after.routes.length) {
-      problems.push("saving the UI's TOML changed how many routes exist");
+      problems.push('applying a form change altered how many routes exist');
     }
     for (const route of roundTrip.before.routes) {
       const same = roundTrip.after.routes.find((entry) => entry.name === route.name);
       if (!same) {
-        problems.push(`route ${route.name} disappeared after saving the UI's TOML`);
+        problems.push(`route ${route.name} disappeared when a setting was applied`);
         continue;
       }
       if (route.rate_limit?.enabled !== same.rate_limit?.enabled) {
-        problems.push(`route ${route.name} lost its rate limit after saving the UI's TOML`);
+        problems.push(`route ${route.name} lost its rate limit when a setting was applied`);
       }
       const hadHeaders = JSON.stringify(route.request_headers ?? {});
       if (hadHeaders !== JSON.stringify(same.request_headers ?? {})) {
-        problems.push(`route ${route.name} lost its header rules after saving the UI's TOML`);
+        problems.push(`route ${route.name} lost its header rules when a setting was applied`);
       }
     }
 
     for (const service of roundTrip.before.services) {
       const same = roundTrip.after.services.find((entry) => entry.name === service.name);
       if (!same) {
-        problems.push(`service ${service.name} disappeared after saving the UI's TOML`);
+        problems.push(`service ${service.name} disappeared when a setting was applied`);
         continue;
       }
       for (const field of ['health_check', 'sticky', 'circuit_breaker']) {
         if (JSON.stringify(service[field] ?? {}) !== JSON.stringify(same[field] ?? {})) {
-          problems.push(`service ${service.name} lost its ${field} after saving the UI's TOML`);
+          problems.push(`service ${service.name} lost its ${field} when a setting was applied`);
         }
       }
       for (const field of [
@@ -205,7 +231,7 @@ try {
       ]) {
         if (service[field] !== same[field]) {
           problems.push(
-            `service ${service.name} lost ${field} after saving the UI's TOML ` +
+            `service ${service.name} lost ${field} when a setting was applied ` +
               `(${JSON.stringify(service[field])} -> ${JSON.stringify(same[field])})`
           );
         }
@@ -242,6 +268,6 @@ if (problems.length) {
 console.log(
   `smoke passed against ${base}: 4 pages with real URLs, a deep link through the server, ` +
     'modal open/close, command palette, theme menu + persistence, the TOML editor on ' +
-    'the real file, a TOML round trip through the server, self-hosted fonts, ' +
-    'no console errors, no external requests'
+    'the real file, a settings change applied through the real parser with its ' +
+    'comments intact, self-hosted fonts, no console errors, no external requests'
 );

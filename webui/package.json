@@ -19,7 +19,8 @@
     "services:check": "node scripts/services-check.mjs",
     "dashboard:check": "node scripts/dashboard-check.mjs",
     "diff:check": "node scripts/diff-check.mjs",
-    "config:check": "node scripts/config-check.mjs"
+    "config:check": "node scripts/config-check.mjs",
+    "settings:check": "node scripts/settings-check.mjs"
   },
   "devDependencies": {
     "@codemirror/commands": "^6.11.1",

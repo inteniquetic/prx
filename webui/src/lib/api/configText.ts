@@ -12,6 +12,9 @@ import type { PrxConfig } from '../types/config';
 
 const CONFIG_ENDPOINT = '/web/config';
 const VALIDATE_ENDPOINT = '/web/config/validate';
+const EDIT_ENDPOINT = '/web/config/edit';
+const TLS_STATUS_ENDPOINT = '/web/tls/status';
+const ACME_RENEW_ENDPOINT = '/web/tls/acme/renew';
 const REQUEST_TIMEOUT_MS = 10000;
 
 /** One problem in the draft, with the place in the file to mark. */
@@ -173,4 +176,119 @@ export const applyConfigText = async (
     message: body || 'config_applied',
     etag: response.headers.get('ETag')
   };
+};
+
+// ---------------------------------------------------------------------------
+// Field edits (T308)
+// ---------------------------------------------------------------------------
+
+/** One change to one key, addressed the way the validator addresses errors. */
+export interface ConfigEditOp {
+  /** `server.tls.acme.domains`, `service[0].upstream[1].weight`. */
+  path: string;
+  /** `set` writes it, `remove` takes it out, `append` pushes a `[[path]]`. */
+  action?: 'set' | 'remove' | 'append';
+  /** `null` on a `set` clears the key, because TOML has no "unset" value. */
+  value?: unknown;
+}
+
+export interface EditResult {
+  toml: string;
+  report: ValidationReport;
+}
+
+/**
+ * Applies field edits to a draft, server-side.
+ *
+ * The forms could render a whole config instead, and that is exactly what this
+ * avoids: `toml_edit` changes the keys named and leaves every comment, blank
+ * line and key order in the file alone.
+ */
+export const editConfigText = async (
+  toml: string,
+  ops: ConfigEditOp[]
+): Promise<EditResult> => {
+  const response = await fetchWithTimeout(EDIT_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ toml, ops })
+  });
+
+  if (!response.ok) {
+    const reason = (await response.text()).trim() || response.statusText;
+    throw new Error(`edit_config failed (${response.status}): ${reason}`);
+  }
+
+  const payload = (await response.json()) as {
+    toml: string;
+    valid: boolean;
+    errors?: ConfigDiagnostic[];
+    warnings?: ConfigDiagnostic[];
+    config?: unknown;
+    current_etag?: string;
+  };
+
+  return {
+    toml: payload.toml,
+    report: {
+      valid: payload.valid,
+      errors: payload.errors ?? [],
+      warnings: payload.warnings ?? [],
+      config: payload.config ? normalizePrxConfig(payload.config as Partial<PrxConfig>) : null,
+      currentEtag: payload.current_etag ?? null
+    }
+  };
+};
+
+// ---------------------------------------------------------------------------
+// TLS (T308)
+// ---------------------------------------------------------------------------
+
+export interface AcmeStatus {
+  enabled: boolean;
+  staging: boolean;
+  directory_url: string;
+  domains: string[];
+  last_attempt_epoch_s: number | null;
+  last_success_epoch_s: number | null;
+  last_error: string | null;
+  certificate_expiry_epoch_s: number | null;
+}
+
+export interface TlsCertStatus {
+  domain: string;
+  expires_epoch_s: number;
+  expires_in_days: number;
+}
+
+export interface TlsStatus {
+  acme: AcmeStatus;
+  certificates: TlsCertStatus[];
+}
+
+/** What the running proxy is actually serving, not what the file asks for. */
+export const loadTlsStatus = async (): Promise<TlsStatus> => {
+  const response = await fetchWithTimeout(TLS_STATUS_ENDPOINT, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    cache: 'no-store'
+  });
+
+  if (!response.ok) {
+    const reason = (await response.text()).trim() || response.statusText;
+    throw new Error(`load_tls_status failed (${response.status}): ${reason}`);
+  }
+
+  return (await response.json()) as TlsStatus;
+};
+
+/** Asks the ACME loop to order a certificate now rather than at its next check. */
+export const requestAcmeRenew = async (): Promise<string> => {
+  const response = await fetchWithTimeout(ACME_RENEW_ENDPOINT, { method: 'POST' });
+  const body = (await response.text()).trim();
+
+  if (!response.ok) {
+    throw new Error(body || `renew failed (${response.status})`);
+  }
+  return body || 'renew_requested';
 };

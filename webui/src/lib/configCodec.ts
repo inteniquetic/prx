@@ -291,13 +291,54 @@ export const encodeToml = (config: PrxConfig): string => {
   lines.push(
     `config_reload_debounce_ms = ${Math.max(0, config.server.config_reload_debounce_ms || 0)}`
   );
+  // Only written when it differs from the proxy's own default, like everything
+  // else here — but written, because a dropped key is a silently changed proxy.
+  if (config.server.h2c === false) {
+    lines.push('h2c = false');
+  }
   if (config.server.tls) {
+    const tls = config.server.tls;
     lines.push('');
     lines.push('[server.tls]');
-    lines.push(`listen = "${esc(config.server.tls.listen)}"`);
-    lines.push(`cert_path = "${esc(config.server.tls.cert_path)}"`);
-    lines.push(`key_path = "${esc(config.server.tls.key_path)}"`);
-    lines.push(`enable_h2 = ${toTomlBool(config.server.tls.enable_h2)}`);
+    lines.push(`listen = "${esc(tls.listen)}"`);
+    // Written only when they are set: an empty cert_path next to a list of
+    // [[server.tls.cert]] blocks is a config prx refuses to load.
+    if (tls.cert_path.trim()) {
+      lines.push(`cert_path = "${esc(tls.cert_path)}"`);
+    }
+    if (tls.key_path.trim()) {
+      lines.push(`key_path = "${esc(tls.key_path)}"`);
+    }
+    lines.push(`enable_h2 = ${toTomlBool(tls.enable_h2)}`);
+
+    if (tls.acme.enabled) {
+      lines.push('');
+      lines.push('[server.tls.acme]');
+      lines.push('enabled = true');
+      if (tls.acme.email.length > 0) {
+        lines.push(`email = ${formatArray(tls.acme.email)}`);
+      }
+      lines.push(`domains = ${formatArray(tls.acme.domains)}`);
+      lines.push(`directory_url = "${esc(tls.acme.directory_url)}"`);
+      lines.push(`storage_dir = "${esc(tls.acme.storage_dir)}"`);
+      lines.push(`renew_before_days = ${Math.max(1, tls.acme.renew_before_days)}`);
+      if (tls.acme.ca_root_path) {
+        lines.push(`ca_root_path = "${esc(tls.acme.ca_root_path)}"`);
+      }
+    }
+
+    for (const cert of tls.certs) {
+      lines.push('');
+      lines.push('[[server.tls.cert]]');
+      if (cert.domains.length > 0) {
+        lines.push(`domains = ${formatArray(cert.domains)}`);
+      }
+      lines.push(`cert_path = "${esc(cert.cert_path)}"`);
+      lines.push(`key_path = "${esc(cert.key_path)}"`);
+      if (cert.is_default) {
+        lines.push('is_default = true');
+      }
+    }
   }
   lines.push('');
 
