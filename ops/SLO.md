@@ -12,7 +12,9 @@ This document defines the initial service-level objectives for `prx`.
 ## Primary SLIs
 
 - `prx_requests_total{status=...}` for request/error-rate math
-- `prx_request_latency_ms` for latency percentiles
+- `prx_request_latency_ms` for latency percentiles (buckets reach 10s; the
+  Prometheus defaults stopped at 10ms and made p95/p99 meaningless)
+- `prx_inflight_requests` for how much work is in the proxy right now
 - `prx_upstream_errors_total{stage=...}` for upstream/connect instability
 - `prx_circuit_breaker_open_total` and `prx_upstream_circuit_open` for upstream health pressure
 

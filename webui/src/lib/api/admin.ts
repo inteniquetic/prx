@@ -1,8 +1,12 @@
 import { normalizePrxConfig } from '../configNormalize';
+import { reportFailure, reportSuccess } from '../stores/connection';
 import type { PrxConfig, ServiceConfig, RouteConfig } from '../types/config';
 
 const ADMIN_CONFIG_ENDPOINT = '/web/config';
 const ADMIN_ROUTE_HEALTH_ENDPOINT = '/web/health/routes';
+const ADMIN_ROUTE_TEST_ENDPOINT = '/web/routes/test';
+const ADMIN_SERVICE_STATUS_ENDPOINT = '/web/services/status';
+const ADMIN_UPSTREAM_TEST_ENDPOINT = '/web/upstreams/test';
 const ADMIN_SERVICES_ENDPOINT = '/admin/services';
 const ADMIN_ROUTES_ENDPOINT = '/admin/routes';
 const REQUEST_TIMEOUT_MS = 10000;
@@ -16,10 +20,17 @@ const fetchWithTimeout = async (
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(input, {
+    const response = await fetch(input, {
       ...init,
       signal: controller.signal
     });
+    // Reachability, not correctness: a 500 still proves the admin API is there,
+    // and the caller is the one that decides what the status code means.
+    reportSuccess();
+    return response;
+  } catch (error) {
+    reportFailure(error);
+    throw error;
   } finally {
     window.clearTimeout(timeoutId);
   }
@@ -283,4 +294,143 @@ export const getRoute = async (name: string): Promise<RouteConfig> => {
   }
 
   return (await response.json()) as RouteConfig;
+};
+
+// Route tester (T304). The server runs the request through the same matcher
+// the proxy uses, so the answer cannot drift from live traffic.
+
+export interface RouteTestRequest {
+  method: string;
+  host: string;
+  path: string;
+}
+
+export interface RouteTestUpstream {
+  addr: string;
+  weight: number;
+  available: boolean;
+  circuit_open: boolean;
+  probe_healthy: boolean;
+  inflight: number;
+  ewma_us: number;
+}
+
+export interface RouteTestResponse {
+  outcome: 'matched' | 'method_not_allowed' | 'not_found';
+  request: {
+    method: string;
+    host: string;
+    normalized_host: string;
+    path: string;
+  };
+  route: {
+    index: number;
+    name: string;
+    host: string;
+    path_prefix: string;
+    methods: string[];
+    is_default: boolean;
+    enabled: boolean;
+    matched_by: 'exact_host' | 'wildcard_host' | 'any_host' | 'default_route';
+  } | null;
+  service: {
+    name: string;
+    lb: string;
+    selection: { deterministic: boolean; would_pick: string | null; note: string };
+    upstreams: RouteTestUpstream[];
+  } | null;
+}
+
+export const testRoute = async (request: RouteTestRequest): Promise<RouteTestResponse> => {
+  const response = await fetchWithTimeout(ADMIN_ROUTE_TEST_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify(request)
+  });
+
+  if (!response.ok) {
+    throw await buildHttpError('test_route', response);
+  }
+
+  return (await response.json()) as RouteTestResponse;
+};
+
+// Live service state (T305). The config says what was asked for; this says what
+// the running proxy is doing with it.
+
+export interface UpstreamStatus {
+  addr: string;
+  enabled: boolean;
+  weight: number;
+  /** Share of the selection ring, read from the ring itself. */
+  share: number;
+  available: boolean;
+  circuit_open: boolean;
+  circuit_reopens_in_ms: number | null;
+  consecutive_failures: number;
+  probe_healthy: boolean;
+  last_probe_ms_ago: number | null;
+  inflight: number;
+  ewma_us: number;
+}
+
+export interface ServiceStatus {
+  name: string;
+  lb: string;
+  health_check_enabled: boolean;
+  circuit_breaker_enabled: boolean;
+  upstreams: UpstreamStatus[];
+}
+
+export interface ServiceStatusResponse {
+  checked_at_epoch_ms: number;
+  services: ServiceStatus[];
+}
+
+export const loadServiceStatus = async (): Promise<ServiceStatusResponse> => {
+  const response = await fetchWithTimeout(ADMIN_SERVICE_STATUS_ENDPOINT, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    cache: 'no-store'
+  });
+
+  if (!response.ok) {
+    throw await buildHttpError('load_service_status', response);
+  }
+
+  return (await response.json()) as ServiceStatusResponse;
+};
+
+export interface UpstreamTestResult {
+  addr: string;
+  timeout_ms: number;
+  healthy: boolean;
+  latency_ms: number | null;
+  error: string | null;
+  source: string;
+  last_probe_ms_ago: number | null;
+}
+
+export const testUpstream = async (
+  addr: string,
+  timeoutMs = 1200
+): Promise<UpstreamTestResult> => {
+  const response = await fetchWithTimeout(
+    ADMIN_UPSTREAM_TEST_ENDPOINT,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ addr, timeout_ms: timeoutMs })
+    },
+    REQUEST_TIMEOUT_MS + timeoutMs
+  );
+
+  if (!response.ok) {
+    throw await buildHttpError('test_upstream', response);
+  }
+
+  return (await response.json()) as UpstreamTestResult;
 };

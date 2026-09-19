@@ -3,9 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>PRX Proxy</title>
-    <script type="module" crossorigin src="/assets/index-DWr67Lqn.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-kI2XYmAo.css">
+    <script>
+      // Runs before first paint so the page never flashes the wrong theme.
+      // Mirrors src/lib/stores/theme.ts; keep the key and the values in step.
+      (function () {
+        try {
+          var stored = localStorage.getItem('prx-theme');
+          var dark =
+            stored === 'dark' ||
+            ((stored === 'system' || stored === null) &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', dark);
+        } catch (e) {
+          // Blocked storage: fall back to the OS setting only.
+          if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.add('dark');
+          }
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-Cirltz9z.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-yT05BHS8.css">
   </head>
   <body>
     <div id="app"></div>

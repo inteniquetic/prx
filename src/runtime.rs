@@ -71,6 +71,7 @@ impl RuntimeConfig {
             path_prefix: route.path_prefix.as_str(),
             methods: route.methods,
             is_default: route.is_default,
+            enabled: route.enabled,
         }));
 
         Self {
@@ -132,6 +133,11 @@ pub struct CircuitBreakerRuntime {
 }
 
 impl CircuitBreakerRuntime {
+    /// Whether the breaker is armed at all, for callers reporting live state.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
     fn from_config(config: &crate::config::CircuitBreakerConfig) -> Self {
         Self {
             enabled: config.enabled,
@@ -150,6 +156,9 @@ pub struct RouteRuntime {
     pub path_prefix: String,
     pub methods: crate::router::MethodMask,
     pub is_default: bool,
+    /// Mirrors the config flag. A disabled route is kept here so the admin API
+    /// can still list it; it is simply absent from the index.
+    pub enabled: bool,
     pub service_idx: usize,
     /// Global rules merged with the route's own, compiled once per reload.
     pub request_headers: CompiledHeaderRules,
@@ -254,6 +263,7 @@ impl RouteRuntime {
             path_prefix: config.path_prefix,
             methods: method_mask(&config.methods),
             is_default: config.is_default,
+            enabled: config.enabled,
             service_idx,
             request_headers,
             response_headers,
@@ -332,6 +342,30 @@ impl ServiceRuntime {
                 self.select_power_of_two(attempted, |upstream| upstream.inflight() as u64)
             }
             LbStrategy::P2cEwma => self.select_power_of_two(attempted, UpstreamRuntime::load_score),
+        }?;
+
+        self.upstreams
+            .get(chosen_idx)
+            .map(|upstream| (chosen_idx, upstream))
+    }
+
+    /// What `next_upstream` would return, without changing anything.
+    ///
+    /// The route tester has to answer "where would this request go?" without
+    /// nudging the live round-robin cursor, so this reads the cursor instead of
+    /// advancing it. Strategies that draw at random have no answer to give and
+    /// return `None`; the caller says so rather than inventing one.
+    pub fn peek_upstream(&self, hash_seed: u64) -> Option<(usize, &UpstreamRuntime)> {
+        if self.upstreams.is_empty() || self.ring.is_empty() {
+            return None;
+        }
+
+        let chosen_idx = match self.lb {
+            LbStrategy::RoundRobin => {
+                self.select_from_ring(self.rr_cursor.load(Ordering::Relaxed), &[])
+            }
+            LbStrategy::Hash => self.select_hash(hash_seed, &[]),
+            LbStrategy::Random | LbStrategy::LeastConn | LbStrategy::P2cEwma => None,
         }?;
 
         self.upstreams
@@ -434,11 +468,40 @@ impl ServiceRuntime {
         None
     }
 
+    /// Each upstream's share of the selection ring, in the order of
+    /// `upstreams`.
+    ///
+    /// Read from the ring itself rather than recomputed from the weights: the
+    /// number the UI shows next to a weight slider should come from the same
+    /// structure the balancer indexes into, not from a second reading of the
+    /// same rule.
+    pub fn selection_share(&self) -> Vec<f64> {
+        let mut counts = vec![0usize; self.upstreams.len()];
+        for idx in &self.ring {
+            if let Some(slot) = counts.get_mut(*idx) {
+                *slot += 1;
+            }
+        }
+        let total = self.ring.len() as f64;
+        counts
+            .into_iter()
+            .map(|count| {
+                if total > 0.0 {
+                    count as f64 / total
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+
     pub fn has_available_upstream(&self) -> bool {
         let now_ms = now_epoch_ms();
+        // A drained upstream is not a fallback: readiness has to reflect what
+        // the balancer can actually pick.
         self.upstreams
             .iter()
-            .any(|upstream| upstream.is_available_at(now_ms))
+            .any(|upstream| upstream.enabled && upstream.is_available_at(now_ms))
     }
 
     pub fn mark_upstream_failure(&self, upstream_idx: usize) -> bool {
@@ -541,6 +604,9 @@ impl RetryBudget {
 #[derive(Debug)]
 pub struct UpstreamRuntime {
     pub addr: String,
+    /// Mirrors the config flag. A drained upstream is still probed and still
+    /// listed; it is simply absent from the selection ring.
+    pub enabled: bool,
     pub tls: bool,
     pub sni: String,
     pub weight: u16,
@@ -598,6 +664,7 @@ impl UpstreamRuntime {
             .unwrap_or_else(|| "localhost".to_string());
         Self {
             addr: config.addr,
+            enabled: config.enabled,
             tls: config.tls,
             sni,
             weight: config.weight.max(1),
@@ -621,6 +688,17 @@ impl UpstreamRuntime {
 
     pub fn is_circuit_open(&self) -> bool {
         !self.is_available_at(now_epoch_ms())
+    }
+
+    /// Milliseconds until the breaker closes again, or `None` when it is shut.
+    pub fn circuit_reopens_in_ms(&self) -> Option<u64> {
+        let until = self.state.open_until_epoch_ms.load(Ordering::Relaxed);
+        until.checked_sub(now_epoch_ms()).filter(|left| *left > 0)
+    }
+
+    /// Failures counted since the last success — why the breaker is where it is.
+    pub fn consecutive_failures(&self) -> usize {
+        self.state.consecutive_failures.load(Ordering::Relaxed)
     }
 
     fn is_available_at(&self, now_ms: u64) -> bool {
@@ -768,13 +846,26 @@ fn sni_from_addr(addr: &str) -> Option<String> {
 fn build_selection_ring(upstreams: &[UpstreamRuntime]) -> Vec<usize> {
     let mut ring = Vec::new();
     for (idx, upstream) in upstreams.iter().enumerate() {
+        // A drained upstream is simply not in the ring, which is the only way
+        // to keep it out of every strategy at once.
+        if !upstream.enabled {
+            continue;
+        }
         let weight = upstream_weight(upstream, idx);
         for _ in 0..weight {
             ring.push(idx);
         }
     }
-    if ring.is_empty() {
-        ring.extend(0..upstreams.len());
+    // Weights are clamped to at least 1, so an empty ring means every upstream
+    // is drained — and then the service really does have nowhere to send.
+    if ring.is_empty() && upstreams.iter().any(|upstream| upstream.enabled) {
+        ring.extend(
+            upstreams
+                .iter()
+                .enumerate()
+                .filter(|(_, upstream)| upstream.enabled)
+                .map(|(idx, _)| idx),
+        );
     }
     ring
 }
@@ -848,6 +939,7 @@ mod tests {
     fn upstream(addr: &str) -> UpstreamConfig {
         UpstreamConfig {
             addr: addr.to_string(),
+            enabled: true,
             tls: false,
             sni: None,
             weight: 1,
@@ -1128,6 +1220,7 @@ mod lb_tests {
     fn upstream_with(addr: &str, weight: u16) -> UpstreamConfig {
         UpstreamConfig {
             addr: addr.to_string(),
+            enabled: true,
             tls: false,
             sni: None,
             weight,

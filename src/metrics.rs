@@ -1,8 +1,20 @@
+use std::collections::HashMap;
+
 use once_cell::sync::Lazy;
 use prometheus::{
-    HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec, register_histogram_vec,
-    register_int_counter_vec, register_int_gauge_vec,
+    HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, core::Collector, proto,
+    register_histogram_vec, register_int_counter_vec, register_int_gauge, register_int_gauge_vec,
 };
+
+/// Latency buckets, in milliseconds, from "faster than we can measure" to
+/// "the client gave up".
+///
+/// The default Prometheus buckets stop at 10 — which, for a metric counted in
+/// milliseconds, put every request slower than 10 ms into `+Inf` and made every
+/// percentile above p50 a guess.
+const LATENCY_BUCKETS_MS: &[f64] = &[
+    1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0,
+];
 
 static REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
@@ -18,7 +30,8 @@ static REQUEST_LATENCY_MS: Lazy<HistogramVec> = Lazy::new(|| {
         HistogramOpts::new(
             "prx_request_latency_ms",
             "Request latency in milliseconds for prx"
-        ),
+        )
+        .buckets(LATENCY_BUCKETS_MS.to_vec()),
         &["route"]
     )
     .expect("failed to register prx_request_latency_ms")
@@ -260,4 +273,192 @@ pub fn set_circuit_state(route: &str, upstream: &str, is_open: bool) {
     CIRCUIT_OPEN_STATE
         .with_label_values(&[route, upstream])
         .set(if is_open { 1 } else { 0 });
+}
+
+static INFLIGHT_REQUESTS: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "prx_inflight_requests",
+        "Requests currently being served, counted across every listener"
+    )
+    .expect("failed to register prx_inflight_requests")
+});
+
+/// One relaxed atomic per request each way. Anything heavier than this does not
+/// belong on the request path.
+pub fn inc_inflight() {
+    INFLIGHT_REQUESTS.inc();
+}
+
+pub fn dec_inflight() {
+    INFLIGHT_REQUESTS.dec();
+}
+
+// ---------------------------------------------------------------------------
+// Reading the registry back (T207)
+// ---------------------------------------------------------------------------
+//
+// The live-stats sampler needs the same numbers `/metrics` serves, so it reads
+// them from the registry once a second instead of counting a second time in the
+// request path. Everything below runs on the sampler's task, never on a
+// request.
+
+/// Cumulative request counters for one route, as the registry holds them.
+#[derive(Debug, Default, Clone)]
+pub struct RouteCounters {
+    pub status_2xx: u64,
+    pub status_3xx: u64,
+    pub status_4xx: u64,
+    pub status_5xx: u64,
+    /// Requests whose status the proxy never got to write (aborted, upgraded).
+    pub status_other: u64,
+    /// Cumulative bucket counts, aligned with [`LATENCY_BUCKETS_MS`].
+    pub latency_buckets: Vec<u64>,
+    pub latency_count: u64,
+    pub latency_sum_ms: f64,
+}
+
+impl RouteCounters {
+    pub fn total(&self) -> u64 {
+        self.status_2xx + self.status_3xx + self.status_4xx + self.status_5xx + self.status_other
+    }
+}
+
+/// Everything the sampler reads in one pass over the registry.
+#[derive(Debug, Default, Clone)]
+pub struct MetricsSnapshot {
+    pub routes: HashMap<String, RouteCounters>,
+    pub cache_hits: u64,
+    pub cache_lookups: u64,
+    pub inflight: i64,
+    /// `(service, upstream)` pairs whose circuit is currently open.
+    pub circuits_open: Vec<(String, String)>,
+    /// Seconds until expiry, per certificate domain.
+    pub cert_expiry_seconds: Vec<(String, i64)>,
+}
+
+pub fn latency_bucket_bounds() -> &'static [f64] {
+    LATENCY_BUCKETS_MS
+}
+
+fn label(metric: &proto::Metric, name: &str) -> String {
+    metric
+        .get_label()
+        .iter()
+        .find(|pair| pair.name() == name)
+        .map(|pair| pair.value().to_string())
+        .unwrap_or_default()
+}
+
+/// Reads the current value of every metric the dashboard needs.
+///
+/// Cost is proportional to the number of label values, not to traffic, and it
+/// happens once a second on the admin runtime.
+pub fn snapshot() -> MetricsSnapshot {
+    let mut snapshot = MetricsSnapshot::default();
+
+    for family in REQUESTS_TOTAL.collect() {
+        for metric in family.get_metric() {
+            let route = label(metric, "route");
+            let status = label(metric, "status");
+            let value = metric.get_counter().value() as u64;
+            let entry = snapshot.routes.entry(route).or_default();
+            match status.as_bytes().first() {
+                Some(b'2') => entry.status_2xx += value,
+                Some(b'3') => entry.status_3xx += value,
+                Some(b'4') => entry.status_4xx += value,
+                Some(b'5') => entry.status_5xx += value,
+                _ => entry.status_other += value,
+            }
+        }
+    }
+
+    for family in REQUEST_LATENCY_MS.collect() {
+        for metric in family.get_metric() {
+            let route = label(metric, "route");
+            let histogram = metric.get_histogram();
+            let entry = snapshot.routes.entry(route).or_default();
+            entry.latency_count = histogram.get_sample_count();
+            entry.latency_sum_ms = histogram.get_sample_sum();
+            entry.latency_buckets = histogram
+                .get_bucket()
+                .iter()
+                .map(|bucket| bucket.cumulative_count())
+                .collect();
+        }
+    }
+
+    for family in CACHE_TOTAL.collect() {
+        for metric in family.get_metric() {
+            let value = metric.get_counter().value() as u64;
+            snapshot.cache_lookups += value;
+            if label(metric, "result") == "hit" {
+                snapshot.cache_hits += value;
+            }
+        }
+    }
+
+    for family in CIRCUIT_OPEN_STATE.collect() {
+        for metric in family.get_metric() {
+            if metric.get_gauge().value() > 0.0 {
+                snapshot
+                    .circuits_open
+                    .push((label(metric, "route"), label(metric, "upstream")));
+            }
+        }
+    }
+
+    for family in TLS_CERT_EXPIRY.collect() {
+        for metric in family.get_metric() {
+            snapshot
+                .cert_expiry_seconds
+                .push((label(metric, "domain"), metric.get_gauge().value() as i64));
+        }
+    }
+
+    snapshot.inflight = INFLIGHT_REQUESTS.get();
+    snapshot
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_groups_requests_by_status_class() {
+        observe_request("snapshot-route", 204, 3.0);
+        observe_request("snapshot-route", 404, 7.0);
+        observe_request("snapshot-route", 503, 900.0);
+
+        let snapshot = snapshot();
+        let route = snapshot
+            .routes
+            .get("snapshot-route")
+            .expect("the route should be in the snapshot");
+
+        assert_eq!(route.status_2xx, 1);
+        assert_eq!(route.status_4xx, 1);
+        assert_eq!(route.status_5xx, 1);
+        assert_eq!(route.latency_count, 3);
+        assert_eq!(route.latency_buckets.len(), LATENCY_BUCKETS_MS.len());
+    }
+
+    #[test]
+    fn latency_buckets_reach_past_ten_milliseconds() {
+        // The default buckets stopped at 10, which made every percentile above
+        // p50 useless for a proxy. Guard the fix.
+        let bounds = latency_bucket_bounds();
+        assert!(bounds.contains(&1000.0));
+        assert_eq!(bounds.last().copied(), Some(10000.0));
+    }
+
+    #[test]
+    fn inflight_gauge_counts_both_ways() {
+        let before = snapshot().inflight;
+        inc_inflight();
+        inc_inflight();
+        assert_eq!(snapshot().inflight, before + 2);
+        dec_inflight();
+        dec_inflight();
+        assert_eq!(snapshot().inflight, before);
+    }
 }

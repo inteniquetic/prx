@@ -1,47 +1,267 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Fonts are vendored into public/fonts rather than pulled from a CDN: the UI is
+   embedded in the prx binary and has to render on a network with no route to
+   the internet. Only the subsets this UI actually shows are shipped — Inter's
+   latin range and IBM Plex Sans Thai's thai range, 100 KB in total. The npm
+   packages that these came from stay in devDependencies as the provenance and
+   the update path; importing their CSS directly would drag in Greek, Cyrillic
+   and Vietnamese too.
+
+   Two families, not one: the browser picks per glyph via unicode-range, so a
+   label mixing Thai and Latin renders both scripts properly on one baseline. */
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('/fonts/inter-latin-variable.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans Thai';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('/fonts/plex-thai-400.woff2') format('woff2');
+  unicode-range: U+0E01-0E5B, U+200C-200D, U+25CC;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans Thai';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url('/fonts/plex-thai-500.woff2') format('woff2');
+  unicode-range: U+0E01-0E5B, U+200C-200D, U+25CC;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans Thai';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url('/fonts/plex-thai-600.woff2') format('woff2');
+  unicode-range: U+0E01-0E5B, U+200C-200D, U+25CC;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans Thai';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 700;
+  src: url('/fonts/plex-thai-700.woff2') format('woff2');
+  unicode-range: U+0E01-0E5B, U+200C-200D, U+25CC;
+}
+
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/* Theme follows a `dark` class on <html> rather than the media query alone, so
+   an explicit choice can win over the OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  color-scheme: dark;
+  --radius: 0.625rem;
+
+  --background: oklch(0.99 0.002 247);
+  --foreground: oklch(0.21 0.03 264);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.03 264);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.03 264);
+  --primary: oklch(0.5 0.14 219);
+  --primary-foreground: oklch(0.99 0.005 220);
+  --secondary: oklch(0.96 0.006 247);
+  --secondary-foreground: oklch(0.28 0.03 264);
+  --muted: oklch(0.96 0.006 247);
+  --muted-foreground: oklch(0.51 0.02 264);
+  --accent: oklch(0.95 0.02 220);
+  --accent-foreground: oklch(0.28 0.03 264);
+  --destructive: oklch(0.58 0.22 27);
+  --destructive-foreground: oklch(0.99 0.005 220);
+  --destructive-emphasis: oklch(0.53 0.19 27);
+  --success: oklch(0.53 0.15 156);
+  --success-foreground: oklch(0.99 0.005 220);
+  --success-emphasis: oklch(0.5 0.14 156);
+  --warning: oklch(0.64 0.16 78);
+  --warning-foreground: oklch(0.25 0.04 78);
+  --warning-emphasis: oklch(0.52 0.13 70);
+  --circuit: oklch(0.66 0.17 48);
+  --circuit-foreground: oklch(0.24 0.05 48);
+  --circuit-emphasis: oklch(0.53 0.15 48);
+  --overlay: oklch(0.21 0.03 264 / 0.55);
+  --tooltip: oklch(0.21 0.03 264);
+  --tooltip-foreground: oklch(0.98 0.005 247);
+  --border: oklch(0.91 0.01 255);
+  --input: oklch(0.63 0.015 255);
+  --switch-track: oklch(0.63 0.015 264);
+  --ring: oklch(0.5 0.14 219);
+
+  --sidebar: oklch(0.98 0.003 247);
+  --sidebar-foreground: oklch(0.21 0.03 264);
+  --sidebar-primary: oklch(0.5 0.14 219);
+  --sidebar-primary-foreground: oklch(0.99 0.005 220);
+  --sidebar-accent: oklch(0.95 0.006 247);
+  --sidebar-accent-foreground: oklch(0.28 0.03 264);
+  --sidebar-border: oklch(0.91 0.01 255);
+  --sidebar-ring: oklch(0.5 0.14 219);
 }
 
-html,
-body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  width: 100%;
-  overflow: hidden;
-  color: #e2e8f0;
-  background: #020617;
+.dark {
+  --background: oklch(0.16 0.02 264);
+  --foreground: oklch(0.95 0.008 247);
+  --card: oklch(0.21 0.025 264);
+  --card-foreground: oklch(0.95 0.008 247);
+  --popover: oklch(0.21 0.025 264);
+  --popover-foreground: oklch(0.95 0.008 247);
+  --primary: oklch(0.75 0.13 213);
+  --primary-foreground: oklch(0.19 0.03 264);
+  --secondary: oklch(0.27 0.026 264);
+  --secondary-foreground: oklch(0.95 0.008 247);
+  --muted: oklch(0.27 0.026 264);
+  --muted-foreground: oklch(0.71 0.018 256);
+  --accent: oklch(0.3 0.035 240);
+  --accent-foreground: oklch(0.95 0.008 247);
+  --destructive: oklch(0.66 0.19 25);
+  --destructive-foreground: oklch(0.19 0.03 264);
+  --destructive-emphasis: oklch(0.72 0.16 25);
+  --success: oklch(0.72 0.16 158);
+  --success-foreground: oklch(0.19 0.03 264);
+  --success-emphasis: oklch(0.76 0.15 158);
+  --warning: oklch(0.8 0.15 80);
+  --warning-foreground: oklch(0.21 0.04 80);
+  --warning-emphasis: oklch(0.82 0.14 80);
+  --circuit: oklch(0.74 0.16 52);
+  --circuit-foreground: oklch(0.19 0.03 264);
+  --circuit-emphasis: oklch(0.78 0.14 52);
+  --overlay: oklch(0.12 0.02 264 / 0.7);
+  --tooltip: oklch(0.3 0.03 264);
+  --tooltip-foreground: oklch(0.97 0.008 247);
+  --border: oklch(0.32 0.025 264);
+  --input: oklch(0.55 0.02 264);
+  --switch-track: oklch(0.52 0.02 264);
+  --ring: oklch(0.75 0.13 213);
+
+  --sidebar: oklch(0.19 0.024 264);
+  --sidebar-foreground: oklch(0.95 0.008 247);
+  --sidebar-primary: oklch(0.75 0.13 213);
+  --sidebar-primary-foreground: oklch(0.19 0.03 264);
+  --sidebar-accent: oklch(0.27 0.026 264);
+  --sidebar-accent-foreground: oklch(0.95 0.008 247);
+  --sidebar-border: oklch(0.32 0.025 264);
+  --sidebar-ring: oklch(0.75 0.13 213);
 }
 
-#app {
-  height: 100%;
-  width: 100%;
+@theme inline {
+  --font-sans: 'Inter Variable', 'IBM Plex Sans Thai', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-emphasis: var(--destructive-emphasis);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-emphasis: var(--success-emphasis);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-emphasis: var(--warning-emphasis);
+  --color-circuit: var(--circuit);
+  --color-circuit-foreground: var(--circuit-foreground);
+  --color-circuit-emphasis: var(--circuit-emphasis);
+  --color-overlay: var(--overlay);
+  --color-tooltip: var(--tooltip);
+  --color-tooltip-foreground: var(--tooltip-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-switch-track: var(--switch-track);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
-* {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.4) rgba(15, 23, 42, 0.3);
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  #app {
+    height: 100%;
+    width: 100%;
+  }
+
+  /* Tells the browser which built-in control colours to use, so form widgets
+     and scrollbars follow the theme instead of staying light in dark mode. */
+  :root {
+    color-scheme: light;
+  }
+
+  .dark {
+    color-scheme: dark;
+  }
 }
 
-*::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
+@layer utilities {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
 
-*::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.3);
-  border-radius: 3px;
-}
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
 
-*::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.4);
-  border-radius: 3px;
-}
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
 
-*::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.6);
+  *::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
+  }
 }

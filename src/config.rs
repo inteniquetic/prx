@@ -37,275 +37,627 @@ impl PrxConfig {
         Ok(config)
     }
 
+    /// The first error in the config, as an `Err`.
+    ///
+    /// Everything is checked in one pass (`check`): the editor marks every
+    /// mistake at once, while a caller that is only loading a file still gets a
+    /// single error back.
     pub fn validate(&self) -> anyhow::Result<()> {
+        let issues = self.check();
+        if let Some(first) = issues
+            .iter()
+            .find(|issue| issue.severity == IssueSeverity::Error)
+        {
+            bail!("{}", first.message);
+        }
+        Ok(())
+    }
+
+    /// Every problem in the config — errors and warnings — in file order.
+    ///
+    /// Errors are what stops a config from being applied. Warnings are things
+    /// that load fine but rarely mean what they say: a route nothing can reach,
+    /// a service nothing routes to, a TLS upstream with verification off.
+    pub fn check(&self) -> Vec<ConfigIssue> {
+        let mut out = Vec::new();
+        self.check_server(&mut out);
+        let service_names = self.check_services(&mut out);
+        self.check_routes(&service_names, &mut out);
+        self.check_globals(&mut out);
+        out
+    }
+
+    fn check_server(&self, out: &mut Vec<ConfigIssue>) {
         if self.routes.is_empty() {
-            bail!("config must include at least one [[route]] block");
+            out.push(ConfigIssue::error(
+                "no_routes",
+                "route",
+                "config must include at least one [[route]] block",
+            ));
         }
 
         if let Some(tls) = &self.server.tls {
             let certs = tls.all_certs();
             if certs.is_empty() && !tls.acme.enabled {
-                bail!(
+                out.push(ConfigIssue::error(
+                    "tls_without_cert",
+                    "server.tls",
                     "[server.tls] is configured but has no certificate: add [[server.tls.cert]], \
-                     cert_path/key_path, or enable [server.tls.acme]"
-                );
+                     cert_path/key_path, or enable [server.tls.acme]",
+                ));
             }
             if tls.acme.enabled {
                 if tls.acme.domains.is_empty() {
-                    bail!("[server.tls.acme] needs at least one domain");
+                    out.push(ConfigIssue::error(
+                        "acme_without_domain",
+                        "server.tls.acme.domains",
+                        "[server.tls.acme] needs at least one domain",
+                    ));
                 }
                 if tls.acme.directory_url.trim().is_empty() {
-                    bail!("[server.tls.acme] directory_url must not be empty");
+                    out.push(ConfigIssue::error(
+                        "acme_directory_url_empty",
+                        "server.tls.acme.directory_url",
+                        "[server.tls.acme] directory_url must not be empty",
+                    ));
                 }
                 if tls.acme.renew_before_days == 0 || tls.acme.renew_before_days > 89 {
-                    bail!("[server.tls.acme] renew_before_days must be between 1 and 89");
+                    out.push(ConfigIssue::error(
+                        "acme_renew_window",
+                        "server.tls.acme.renew_before_days",
+                        "[server.tls.acme] renew_before_days must be between 1 and 89",
+                    ));
                 }
                 for domain in &tls.acme.domains {
                     if domain.starts_with("*.") {
-                        bail!(
-                            "[server.tls.acme] cannot use the http-01 challenge for the wildcard \
-                             domain '{domain}'; wildcards need dns-01, which prx does not support yet"
-                        );
+                        out.push(ConfigIssue::error(
+                            "acme_wildcard_domain",
+                            "server.tls.acme.domains",
+                            format!(
+                                "[server.tls.acme] cannot use the http-01 challenge for the \
+                                 wildcard domain '{domain}'; wildcards need dns-01, which prx \
+                                 does not support yet"
+                            ),
+                        ));
                     }
                 }
             }
             if tls.cert_path.is_some() != tls.key_path.is_some() {
-                bail!("[server.tls] cert_path and key_path must be set together");
+                out.push(ConfigIssue::error(
+                    "tls_cert_key_pair",
+                    "server.tls",
+                    "[server.tls] cert_path and key_path must be set together",
+                ));
             }
             if certs.iter().filter(|cert| cert.is_default).count() > 1 {
-                bail!("only one [[server.tls.cert]] can be marked is_default = true");
+                out.push(ConfigIssue::error(
+                    "tls_multiple_defaults",
+                    "server.tls.cert",
+                    "only one [[server.tls.cert]] can be marked is_default = true",
+                ));
             }
             for cert in &certs {
                 if cert.cert_path.trim().is_empty() || cert.key_path.trim().is_empty() {
-                    bail!("[[server.tls.cert]] needs both cert_path and key_path");
+                    out.push(ConfigIssue::error(
+                        "tls_cert_incomplete",
+                        "server.tls.cert",
+                        "[[server.tls.cert]] needs both cert_path and key_path",
+                    ));
                 }
             }
         }
 
         if !self.server.health_path.starts_with('/') {
-            bail!("server.health_path must start with '/'");
+            out.push(ConfigIssue::error(
+                "path_not_absolute",
+                "server.health_path",
+                "server.health_path must start with '/'",
+            ));
         }
         if !self.server.ready_path.starts_with('/') {
-            bail!("server.ready_path must start with '/'");
+            out.push(ConfigIssue::error(
+                "path_not_absolute",
+                "server.ready_path",
+                "server.ready_path must start with '/'",
+            ));
         }
         if self.server.health_path == self.server.ready_path {
-            bail!("server.health_path and server.ready_path must be different");
+            out.push(ConfigIssue::error(
+                "health_ready_collision",
+                "server.ready_path",
+                "server.health_path and server.ready_path must be different",
+            ));
         }
+    }
 
-        // Validate services
+    /// Returns the service names, which routes are checked against.
+    fn check_services(&self, out: &mut Vec<ConfigIssue>) -> std::collections::HashSet<String> {
         let mut service_names = std::collections::HashSet::new();
-        for service in &self.services {
+
+        for (index, service) in self.services.iter().enumerate() {
+            let at = |field: &str| format!("service[{index}].{field}");
+            let name = &service.name;
+
             if service_names.contains(&service.name) {
-                bail!("duplicate service name '{}'", service.name);
+                out.push(ConfigIssue::error(
+                    "duplicate_service_name",
+                    at("name"),
+                    format!("duplicate service name '{name}'"),
+                ));
             }
             service_names.insert(service.name.clone());
 
             if service.upstreams.is_empty() {
-                bail!(
-                    "service '{}' must include at least one [[service.upstream]]",
-                    service.name
-                );
+                out.push(ConfigIssue::error(
+                    "service_without_upstream",
+                    format!("service[{index}]"),
+                    format!("service '{name}' must include at least one [[service.upstream]]"),
+                ));
             }
 
-            for upstream in &service.upstreams {
+            let mut seen_addrs: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for (uidx, upstream) in service.upstreams.iter().enumerate() {
+                let upstream_at =
+                    |field: &str| format!("service[{index}].upstream[{uidx}].{field}");
                 if upstream.addr.trim().is_empty() {
-                    bail!(
-                        "service '{}' includes upstream with empty addr",
-                        service.name
-                    );
+                    out.push(ConfigIssue::error(
+                        "upstream_addr_empty",
+                        upstream_at("addr"),
+                        format!("service '{name}' includes upstream with empty addr"),
+                    ));
+                } else if !seen_addrs.insert(upstream.addr.as_str()) {
+                    out.push(ConfigIssue::warning(
+                        "duplicate_upstream",
+                        upstream_at("addr"),
+                        format!(
+                            "service '{name}' lists '{}' more than once, which only doubles the \
+                             traffic it gets",
+                            upstream.addr
+                        ),
+                    ));
                 }
+
+                // TLS that does not verify anything is a connection an attacker
+                // on the path can take over, and nothing in the logs says so.
+                if upstream.tls && upstream.verify_cert == Some(false) {
+                    out.push(ConfigIssue::warning(
+                        "upstream_tls_unverified",
+                        upstream_at("verify_cert"),
+                        format!(
+                            "service '{name}' talks TLS to '{}' without verifying its \
+                             certificate",
+                            upstream.addr
+                        ),
+                    ));
+                }
+            }
+
+            if !service.upstreams.is_empty()
+                && service.upstreams.iter().all(|upstream| !upstream.enabled)
+            {
+                out.push(ConfigIssue::warning(
+                    "service_fully_drained",
+                    format!("service[{index}]"),
+                    format!(
+                        "every upstream of service '{name}' is drained, so every request to it \
+                         fails"
+                    ),
+                ));
             }
 
             if !(0.0..=10.0).contains(&service.retry_budget_ratio)
                 || service.retry_budget_ratio.is_nan()
             {
-                bail!(
-                    "service '{}' retry_budget_ratio must be between 0.0 and 10.0",
-                    service.name
-                );
+                out.push(ConfigIssue::error(
+                    "retry_budget_ratio_range",
+                    at("retry_budget_ratio"),
+                    format!("service '{name}' retry_budget_ratio must be between 0.0 and 10.0"),
+                ));
             }
             if service.retry_budget_window_ms == 0 {
-                bail!(
-                    "service '{}' retry_budget_window_ms must be > 0",
-                    service.name
-                );
+                out.push(ConfigIssue::error(
+                    "retry_budget_window_zero",
+                    at("retry_budget_window_ms"),
+                    format!("service '{name}' retry_budget_window_ms must be > 0"),
+                ));
             }
 
             if service.sticky.enabled {
                 if service.sticky.name.trim().is_empty() {
-                    bail!("service '{}' sticky.name must not be empty", service.name);
+                    out.push(ConfigIssue::error(
+                        "sticky_name_empty",
+                        at("sticky.name"),
+                        format!("service '{name}' sticky.name must not be empty"),
+                    ));
                 }
                 if service.sticky.mode == StickyMode::Header
                     && http::header::HeaderName::from_bytes(service.sticky.name.as_bytes()).is_err()
                 {
-                    bail!(
-                        "service '{}' sticky.name '{}' is not a valid header name",
-                        service.name,
-                        service.sticky.name
-                    );
+                    out.push(ConfigIssue::error(
+                        "sticky_name_invalid",
+                        at("sticky.name"),
+                        format!(
+                            "service '{name}' sticky.name '{}' is not a valid header name",
+                            service.sticky.name
+                        ),
+                    ));
                 }
             }
 
             if service.health_check.enabled {
                 let hc = &service.health_check;
                 if hc.interval_ms == 0 {
-                    bail!(
-                        "service '{}' health_check.interval_ms must be > 0",
-                        service.name
-                    );
+                    out.push(ConfigIssue::error(
+                        "health_check_interval_zero",
+                        at("health_check.interval_ms"),
+                        format!("service '{name}' health_check.interval_ms must be > 0"),
+                    ));
                 }
                 if hc.timeout_ms == 0 {
-                    bail!(
-                        "service '{}' health_check.timeout_ms must be > 0",
-                        service.name
-                    );
+                    out.push(ConfigIssue::error(
+                        "health_check_timeout_zero",
+                        at("health_check.timeout_ms"),
+                        format!("service '{name}' health_check.timeout_ms must be > 0"),
+                    ));
                 }
                 if hc.healthy_threshold == 0 || hc.unhealthy_threshold == 0 {
-                    bail!(
-                        "service '{}' health_check thresholds must be > 0",
-                        service.name
-                    );
+                    out.push(ConfigIssue::error(
+                        "health_check_threshold_zero",
+                        at("health_check.healthy_threshold"),
+                        format!("service '{name}' health_check thresholds must be > 0"),
+                    ));
+                }
+                if hc.timeout_ms >= hc.interval_ms && hc.interval_ms > 0 {
+                    out.push(ConfigIssue::warning(
+                        "health_check_timeout_over_interval",
+                        at("health_check.timeout_ms"),
+                        format!(
+                            "service '{name}' health_check.timeout_ms ({}) is not shorter than \
+                             interval_ms ({}), so probes overlap",
+                            hc.timeout_ms, hc.interval_ms
+                        ),
+                    ));
                 }
                 if hc.kind == HealthCheckKind::Http {
                     if !hc.path.starts_with('/') {
-                        bail!(
-                            "service '{}' health_check.path must start with '/'",
-                            service.name
-                        );
+                        out.push(ConfigIssue::error(
+                            "path_not_absolute",
+                            at("health_check.path"),
+                            format!("service '{name}' health_check.path must start with '/'"),
+                        ));
                     }
                     if hc.expected_status.is_empty() {
-                        bail!(
-                            "service '{}' health_check.expected_status must not be empty",
-                            service.name
-                        );
+                        out.push(ConfigIssue::error(
+                            "health_check_status_empty",
+                            at("health_check.expected_status"),
+                            format!(
+                                "service '{name}' health_check.expected_status must not be empty"
+                            ),
+                        ));
                     }
                 }
             }
 
             if service.circuit_breaker.enabled {
                 if service.circuit_breaker.consecutive_failures == 0 {
-                    bail!(
-                        "service '{}' circuit_breaker.consecutive_failures must be > 0",
-                        service.name
-                    );
+                    out.push(ConfigIssue::error(
+                        "circuit_breaker_failures_zero",
+                        at("circuit_breaker.consecutive_failures"),
+                        format!(
+                            "service '{name}' circuit_breaker.consecutive_failures must be > 0"
+                        ),
+                    ));
                 }
                 if service.circuit_breaker.open_ms == 0 {
-                    bail!(
-                        "service '{}' circuit_breaker.open_ms must be > 0",
-                        service.name
-                    );
+                    out.push(ConfigIssue::error(
+                        "circuit_breaker_open_zero",
+                        at("circuit_breaker.open_ms"),
+                        format!("service '{name}' circuit_breaker.open_ms must be > 0"),
+                    ));
                 }
             }
         }
 
-        // Validate routes
+        service_names
+    }
+
+    fn check_routes(
+        &self,
+        service_names: &std::collections::HashSet<String>,
+        out: &mut Vec<ConfigIssue>,
+    ) {
         let mut defaults = 0usize;
-        for route in &self.routes {
+        let mut used_services: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        // (host, path_prefix) already claimed, and by which route: a tie on
+        // both is settled by file order, so the second one never matches.
+        let mut claimed: std::collections::HashMap<(String, &str), &str> =
+            std::collections::HashMap::new();
+
+        for (index, route) in self.routes.iter().enumerate() {
+            let at = |field: &str| format!("route[{index}].{field}");
+            let name = &route.name;
+
             if route.is_default {
                 defaults += 1;
             }
+            used_services.insert(route.service.as_str());
 
             if route.path_prefix.is_empty() {
-                bail!("route '{}' has empty path_prefix", route.name);
-            }
-            if !route.path_prefix.starts_with('/') {
-                bail!("route '{}' path_prefix must start with '/'", route.name);
+                out.push(ConfigIssue::error(
+                    "path_prefix_empty",
+                    at("path_prefix"),
+                    format!("route '{name}' has empty path_prefix"),
+                ));
+            } else if !route.path_prefix.starts_with('/') {
+                out.push(ConfigIssue::error(
+                    "path_not_absolute",
+                    at("path_prefix"),
+                    format!("route '{name}' path_prefix must start with '/'"),
+                ));
             }
 
             if !service_names.contains(&route.service) {
-                bail!(
-                    "route '{}' references unknown service '{}'",
-                    route.name,
-                    route.service
+                let mut known: Vec<&str> = self.services.iter().map(|s| s.name.as_str()).collect();
+                known.sort_unstable();
+                out.push(
+                    ConfigIssue::error(
+                        "unknown_service",
+                        at("service"),
+                        format!(
+                            "route '{name}' references unknown service '{}'",
+                            route.service
+                        ),
+                    )
+                    .with_hint(if known.is_empty() {
+                        "no [[service]] is defined yet".to_string()
+                    } else {
+                        format!("services in this config: {}", known.join(", "))
+                    }),
                 );
+            }
+
+            if route.enabled {
+                let host = route.host.clone().unwrap_or_default().to_ascii_lowercase();
+                let key = (host, route.path_prefix.as_str());
+                match claimed.get(&key) {
+                    Some(first) if route.methods.is_empty() => {
+                        out.push(ConfigIssue::warning(
+                            "unreachable_route",
+                            format!("route[{index}]"),
+                            format!(
+                                "route '{name}' can never match: route '{first}' claims the same \
+                                 host and path_prefix, and a tie is settled by file order"
+                            ),
+                        ));
+                    }
+                    Some(_) => {}
+                    None => {
+                        claimed.insert(key, name.as_str());
+                    }
+                }
+            } else {
+                out.push(ConfigIssue::warning(
+                    "route_disabled",
+                    format!("route[{index}]"),
+                    format!("route '{name}' is disabled, so it takes no traffic at all"),
+                ));
             }
 
             if route.cache.enabled {
                 if route.cache.ttl_ms == 0 {
-                    bail!("route '{}' cache.ttl_ms must be > 0", route.name);
+                    out.push(ConfigIssue::error(
+                        "cache_ttl_zero",
+                        at("cache.ttl_ms"),
+                        format!("route '{name}' cache.ttl_ms must be > 0"),
+                    ));
                 }
                 if route.cache.max_body_bytes == 0 {
-                    bail!("route '{}' cache.max_body_bytes must be > 0", route.name);
+                    out.push(ConfigIssue::error(
+                        "cache_body_zero",
+                        at("cache.max_body_bytes"),
+                        format!("route '{name}' cache.max_body_bytes must be > 0"),
+                    ));
                 }
                 if route.cache.cache_status_codes.is_empty() {
-                    bail!(
-                        "route '{}' cache.cache_status_codes must not be empty",
-                        route.name
-                    );
+                    out.push(ConfigIssue::error(
+                        "cache_status_empty",
+                        at("cache.cache_status_codes"),
+                        format!("route '{name}' cache.cache_status_codes must not be empty"),
+                    ));
                 }
-                for name in &route.cache.vary_headers {
-                    if http::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
-                        bail!(
-                            "route '{}' cache.vary_headers contains an invalid header name '{}'",
-                            route.name,
-                            name
-                        );
+                for header in &route.cache.vary_headers {
+                    if http::header::HeaderName::from_bytes(header.as_bytes()).is_err() {
+                        out.push(ConfigIssue::error(
+                            "invalid_header_name",
+                            at("cache.vary_headers"),
+                            format!(
+                                "route '{name}' cache.vary_headers contains an invalid header \
+                                 name '{header}'"
+                            ),
+                        ));
                     }
                 }
             }
 
             if route.rate_limit.enabled {
                 if RateLimitKey::parse(&route.rate_limit.key).is_none() {
-                    bail!(
-                        "route '{}' rate_limit.key '{}' is invalid (expected 'client_ip', \
-                         'route', or 'header:<Name>')",
-                        route.name,
-                        route.rate_limit.key
-                    );
+                    out.push(ConfigIssue::error(
+                        "rate_limit_key_invalid",
+                        at("rate_limit.key"),
+                        format!(
+                            "route '{name}' rate_limit.key '{}' is invalid (expected \
+                             'client_ip', 'route', or 'header:<Name>')",
+                            route.rate_limit.key
+                        ),
+                    ));
                 }
                 if route.rate_limit.requests_per_second == 0 {
-                    bail!(
-                        "route '{}' rate_limit.requests_per_second must be > 0",
-                        route.name
-                    );
+                    out.push(ConfigIssue::error(
+                        "rate_limit_rps_zero",
+                        at("rate_limit.requests_per_second"),
+                        format!("route '{name}' rate_limit.requests_per_second must be > 0"),
+                    ));
                 }
                 if !(400..=599).contains(&route.rate_limit.response_status) {
-                    bail!(
-                        "route '{}' rate_limit.response_status must be a 4xx or 5xx code",
-                        route.name
-                    );
+                    out.push(ConfigIssue::error(
+                        "response_status_range",
+                        at("rate_limit.response_status"),
+                        format!(
+                            "route '{name}' rate_limit.response_status must be a 4xx or 5xx code"
+                        ),
+                    ));
                 }
                 if route.rate_limit.max_entries == 0 {
-                    bail!("route '{}' rate_limit.max_entries must be > 0", route.name);
+                    out.push(ConfigIssue::error(
+                        "rate_limit_entries_zero",
+                        at("rate_limit.max_entries"),
+                        format!("route '{name}' rate_limit.max_entries must be > 0"),
+                    ));
                 }
             }
 
             if !(400..=599).contains(&route.concurrency_limit.response_status) {
-                bail!(
-                    "route '{}' concurrency_limit.response_status must be a 4xx or 5xx code",
-                    route.name
-                );
+                out.push(ConfigIssue::error(
+                    "response_status_range",
+                    at("concurrency_limit.response_status"),
+                    format!(
+                        "route '{name}' concurrency_limit.response_status must be a 4xx or 5xx code"
+                    ),
+                ));
             }
 
-            validate_header_rules(&route.request_headers, &format!("route '{}'", route.name))?;
-            validate_header_rules(&route.response_headers, &format!("route '{}'", route.name))?;
+            check_header_rules(
+                &route.request_headers,
+                &format!("route '{name}'"),
+                &at("request_headers"),
+                out,
+            );
+            check_header_rules(
+                &route.response_headers,
+                &format!("route '{name}'"),
+                &at("response_headers"),
+                out,
+            );
 
             // An unknown method would silently make the route unreachable, so
             // reject it while the config is being loaded instead.
             for method in &route.methods {
                 if crate::router::method_bit(method).is_none() {
-                    bail!(
-                        "route '{}' lists unsupported HTTP method '{}' (supported: \
-                         GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, TRACE, CONNECT)",
-                        route.name,
-                        method
-                    );
+                    out.push(ConfigIssue::error(
+                        "unknown_method",
+                        at("methods"),
+                        format!(
+                            "route '{name}' lists unsupported HTTP method '{method}' \
+                             (supported: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, TRACE, \
+                             CONNECT)"
+                        ),
+                    ));
                 }
             }
         }
 
         if defaults > 1 {
-            bail!("only one route can be marked is_default = true");
+            out.push(ConfigIssue::error(
+                "multiple_default_routes",
+                "route",
+                "only one route can be marked is_default = true",
+            ));
+        }
+        if defaults == 0 && !self.routes.is_empty() {
+            out.push(ConfigIssue::warning(
+                "no_default_route",
+                "route",
+                "no route is marked is_default = true, so anything that matches nothing gets a \
+                 404",
+            ));
         }
 
+        for (index, service) in self.services.iter().enumerate() {
+            if !used_services.contains(service.name.as_str()) {
+                out.push(ConfigIssue::warning(
+                    "unused_service",
+                    format!("service[{index}]"),
+                    format!("service '{}' is not used by any route", service.name),
+                ));
+            }
+        }
+    }
+
+    fn check_globals(&self, out: &mut Vec<ConfigIssue>) {
         if self.compression.enabled && !(1..=11).contains(&self.compression.level) {
-            bail!("compression.level must be between 1 and 11");
+            out.push(ConfigIssue::error(
+                "compression_level_range",
+                "compression.level",
+                "compression.level must be between 1 and 11",
+            ));
         }
 
-        validate_header_rules(&self.headers.request, "headers.request")?;
-        validate_header_rules(&self.headers.response, "headers.response")?;
+        check_header_rules(
+            &self.headers.request,
+            "headers.request",
+            "headers.request",
+            out,
+        );
+        check_header_rules(
+            &self.headers.response,
+            "headers.response",
+            "headers.response",
+            out,
+        );
+    }
+}
 
-        Ok(())
+/// How much a [`ConfigIssue`] matters: an error blocks the apply, a warning
+/// does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IssueSeverity {
+    Error,
+    Warning,
+}
+
+/// One problem found in a config, addressed by field path so the editor can
+/// turn it into a mark on the right line (T203).
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigIssue {
+    pub severity: IssueSeverity,
+    /// Stable identifier, so the UI can translate the message.
+    pub code: &'static str,
+    /// Field path, e.g. `route[2].service`.
+    pub path: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+impl ConfigIssue {
+    pub fn error(code: &'static str, path: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            severity: IssueSeverity::Error,
+            code,
+            path: path.into(),
+            message: message.into(),
+            hint: None,
+        }
+    }
+
+    pub fn warning(
+        code: &'static str,
+        path: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            severity: IssueSeverity::Warning,
+            code,
+            path: path.into(),
+            message: message.into(),
+            hint: None,
+        }
+    }
+
+    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
     }
 }
 
@@ -320,34 +672,48 @@ pub const HEADER_VARIABLES: [&str; 7] = [
     "request_id",
 ];
 
-fn validate_header_rules(rules: &HeaderRules, context: &str) -> anyhow::Result<()> {
-    let check_name = |name: &str| -> anyhow::Result<()> {
+/// Header rules are checked by hand rather than by serde: an invalid header
+/// name only shows up when the proxy tries to send it, which is far too late.
+fn check_header_rules(rules: &HeaderRules, context: &str, path: &str, out: &mut Vec<ConfigIssue>) {
+    let check_name = |name: &str, field: &str, out: &mut Vec<ConfigIssue>| {
         if http::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
-            bail!("{context} has an invalid header name '{name}'");
+            out.push(ConfigIssue::error(
+                "invalid_header_name",
+                format!("{path}.{field}"),
+                format!("{context} has an invalid header name '{name}'"),
+            ));
         }
-        Ok(())
     };
 
-    for (name, value) in rules.set.iter().chain(rules.add.iter()) {
-        check_name(name)?;
-        for variable in extract_variables(value) {
-            if !HEADER_VARIABLES.contains(&variable.as_str()) {
-                bail!(
-                    "{context} header '{name}' uses unknown variable '${variable}' \
-                     (supported: {})",
-                    HEADER_VARIABLES
-                        .iter()
-                        .map(|v| format!("${v}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
+    for (kind, map) in [("set", &rules.set), ("add", &rules.add)] {
+        for (name, value) in map.iter() {
+            check_name(name, kind, out);
+            for variable in extract_variables(value) {
+                if !HEADER_VARIABLES.contains(&variable.as_str()) {
+                    out.push(
+                        ConfigIssue::error(
+                            "unknown_header_variable",
+                            format!("{path}.{kind}"),
+                            format!(
+                                "{context} header '{name}' uses unknown variable '${variable}'"
+                            ),
+                        )
+                        .with_hint(format!(
+                            "supported: {}",
+                            HEADER_VARIABLES
+                                .iter()
+                                .map(|v| format!("${v}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )),
+                    );
+                }
             }
         }
     }
     for name in &rules.remove {
-        check_name(name)?;
+        check_name(name, "remove", out);
     }
-    Ok(())
 }
 
 /// Returns the variable names used in a header value template.
@@ -791,6 +1157,10 @@ impl Default for RouteConfig {
             path_prefix: default_path_prefix(),
             methods: Vec::new(),
             is_default: false,
+            // Never derive Default for this struct: `#[serde(default = ...)]`
+            // only applies while parsing, so a derived one would build routes
+            // that are off.
+            enabled: true,
             request_headers: HeaderRules::default(),
             response_headers: HeaderRules::default(),
             rate_limit: RateLimitConfig::default(),
@@ -888,6 +1258,11 @@ pub struct RouteConfig {
     pub methods: Vec<String>,
     #[serde(default)]
     pub is_default: bool,
+    /// A disabled route stays in the file but is left out of the route index,
+    /// so it never matches — the way to park a route without losing how it was
+    /// configured.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     #[serde(default)]
     pub request_headers: HeaderRules,
     #[serde(default)]
@@ -1171,6 +1546,13 @@ fn default_cb_open_ms() -> u64 {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UpstreamConfig {
     pub addr: String,
+    /// `false` drains the upstream: it stays in the config, keeps being probed,
+    /// and is left out of the selection ring so it takes no traffic.
+    ///
+    /// This cannot be expressed as `weight = 0` — the balancer clamps weights to
+    /// at least 1, so a zero-weight upstream would quietly keep serving.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     #[serde(default)]
     pub tls: bool,
     #[serde(default)]
@@ -1204,6 +1586,7 @@ mod tests {
     fn valid_upstream(addr: &str) -> UpstreamConfig {
         UpstreamConfig {
             addr: addr.to_string(),
+            enabled: true,
             tls: false,
             sni: None,
             weight: 1,

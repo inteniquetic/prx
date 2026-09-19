@@ -76,6 +76,7 @@ Validation:
 | `request_headers` | table | `{}` | No | header rules applied before the upstream sees the request |
 | `response_headers` | table | `{}` | No | header rules applied to the upstream response |
 | `is_default` | `bool` | `false` | No | Fallback route when no match |
+| `enabled` | `bool` | `true` | No | `false` parks the route: it stays in the file but is left out of the index |
 | `lb` | enum | `"round_robin"` | No | `round_robin`, `random`, `hash`, `least_conn`, `p2c_ewma` |
 | `max_retries` | `number` | `0` | No | Retries per request |
 | `retry_backoff_ms` | `number` | `0` | No | Backoff before retry |
@@ -85,6 +86,8 @@ Validation:
 Validation:
 - `path_prefix` must not be empty and must start with `/`.
 - At most one route can have `is_default = true`.
+- A route with `enabled = false` is still validated like any other, so turning
+  it back on cannot surprise you with an error.
 - Every entry in `methods` must be a known HTTP method (case-insensitive):
   `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, `TRACE`, `CONNECT`.
 
@@ -108,6 +111,10 @@ Requests are matched against an index built at load time, in this order:
 3. **Config order**: routes that tie on host and path are resolved by the order
    they appear in the file — the first one wins.
 4. **Default**: a route with `is_default = true` is used when nothing matched.
+
+A route with `enabled = false` takes no part in any of this: it is not in the
+index, it never matches, and it cannot act as the default route. Its position in
+the file still counts, so the routes after it keep their indices.
 
 The first host tier that covers the path decides the request. A more specific
 host does not fall through to a broader one.
@@ -646,9 +653,10 @@ Validation (when `enabled = true`):
 | Field | Type | Default | Required | Description |
 |---|---|---|---|---|
 | `addr` | `string` | - | Yes | Upstream address, e.g. `10.0.0.5:8080` |
+| `enabled` | `bool` | `true` | No | `false` drains it: still configured and still probed, but out of the selection ring |
 | `tls` | `bool` | `false` | No | Connect to upstream via TLS |
 | `sni` | `string` | auto | No | SNI for upstream TLS |
-| `weight` | `number` | `1` | No | Load balancing weight |
+| `weight` | `number` | `1` | No | Load balancing weight. Clamped to 1–256, so `0` does **not** drain an upstream — use `enabled = false` |
 | `verify_cert` | `bool` | runtime `true` | No | verify certificate |
 | `verify_hostname` | `bool` | runtime `true` | No | verify hostname |
 | `connect_timeout_ms` | `number` | `null` | No | connect timeout |

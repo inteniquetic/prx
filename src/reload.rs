@@ -10,7 +10,11 @@ use arc_swap::ArcSwap;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use tracing::{error, info, warn};
 
-use crate::{config::PrxConfig, runtime::RuntimeConfig};
+use crate::{
+    config::PrxConfig,
+    runtime::RuntimeConfig,
+    stats::{self, EventLevel},
+};
 
 pub fn spawn_config_watcher(
     config_path: PathBuf,
@@ -86,12 +90,25 @@ pub fn spawn_config_watcher(
                             config = %config_path.to_string_lossy(),
                             "reloaded config from disk"
                         );
+                        // Someone editing the file by hand is invisible to the
+                        // Web UI otherwise: the page would show new values with
+                        // no idea where they came from.
+                        stats::record_event(
+                            EventLevel::Info,
+                            "config_reload",
+                            "Reloaded Prx.toml from disk",
+                        );
                     }
                     Err(err) => {
                         error!(
                             error = %err,
                             config = %config_path.to_string_lossy(),
                             "failed to reload config, keeping previous version"
+                        );
+                        stats::record_event(
+                            EventLevel::Error,
+                            "config_reload",
+                            format!("Reload failed, keeping the previous config: {err}"),
                         );
                     }
                 }

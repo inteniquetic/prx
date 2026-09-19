@@ -1,7 +1,7 @@
 # T204 — Atomic apply + auto-rollback
 
 **Phase:** 2 · Control plane
-**Status:** todo
+**Status:** 🟡 partly done (ข้อ 1 และ 4 ทำไปกับ [T307](T307-toml-editor-diff-apply.md))
 **Size:** M (~1d)
 **Depends on:** T202, T203
 **Files:** `src/admin.rs`, `src/reload.rs`, `src/runtime.rs`
@@ -29,10 +29,22 @@
    พร้อม optimistic concurrency: UI ส่ง `If-Match: <config-hash>` มา ถ้าไม่ตรงคืน 409 + diff
 5. Response ของ apply บอก: สำเร็จไหม, reload ใช้เวลาเท่าไหร่, route/service ที่เปลี่ยน, warning ที่เจอ
 
+## ทำไปแล้ว
+
+- ข้อ 1 (atomic write) มีอยู่ก่อนแล้วใน `ConfigAdmin::apply_config_text`:
+  temp file → fsync → rename → fsync ของ directory พร้อม rollback ถ้า verify ไม่ผ่าน
+- ข้อ 4 (optimistic concurrency) ทำใน T307: `GET /web/config` คืน `ETag`,
+  `PUT` รับ `If-Match` และคืน `409` พร้อม `current_etag` + `current_toml`
+  เมื่อไฟล์ถูกแก้ไปแล้ว — Web UI กาง diff สามฝ่ายจากคำตอบนั้นได้เลย
+  (spec เดิมเขียนว่า 409 + diff ซึ่งตรงกับที่ทำ)
+
+เหลือ: ลำดับ apply ที่ build runtime ก่อนเขียนไฟล์ (ข้อ 2), กัน reload ซ้ำจาก watcher (ข้อ 3),
+และรายละเอียดใน response ว่า reload ใช้เวลาเท่าไหร่/อะไรเปลี่ยน (ข้อ 5)
+
 ## Acceptance criteria
 
 - [ ] จำลอง apply ล้มเหลวกลางทาง → runtime ยังใช้ config เดิม ไฟล์เดิมไม่ถูกแตะ traffic ไม่ขาด
-- [ ] apply สองครั้งพร้อมกัน → ครั้งหลังได้ 409 ไม่ใช่เขียนทับเงียบๆ
+- [x] apply สองครั้งพร้อมกัน → ครั้งหลังได้ 409 ไม่ใช่เขียนทับเงียบๆ (ต้องส่ง `If-Match` มา)
 - [ ] apply จาก API ไม่ทำให้เกิด reload ซ้ำจาก watcher (เทสต์นับจำนวน reload)
 - [ ] ระหว่าง apply มี load ยิงอยู่ → error rate = 0
 

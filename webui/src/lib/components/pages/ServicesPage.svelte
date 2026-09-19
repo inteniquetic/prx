@@ -1,1136 +1,509 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import AppLayout from '../layout/AppLayout.svelte';
-  import ServiceFormModal from '../services/ServiceFormModal.svelte';
-  import {
-    configStore,
-    addServiceUpstream,
-    removeServiceUpstream
-  } from '../../stores/config';
+  import ActivityIcon from '@lucide/svelte/icons/activity';
+  import MoreHorizontalIcon from '@lucide/svelte/icons/more-horizontal';
+  import PlusIcon from '@lucide/svelte/icons/plus';
+  import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+  import SearchIcon from '@lucide/svelte/icons/search';
+  import ServerIcon from '@lucide/svelte/icons/server';
+  import Trash2Icon from '@lucide/svelte/icons/trash-2';
+
+  import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+  import * as Table from '$lib/components/ui/table';
+  import { Badge } from '$lib/components/ui/badge';
+  import { Button } from '$lib/components/ui/button';
+  import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
+  import { EmptyState } from '$lib/components/ui/empty-state';
+  import { Input } from '$lib/components/ui/input';
+  import { StatusDot, type UpstreamStatus as DotStatus } from '$lib/components/ui/status-dot';
+  import { toast } from '$lib/components/ui/sonner';
+
+  import ServiceSheet from '../services/ServiceSheet.svelte';
+
   import {
     createService,
-    updateService,
     deleteService,
-    loadConfigFromAdmin
-  } from '../../api/admin';
-  import type { LbStrategy, PrxConfig, ServiceConfig } from '../../types/config';
-  import type { NavPage } from '../../stores/navigation';
+    loadServiceStatus,
+    updateService,
+    type ServiceStatus,
+    type UpstreamStatus
+  } from '$lib/api/admin';
+  import { formatLatency } from '$lib/format';
+  import { routesUsing } from '$lib/serviceValidation';
+  import { createDefaultService, type PrxConfig, type ServiceConfig } from '$lib/types/config';
+  import { cn } from '$lib/utils';
 
-  // ---------------------------------------------------------------------------
-  // Props
-  // ---------------------------------------------------------------------------
+  let {
+    config,
+    /** The service the URL is pointing at — `/services/:name`. */
+    selectedServiceName = null,
+    createRequest = 0,
+    onselect,
+    onchanged,
+    onnavigate
+  }: {
+    config: PrxConfig;
+    selectedServiceName?: string | null;
+    createRequest?: number;
+    onselect?: (name: string | null) => void;
+    onchanged?: () => void;
+    onnavigate?: (page: 'routes') => void;
+  } = $props();
 
-  export let config: PrxConfig;
+  let query = $state('');
+  let saving = $state(false);
+  let serverError = $state<string | null>(null);
+  let sheetOpen = $state(false);
+  let sheetMode = $state<'create' | 'edit'>('edit');
+  let sheetService = $state<ServiceConfig | null>(null);
+  let confirmOpen = $state(false);
+  let confirmTarget = $state<string | null>(null);
 
-  // ---------------------------------------------------------------------------
-  // Events
-  // ---------------------------------------------------------------------------
+  let status = $state<ServiceStatus[]>([]);
+  let statusError = $state('');
+  let statusAt = $state<number | null>(null);
 
-  const dispatch = createEventDispatcher<{
-    navigate: NavPage;
-  }>();
+  const services = $derived(config.services ?? []);
+  const routes = $derived(config.routes ?? []);
 
-  // ---------------------------------------------------------------------------
-  // State
-  // ---------------------------------------------------------------------------
+  const statusByService = $derived(
+    new Map(status.map((entry) => [entry.name, entry]))
+  );
 
-  let searchQuery = '';
-  let selectedServiceIndex: number | null = null;
-  let circuitBreakerExpanded = false;
-  let advancedUpstreamExpanded: Record<number, boolean> = {};
-  let showDeleteConfirm = false;
+  /** Live upstream state for one service, keyed by address. */
+  const upstreamStatus = (name: string): Record<string, UpstreamStatus> => {
+    const entry = statusByService.get(name);
+    if (!entry) return {};
+    return Object.fromEntries(entry.upstreams.map((upstream) => [upstream.addr, upstream]));
+  };
 
-  // API/Loading state
-  let isSaving = false;
-  let isLoading = false;
-  let errorMessage = '';
-  let errorTimeout: ReturnType<typeof setTimeout> | null = null;
+  const filtered = $derived.by(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return services;
+    return services.filter(
+      (service) =>
+        service.name.toLowerCase().includes(needle) ||
+        service.upstreams.some((upstream) => upstream.addr.toLowerCase().includes(needle))
+    );
+  });
 
-  // Modal state
-  let showCreateModal = false;
+  const healthOf = (service: ServiceConfig): { healthy: number; total: number } => {
+    const live = statusByService.get(service.name);
+    const total = service.upstreams.filter((upstream) => upstream.enabled).length;
+    if (!live) return { healthy: 0, total };
+    const healthy = live.upstreams.filter(
+      (upstream) => upstream.enabled && upstream.available && upstream.probe_healthy
+    ).length;
+    return { healthy, total };
+  };
 
-  const lbOptions: LbStrategy[] = ['round_robin', 'random', 'hash'];
+  const serviceDot = (service: ServiceConfig): DotStatus => {
+    const live = statusByService.get(service.name);
+    if (!live) return 'unknown';
+    const { healthy, total } = healthOf(service);
+    if (total === 0) return 'disabled';
+    if (healthy === 0) return 'down';
+    return healthy < total ? 'degraded' : 'healthy';
+  };
 
-  // ---------------------------------------------------------------------------
-  // Computed Values
-  // ---------------------------------------------------------------------------
+  const serviceReason = (service: ServiceConfig): string => {
+    const { healthy, total } = healthOf(service);
+    if (total === 0) return 'Every upstream is drained, so this service takes no traffic.';
+    if (!statusByService.has(service.name)) {
+      return 'The proxy has not reported on this service yet.';
+    }
+    return `${healthy} of ${total} upstream${total === 1 ? '' : 's'} ready.`;
+  };
 
-  $: services = config.services ?? [];
+  // --- live status ---------------------------------------------------------
+  // The health state has to move without anyone reloading the page, and there
+  // is no event stream until T207, so the page asks. It stops asking while the
+  // tab is hidden: a background tab does not need to keep polling a proxy.
+  const POLL_MS = 3000;
 
-  interface FilteredService {
-    service: ServiceConfig;
-    index: number;
+  async function refreshStatus() {
+    try {
+      const payload = await loadServiceStatus();
+      status = payload.services;
+      statusAt = payload.checked_at_epoch_ms;
+      statusError = '';
+    } catch (err) {
+      statusError = err instanceof Error ? err.message : String(err);
+    }
   }
 
-  $: filteredServices = services
-    .map((service, index) => ({ service, index }))
-    .filter(({ service }) => {
-      if (!searchQuery.trim()) return true;
-      const query = searchQuery.toLowerCase();
-      return (
-        service.name.toLowerCase().includes(query) ||
-        service.lb.toLowerCase().includes(query)
-      );
-    });
+  $effect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
 
-  // ---------------------------------------------------------------------------
-  // View State
-  // ---------------------------------------------------------------------------
+    const tick = async () => {
+      if (stopped) return;
+      if (document.visibilityState === 'visible') await refreshStatus();
+      if (!stopped) timer = setTimeout(tick, POLL_MS);
+    };
 
-  $: isDetailView = selectedServiceIndex !== null;
-  $: selectedService = selectedServiceIndex !== null
-    ? services[selectedServiceIndex] ?? null
-    : null;
+    void tick();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshStatus();
+    };
+    document.addEventListener('visibilitychange', onVisible);
 
-  // Update circuit breaker expanded state when service changes
-  $: if (selectedService) {
-    circuitBreakerExpanded = selectedService.circuit_breaker.enabled;
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  });
+
+  // --- the sheet -----------------------------------------------------------
+
+  function openCreate() {
+    let suffix = services.length + 1;
+    let candidate = `service-${suffix}`;
+    while (services.some((service) => service.name === candidate)) {
+      suffix += 1;
+      candidate = `service-${suffix}`;
+    }
+    const base = createDefaultService(suffix);
+    base.name = candidate;
+    sheetService = base;
+    sheetMode = 'create';
+    serverError = null;
+    sheetOpen = true;
   }
 
-  // Count routes referencing a service
-  const countRoutesForService = (serviceName: string): number => {
-    return config.routes.filter((route) => route.service === serviceName).length;
-  };
-
-  // ---------------------------------------------------------------------------
-  // Formatting Helpers
-  // ---------------------------------------------------------------------------
-
-  const formatLbStrategy = (lb: string): string => {
-    switch (lb) {
-      case 'round_robin': return 'Round Robin';
-      case 'random': return 'Random';
-      case 'hash': return 'Hash';
-      default: return lb;
-    }
-  };
-
-  const cbBadgeClass = (enabled: boolean): string =>
-    enabled
-      ? 'rounded-full border border-amber-400/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200'
-      : 'rounded-full border border-slate-600 bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500';
-
-  const rowClass = (index: number): string =>
-    selectedServiceIndex === index
-      ? 'cursor-pointer transition-colors bg-cyan-500/10'
-      : 'cursor-pointer transition-colors hover:bg-slate-900/70';
-
-  const collapseIconClass = (expanded: boolean): string =>
-    expanded ? 'text-slate-400 transition-transform rotate-180' : 'text-slate-400 transition-transform';
-
-  // ---------------------------------------------------------------------------
-  // Input Helpers
-  // ---------------------------------------------------------------------------
-
-  const inputValue = (event: Event): string =>
-    (event.currentTarget as HTMLInputElement).value;
-
-  const numberValue = (event: Event, fallback = 0): number =>
-    Number((event.currentTarget as HTMLInputElement).value || fallback);
-
-  const checkedValue = (event: Event): boolean =>
-    (event.currentTarget as HTMLInputElement).checked;
-
-  const selectValue = (event: Event): string =>
-    (event.currentTarget as HTMLSelectElement).value;
-
-  const toNullableNumber = (value: string): number | null => {
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    const num = Number(trimmed);
-    if (!Number.isFinite(num)) return null;
-    return Math.max(0, Math.floor(num));
-  };
-
-  // ---------------------------------------------------------------------------
-  // Error Handling
-  // ---------------------------------------------------------------------------
-
-  const showError = (message: string) => {
-    errorMessage = message;
-    if (errorTimeout) {
-      clearTimeout(errorTimeout);
-    }
-    errorTimeout = setTimeout(() => {
-      errorMessage = '';
-      errorTimeout = null;
-    }, 5000);
-  };
-
-  const clearError = () => {
-    errorMessage = '';
-    if (errorTimeout) {
-      clearTimeout(errorTimeout);
-      errorTimeout = null;
-    }
-  };
-
-  // ---------------------------------------------------------------------------
-  // API Refresh
-  // ---------------------------------------------------------------------------
-
-  const refreshConfig = async () => {
-    try {
-      isLoading = true;
-      clearError();
-      const newConfig = await loadConfigFromAdmin();
-      configStore.set(newConfig);
-      config = newConfig;
-
-      // Re-select the service if we were in detail view
-      if (selectedService !== null) {
-        const newIndex = newConfig.services.findIndex((s: ServiceConfig) => s.name === selectedService.name);
-        selectedServiceIndex = newIndex >= 0 ? newIndex : null;
-      }
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Failed to refresh config');
-    } finally {
-      isLoading = false;
-    }
-  };
-
-  // ---------------------------------------------------------------------------
-  // Local Update Functions (for form editing in detail view)
-  // ---------------------------------------------------------------------------
-
-  const updateServiceLocal = <K extends keyof ServiceConfig>(key: K, value: ServiceConfig[K]) => {
-    if (selectedServiceIndex === null) return;
-    const idx = selectedServiceIndex;
-    configStore.update((cfg) => {
-      const target = cfg.services[idx];
-      if (!target) return cfg;
-      target[key] = value;
-      return cfg;
-    });
-  };
-
-  const updateServiceLb = (event: Event) => {
-    updateServiceLocal('lb', selectValue(event) as LbStrategy);
-  };
-
-  const updateCircuitBreaker = (
-    key: 'enabled' | 'consecutive_failures' | 'open_ms',
-    value: number | boolean
-  ) => {
-    if (selectedServiceIndex === null) return;
-    const idx = selectedServiceIndex;
-    configStore.update((cfg) => {
-      const service = cfg.services[idx];
-      if (!service) return cfg;
-      if (key === 'enabled') {
-        service.circuit_breaker.enabled = Boolean(value);
-        circuitBreakerExpanded = Boolean(value);
-      } else if (key === 'consecutive_failures') {
-        service.circuit_breaker.consecutive_failures = Math.max(1, Number(value));
-      } else {
-        service.circuit_breaker.open_ms = Math.max(1, Number(value));
-      }
-      return cfg;
-    });
-  };
-
-  const updateUpstream = (
-    upstreamIndex: number,
-    key:
-      | 'addr'
-      | 'sni'
-      | 'weight'
-      | 'tls'
-      | 'verify_cert'
-      | 'verify_hostname'
-      | 'connect_timeout_ms'
-      | 'total_connect_timeout_ms'
-      | 'read_timeout_ms'
-      | 'write_timeout_ms'
-      | 'idle_timeout_ms',
-    value: string | number | boolean | null
-  ) => {
-    if (selectedServiceIndex === null) return;
-    const idx = selectedServiceIndex;
-    configStore.update((cfg) => {
-      const upstream = cfg.services[idx]?.upstreams[upstreamIndex];
-      if (!upstream) return cfg;
-      if (key === 'weight' && typeof value === 'number') {
-        upstream.weight = Math.min(256, Math.max(1, value));
-      } else if (key === 'tls' && typeof value === 'boolean') {
-        upstream.tls = value;
-      } else if ((key === 'verify_cert' || key === 'verify_hostname') && typeof value === 'boolean') {
-        upstream[key] = value;
-      } else if (
-        (key === 'connect_timeout_ms' ||
-          key === 'total_connect_timeout_ms' ||
-          key === 'read_timeout_ms' ||
-          key === 'write_timeout_ms' ||
-          key === 'idle_timeout_ms') &&
-        (typeof value === 'number' || value === null)
-      ) {
-        upstream[key] = value;
-      } else if ((key === 'addr' || key === 'sni') && typeof value === 'string') {
-        upstream[key] = value;
-      }
-      return cfg;
-    });
-  };
-
-  // ---------------------------------------------------------------------------
-  // API Actions
-  // ---------------------------------------------------------------------------
-
-  const handleCreateService = async (serviceData: ServiceConfig) => {
-    try {
-      isSaving = true;
-      clearError();
-      await createService(serviceData);
-      showCreateModal = false;
-      await refreshConfig();
-      // Select the newly created service
-      const newIndex = config.services.findIndex(s => s.name === serviceData.name);
-      if (newIndex >= 0) {
-        selectedServiceIndex = newIndex;
-      }
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Failed to create service');
-    } finally {
-      isSaving = false;
-    }
-  };
-
-  const handleSaveService = async () => {
-    if (selectedServiceIndex === null || !selectedService) return;
-
-    try {
-      isSaving = true;
-      clearError();
-      const originalName = config.services[selectedServiceIndex]?.name;
-      if (!originalName) return;
-
-      await updateService(originalName, selectedService);
-      await refreshConfig();
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Failed to save service');
-    } finally {
-      isSaving = false;
-    }
-  };
-
-  const handleDeleteService = async (serviceName: string) => {
-    try {
-      isSaving = true;
-      clearError();
-      await deleteService(serviceName);
-      selectedServiceIndex = null;
-      showDeleteConfirm = false;
-      await refreshConfig();
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Failed to delete service');
-    } finally {
-      isSaving = false;
-    }
-  };
-
-  const handleDuplicateService = async (index: number) => {
-    const source = services[index];
-    if (!source) return;
-
-    try {
-      isSaving = true;
-      clearError();
-      const clone = JSON.parse(JSON.stringify(source)) as ServiceConfig;
-      clone.name = `${clone.name}-copy`;
-      await createService(clone);
-      await refreshConfig();
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Failed to duplicate service');
-    } finally {
-      isSaving = false;
-    }
-  };
-
-  // ---------------------------------------------------------------------------
-  // UI Actions
-  // ---------------------------------------------------------------------------
-
-  const handleSearch = (event: Event) => {
-    searchQuery = (event.currentTarget as HTMLInputElement).value;
-  };
-
-  const handleRowClick = (index: number) => {
-    selectedServiceIndex = index;
-  };
-
-  const handleViewService = (index: number) => {
-    selectedServiceIndex = index;
-  };
-
-  const handleEditService = (index: number) => {
-    selectedServiceIndex = index;
-  };
-
-  const handleDeleteFromList = (index: number) => {
-    const serviceName = services[index]?.name ?? '';
-    const routeCount = countRoutesForService(serviceName);
-    const warning = routeCount > 0
-      ? `This will also remove ${routeCount} route(s) referencing this service. `
-      : '';
-    if (!confirm(`${warning}Delete service "${serviceName}"?`)) {
+  // The URL owns which service is open (T303).
+  $effect(() => {
+    const name = selectedServiceName;
+    if (!name) {
+      if (sheetMode === 'edit' && sheetOpen) sheetOpen = false;
       return;
     }
-    handleDeleteService(serviceName);
-    if (selectedServiceIndex === index) {
-      selectedServiceIndex = null;
-    } else if (selectedServiceIndex !== null && selectedServiceIndex > index) {
-      selectedServiceIndex = selectedServiceIndex - 1;
+    if (services.length === 0) return;
+    const service = services.find((entry) => entry.name === name);
+    if (!service) return;
+    sheetService = service;
+    sheetMode = 'edit';
+    sheetOpen = true;
+  });
+
+  let lastCreateRequest = $state(0);
+  $effect(() => {
+    if (createRequest !== lastCreateRequest) {
+      lastCreateRequest = createRequest;
+      openCreate();
     }
-  };
+  });
 
-  const handleOpenCreateModal = () => {
-    showCreateModal = true;
-  };
+  function closeSheet() {
+    sheetOpen = false;
+    serverError = null;
+    if (selectedServiceName) onselect?.(null);
+  }
 
-  const handleCloseCreateModal = () => {
-    if (!isSaving) {
-      showCreateModal = false;
-    }
-  };
-
-  const handleCloseDetail = () => {
-    if (!isSaving) {
-      selectedServiceIndex = null;
-      showDeleteConfirm = false;
-    }
-  };
-
-  const handleDeleteFromDetail = () => {
-    if (isSaving) return;
-    if (showDeleteConfirm) {
-      if (selectedService) {
-        handleDeleteService(selectedService.name);
+  async function save(service: ServiceConfig) {
+    saving = true;
+    serverError = null;
+    try {
+      if (sheetMode === 'create') {
+        await createService(service);
+        toast.success(`Service “${service.name}” created`);
+      } else {
+        await updateService(sheetService?.name ?? service.name, service);
+        toast.success(`Service “${service.name}” saved`);
       }
-    } else {
-      showDeleteConfirm = true;
-      setTimeout(() => {
-        showDeleteConfirm = false;
-      }, 3000);
+      sheetOpen = false;
+      if (selectedServiceName) onselect?.(null);
+      onchanged?.();
+      void refreshStatus();
+    } catch (err) {
+      serverError = err instanceof Error ? err.message : String(err);
+    } finally {
+      saving = false;
     }
-  };
+  }
 
-  const handleCancelDelete = () => {
-    showDeleteConfirm = false;
-  };
-
-  const handleAddUpstream = () => {
-    if (selectedServiceIndex === null) return;
-    addServiceUpstream(selectedServiceIndex);
-  };
-
-  const handleRemoveUpstream = (upstreamIndex: number) => {
-    if (selectedServiceIndex === null) return;
-    removeServiceUpstream(selectedServiceIndex, upstreamIndex);
-  };
-
-  const toggleAdvancedUpstream = (idx: number) => {
-    advancedUpstreamExpanded = { ...advancedUpstreamExpanded, [idx]: !advancedUpstreamExpanded[idx] };
-  };
-
-  const getDeleteWarningText = (): string => {
-    if (!selectedService) return '';
-    const routeCount = countRoutesForService(selectedService.name);
-    if (routeCount > 0) {
-      return `Warning: ${routeCount} route(s) reference this service and will be removed.`;
+  function askDelete(name: string) {
+    const blocking = routesUsing(name, routes);
+    if (blocking.length > 0) {
+      toast.error(
+        `“${name}” still has ${blocking.length} route${blocking.length === 1 ? '' : 's'}: ${blocking
+          .map((route) => route.name)
+          .join(', ')}`
+      );
+      return;
     }
-    return '';
-  };
+    confirmTarget = name;
+    confirmOpen = true;
+  }
 
-  // Existing service names for modal validation
-  $: existingServiceNames = services.map(s => s.name);
+  async function confirmDelete() {
+    if (!confirmTarget || saving) return;
+    saving = true;
+    try {
+      await deleteService(confirmTarget);
+      toast.success(`Service “${confirmTarget}” deleted`);
+      confirmOpen = false;
+      sheetOpen = false;
+      if (selectedServiceName === confirmTarget) onselect?.(null);
+      onchanged?.();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      saving = false;
+      confirmTarget = null;
+    }
+  }
 </script>
 
-<AppLayout title="Services" subtitle="Manage backend service targets and their upstreams">
-  <svelte:fragment slot="header-actions">
-    <button
-      class="mr-2 rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
-      on:click={refreshConfig}
-      disabled={isLoading || isSaving}
-    >
-      {#if isLoading}
-        <span class="inline-block animate-spin mr-1">⟳</span>
-        Loading...
-      {:else}
-        ⟳ Refresh
-      {/if}
-    </button>
-    <button
-      class="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-      on:click={handleOpenCreateModal}
-      disabled={isSaving}
-    >
-      + Add Service
-    </button>
-  </svelte:fragment>
-
-  <!-- Error Notification -->
-  {#if errorMessage}
-    <div class="fixed top-4 right-4 z-50 max-w-md rounded-lg border border-rose-400/40 bg-rose-500/10 px-4 py-3 shadow-lg backdrop-blur">
-      <div class="flex items-start gap-3">
-        <span class="text-rose-300 text-lg">✕</span>
-        <div class="flex-1">
-          <p class="text-sm font-medium text-rose-200">Error</p>
-          <p class="mt-1 text-xs text-rose-300/80">{errorMessage}</p>
-        </div>
-        <button
-          class="text-rose-400 hover:text-rose-200 transition-colors"
-          on:click={clearError}
-        >
-          ✕
-        </button>
-      </div>
+<div class="flex h-full min-h-0 flex-col">
+  <header
+    class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-6"
+  >
+    <div class="min-w-0">
+      <h1 class="truncate text-xl font-semibold">Services</h1>
+      <p class="mt-0.5 text-sm text-muted-foreground">
+        {services.length} service{services.length === 1 ? '' : 's'}
+        {#if statusAt}
+          · live state {statusError ? 'stale' : 'updating'}
+        {/if}
+        {#if statusError}
+          · <span class="text-warning-emphasis">{statusError}</span>
+        {/if}
+      </p>
     </div>
-  {/if}
 
-  <!-- Create Service Modal -->
-  {#if showCreateModal}
-    <ServiceFormModal
-      service={null}
-      existingNames={existingServiceNames}
-      on:save={(e) => handleCreateService(e.detail)}
-      on:cancel={handleCloseCreateModal}
-    />
-  {/if}
+    <div class="flex shrink-0 flex-wrap items-center gap-2">
+      <Button variant="outline" size="sm" onclick={() => void refreshStatus()}>
+        <ActivityIcon aria-hidden="true" />
+        <span class="hidden sm:inline">Refresh state</span>
+      </Button>
+      <Button variant="outline" size="sm" onclick={() => onchanged?.()}>
+        <RefreshCwIcon aria-hidden="true" />
+        <span class="hidden sm:inline">Reload config</span>
+      </Button>
+      <Button size="sm" onclick={openCreate}>
+        <PlusIcon aria-hidden="true" />
+        Add service
+      </Button>
+    </div>
+  </header>
 
-  <div class="p-6">
-    {#if isDetailView && selectedService}
-      <!-- ================================================================= -->
-      <!-- Detail/Edit View -->
-      <!-- ================================================================= -->
-      <div class="mx-auto max-w-4xl space-y-6">
-        <!-- Back Button -->
-        <button
-          class="inline-flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
-          on:click={handleCloseDetail}
-          disabled={isSaving}
+  <div class="min-h-0 flex-1 overflow-y-auto">
+    <div class="grid gap-4 p-4 sm:p-6">
+      <div class="relative max-w-xs">
+        <SearchIcon
+          class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <Input
+          class="pl-8"
+          placeholder="Search name or upstream"
+          aria-label="Search services"
+          bind:value={query}
+        />
+      </div>
+
+      {#if services.length === 0}
+        <EmptyState
+          icon={ServerIcon}
+          title="No services yet"
+          description="A service is a pool of upstreams that routes send traffic to."
         >
-          <span class="text-base">←</span>
-          Back to Services
-        </button>
-
-        <!-- Service Header -->
-        <div class="flex items-center justify-between">
-          <div>
-            <h2 class="text-xl font-bold text-slate-100">
-              {selectedService.name || 'Unnamed Service'}
-            </h2>
-            <p class="mt-1 text-sm text-slate-400">
-              Service #{(selectedServiceIndex ?? 0) + 1}
-              <span class="ml-2 rounded-full border border-cyan-400/40 bg-cyan-500/10 px-2 py-0.5 text-xs font-semibold text-cyan-200">
-                {formatLbStrategy(selectedService.lb)}
-              </span>
-            </p>
-          </div>
-
-          <!-- Action Buttons -->
-          <div class="flex items-center gap-2">
-            <!-- Save Button -->
-            <button
-              class="rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-              on:click={handleSaveService}
-              disabled={isSaving}
-            >
-              {#if isSaving}
-                <span class="inline-block animate-spin mr-1">⟳</span>
-                Saving...
-              {:else}
-                Save Changes
-              {/if}
-            </button>
-            <button
-              class="rounded-lg border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-              on:click={handleDeleteFromDetail}
-              disabled={isSaving}
-            >
-              {#if showDeleteConfirm}
-                {#if isSaving}
-                  <span class="inline-block animate-spin mr-1">⟳</span>
-                  Deleting...
-                {:else}
-                  Confirm Delete?
-                {/if}
-              {:else}
-                Delete Service
-              {/if}
-            </button>
-            {#if showDeleteConfirm && !isSaving}
-              <button
-                class="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-700"
-                on:click={handleCancelDelete}
-              >
-                Cancel
-              </button>
-            {/if}
-          </div>
-        </div>
-
-        <!-- Delete Warning -->
-        {#if showDeleteConfirm}
-          {#if getDeleteWarningText()}
-            <div class="rounded-lg border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-200">
-              <span class="mr-2">⚠</span>
-              {getDeleteWarningText()}
-            </div>
-          {/if}
-        {/if}
-
-        <!-- ============================================================= -->
-        <!-- Section 1: Service Configuration -->
-        <!-- ============================================================= -->
-        <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
-          <div class="flex items-center gap-3 border-b border-slate-700/80 px-5 py-4">
-            <div class="h-8 w-1 rounded-full bg-cyan-400" />
-            <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
-              Service Configuration
-            </h3>
-          </div>
-
-          <div class="grid gap-5 p-5 md:grid-cols-2">
-            <!-- Name -->
-            <label class="space-y-1.5">
-              <span class="text-sm font-medium text-slate-300">Name</span>
-              <input
-                type="text"
-                class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 disabled:opacity-50"
-                value={selectedService.name}
-                placeholder="e.g., api-backend"
-                on:input={(e) => updateServiceLocal('name', inputValue(e))}
-                disabled={isSaving}
-              />
-            </label>
-
-            <!-- LB Strategy -->
-            <label class="space-y-1.5">
-              <span class="text-sm font-medium text-slate-300">Load Balancing Strategy</span>
-              <select
-                class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 disabled:opacity-50"
-                value={selectedService.lb}
-                on:change={updateServiceLb}
-                disabled={isSaving}
-              >
-                {#each lbOptions as option}
-                  <option value={option}>{formatLbStrategy(option)}</option>
-                {/each}
-              </select>
-            </label>
-
-            <!-- Max Retries -->
-            <label class="space-y-1.5">
-              <span class="text-sm font-medium text-slate-300">Max Retries</span>
-              <input
-                type="number"
-                min="0"
-                class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm tabular-nums text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 disabled:opacity-50"
-                value={selectedService.max_retries}
-                on:input={(e) => updateServiceLocal('max_retries', numberValue(e))}
-                disabled={isSaving}
-              />
-            </label>
-
-            <!-- Retry Backoff -->
-            <label class="space-y-1.5">
-              <span class="text-sm font-medium text-slate-300">Retry Backoff <span class="text-slate-500">(ms)</span></span>
-              <input
-                type="number"
-                min="0"
-                class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm tabular-nums text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 disabled:opacity-50"
-                value={selectedService.retry_backoff_ms}
-                on:input={(e) => updateServiceLocal('retry_backoff_ms', numberValue(e))}
-                disabled={isSaving}
-              />
-            </label>
-          </div>
-        </section>
-
-        <!-- ============================================================= -->
-        <!-- Section 2: Circuit Breaker -->
-        <!-- ============================================================= -->
-        <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
-          <button
-            class="flex w-full items-center justify-between px-5 py-4 text-left transition-colors hover:bg-slate-800/50 disabled:cursor-not-allowed disabled:opacity-50"
-            on:click={() => circuitBreakerExpanded = !circuitBreakerExpanded}
-            disabled={isSaving}
+          {#snippet action()}
+            <Button size="sm" onclick={openCreate}>
+              <PlusIcon aria-hidden="true" />
+              Add service
+            </Button>
+          {/snippet}
+        </EmptyState>
+      {:else if filtered.length === 0}
+        <EmptyState
+          icon={SearchIcon}
+          title="Nothing matches that search"
+          description="Try a different name or upstream address."
+        />
+      {:else}
+        {#each filtered as service (service.name)}
+          {@const live = statusByService.get(service.name)}
+          {@const health = healthOf(service)}
+          {@const using = routesUsing(service.name, routes)}
+          <section
+            class={cn(
+              'rounded-xl border border-border bg-card',
+              selectedServiceName === service.name && 'ring-2 ring-ring/50'
+            )}
+            data-service={service.name}
           >
-            <div class="flex items-center gap-3">
-              <div class="h-8 w-1 rounded-full bg-amber-400" />
-              <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
-                Circuit Breaker
-              </h3>
-              {#if selectedService.circuit_breaker.enabled}
-                <span class="rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-200">
-                  ON
-                </span>
-              {:else}
-                <span class="rounded-full border border-slate-500 bg-slate-800 px-2 py-0.5 text-[10px] font-semibold text-slate-400">
-                  OFF
-                </span>
-              {/if}
-            </div>
-            <span class={collapseIconClass(circuitBreakerExpanded)}>
-              ▼
-            </span>
-          </button>
-
-          {#if circuitBreakerExpanded}
-            <div class="border-t border-slate-700/80 p-5">
-              <!-- Enabled Toggle -->
-              <div class="mb-5">
-                <label class="flex items-center justify-between">
-                  <div>
-                    <span class="text-sm font-medium text-slate-300">Enable Circuit Breaker</span>
-                    <p class="mt-0.5 text-xs text-slate-500">Automatically trip when upstream failures exceed threshold</p>
-                  </div>
-                  <label class="relative inline-flex cursor-pointer items-center">
-                    <input
-                      type="checkbox"
-                      class="peer sr-only"
-                      checked={selectedService.circuit_breaker.enabled}
-                      on:change={(e) => updateCircuitBreaker('enabled', checkedValue(e))}
-                      disabled={isSaving}
-                    />
-                    <div class="h-6 w-11 rounded-full bg-slate-700 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-slate-400 after:transition-all peer-checked:bg-amber-600 peer-checked:after:translate-x-full peer-checked:after:bg-white disabled:opacity-50"></div>
-                  </label>
-                </label>
-              </div>
-
-              {#if selectedService.circuit_breaker.enabled}
-                <div class="grid gap-5 md:grid-cols-2">
-                  <!-- Consecutive Failures -->
-                  <label class="space-y-1.5">
-                    <span class="text-sm font-medium text-slate-300">Consecutive Failures</span>
-                    <p class="text-xs text-slate-500">Number of failures before tripping the breaker</p>
-                    <input
-                      type="number"
-                      min="1"
-                      class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm tabular-nums text-slate-100 placeholder:text-slate-500 transition-colors focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500/30 disabled:opacity-50"
-                      value={selectedService.circuit_breaker.consecutive_failures}
-                      on:input={(e) => updateCircuitBreaker('consecutive_failures', numberValue(e, 1))}
-                      disabled={isSaving}
-                    />
-                  </label>
-
-                  <!-- Open Duration -->
-                  <label class="space-y-1.5">
-                    <span class="text-sm font-medium text-slate-300">Open Duration <span class="text-slate-500">(ms)</span></span>
-                    <p class="text-xs text-slate-500">How long the breaker stays open before retrying</p>
-                    <input
-                      type="number"
-                      min="1"
-                      class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm tabular-nums text-slate-100 placeholder:text-slate-500 transition-colors focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500/30 disabled:opacity-50"
-                      value={selectedService.circuit_breaker.open_ms}
-                      on:input={(e) => updateCircuitBreaker('open_ms', numberValue(e, 1))}
-                      disabled={isSaving}
-                    />
-                  </label>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </section>
-
-        <!-- ============================================================= -->
-        <!-- Section 3: Upstreams -->
-        <!-- ============================================================= -->
-        <section class="rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur">
-          <div class="flex items-center justify-between border-b border-slate-700/80 px-5 py-4">
-            <div class="flex items-center gap-3">
-              <div class="h-8 w-1 rounded-full bg-emerald-400" />
-              <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-200">
-                Upstreams
-              </h3>
-              <span class="rounded-full border border-slate-600 bg-slate-800 px-2 py-0.5 text-xs font-medium text-slate-400">
-                {selectedService.upstreams.length}
-              </span>
-            </div>
-            <button
-              class="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-              on:click={handleAddUpstream}
-              disabled={isSaving}
-            >
-              <span class="text-sm">+</span>
-              <span class="ml-1">Add Upstream</span>
-            </button>
-          </div>
-
-          <div class="divide-y divide-slate-700/60">
-            {#each selectedService.upstreams as upstream, upstreamIndex}
-              <div class="p-5">
-                <div class="mb-4 flex items-center justify-between">
-                  <div class="flex items-center gap-2">
-                    <span class="flex h-6 w-6 items-center justify-center rounded-md bg-slate-800 text-xs font-bold text-slate-400">
-                      {upstreamIndex + 1}
-                    </span>
-                    <span class="text-sm font-medium text-slate-300">
-                      {upstream.addr || 'New Upstream'}
-                    </span>
-                    {#if upstream.tls}
-                      <span class="rounded border border-violet-400/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-violet-200">
-                        TLS
-                      </span>
-                    {/if}
-                  </div>
-                  {#if selectedService.upstreams.length > 1}
-                    <button
-                      class="rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-1 text-xs text-rose-300 transition-colors hover:bg-rose-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                      on:click={() => handleRemoveUpstream(upstreamIndex)}
-                      disabled={isSaving}
-                    >
-                      Remove
-                    </button>
+            <div class="flex flex-wrap items-start justify-between gap-3 p-4">
+              <div class="grid min-w-0 gap-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    class="rounded-sm text-base font-semibold hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                    onclick={() => onselect?.(service.name)}
+                  >
+                    {service.name}
+                  </button>
+                  <StatusDot
+                    status={serviceDot(service)}
+                    reason={serviceReason(service)}
+                    showLabel
+                    tooltip={false}
+                  />
+                  <Badge variant="outline">{service.lb}</Badge>
+                  {#if service.health_check.enabled}
+                    <Badge variant="secondary">probed</Badge>
+                  {/if}
+                  {#if service.sticky.enabled}
+                    <Badge variant="secondary">sticky</Badge>
+                  {/if}
+                  {#if live?.circuit_breaker_enabled}
+                    <Badge variant="secondary">breaker</Badge>
                   {/if}
                 </div>
+                <p class="text-xs text-muted-foreground">
+                  {health.healthy}/{health.total} ready ·
+                  {service.max_retries} retr{service.max_retries === 1 ? 'y' : 'ies'} ·
+                  {#if using.length > 0}
+                    used by {using.map((route) => route.name).join(', ')}
+                  {:else}
+                    no route points here
+                  {/if}
+                </p>
+              </div>
 
-                <div class="grid gap-4 md:grid-cols-3">
-                  <!-- Address -->
-                  <label class="space-y-1.5 md:col-span-2">
-                    <span class="text-xs font-medium text-slate-400">Address</span>
-                    <input
-                      type="text"
-                      class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 disabled:opacity-50"
-                      value={upstream.addr}
-                      placeholder="host:port"
-                      on:input={(e) => updateUpstream(upstreamIndex, 'addr', inputValue(e))}
-                      disabled={isSaving}
-                    />
-                  </label>
+              <div class="flex shrink-0 items-center gap-1">
+                <Button variant="outline" size="sm" onclick={() => onselect?.(service.name)}>
+                  Edit
+                </Button>
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger>
+                    {#snippet child({ props }: { props: Record<string, unknown> })}
+                      <Button
+                        {...props}
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Actions for ${service.name}`}
+                      >
+                        <MoreHorizontalIcon aria-hidden="true" />
+                      </Button>
+                    {/snippet}
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content align="end" class="w-52">
+                    <DropdownMenu.Group>
+                      <DropdownMenu.Item onSelect={() => onselect?.(service.name)}>
+                        Edit service
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item onSelect={() => onnavigate?.('routes')}>
+                        Routes using it
+                      </DropdownMenu.Item>
+                    </DropdownMenu.Group>
+                    <DropdownMenu.Separator />
+                    <DropdownMenu.Item
+                      variant="destructive"
+                      onSelect={() => askDelete(service.name)}
+                    >
+                      <Trash2Icon aria-hidden="true" />
+                      Delete
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Root>
+              </div>
+            </div>
 
-                  <!-- Weight -->
-                  <label class="space-y-1.5">
-                    <span class="text-xs font-medium text-slate-400">Weight <span class="text-slate-600">(1-256)</span></span>
-                    <input
-                      type="number"
-                      min="1"
-                      max="256"
-                      class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2 text-sm tabular-nums text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 disabled:opacity-50"
-                      value={upstream.weight}
-                      on:input={(e) => updateUpstream(upstreamIndex, 'weight', numberValue(e, 1))}
-                      disabled={isSaving}
-                    />
-                  </label>
-
-                  <!-- SNI -->
-                  <label class="space-y-1.5">
-                    <span class="text-xs font-medium text-slate-400">SNI <span class="text-slate-600">(optional)</span></span>
-                    <input
-                      type="text"
-                      class="w-full rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 disabled:opacity-50"
-                      value={upstream.sni}
-                      placeholder="server name"
-                      on:input={(e) => updateUpstream(upstreamIndex, 'sni', inputValue(e))}
-                      disabled={isSaving}
-                    />
-                  </label>
-
-                  <!-- TLS Toggle -->
-                  <div class="flex items-end pb-0.5">
-                    <label class="flex items-center justify-between gap-3 rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2">
-                      <span class="text-xs font-medium text-slate-400">TLS</span>
-                      <label class="relative inline-flex cursor-pointer items-center">
-                        <input
-                          type="checkbox"
-                          class="peer sr-only"
-                          checked={upstream.tls}
-                          on:change={(e) => updateUpstream(upstreamIndex, 'tls', checkedValue(e))}
-                          disabled={isSaving}
-                        />
-                        <div class="h-5 w-9 rounded-full bg-slate-700 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-slate-400 after:transition-all peer-checked:bg-cyan-600 peer-checked:after:translate-x-full peer-checked:after:bg-white disabled:opacity-50"></div>
-                      </label>
-                    </label>
-                  </div>
-
-                  <!-- Verify Cert Toggle -->
-                  <div class="flex items-end pb-0.5">
-                    <label class="flex items-center justify-between gap-3 rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2">
-                      <span class="text-xs font-medium text-slate-400">Verify Cert</span>
-                      <label class="relative inline-flex cursor-pointer items-center">
-                        <input
-                          type="checkbox"
-                          class="peer sr-only"
-                          checked={upstream.verify_cert}
-                          on:change={(e) => updateUpstream(upstreamIndex, 'verify_cert', checkedValue(e))}
-                          disabled={isSaving}
-                        />
-                        <div class="h-5 w-9 rounded-full bg-slate-700 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-slate-400 after:transition-all peer-checked:bg-cyan-600 peer-checked:after:translate-x-full peer-checked:after:bg-white disabled:opacity-50"></div>
-                      </label>
-                    </label>
-                  </div>
-                </div>
-
-                <!-- Verify Hostname Toggle -->
-                <div class="mt-3">
-                  <label class="flex items-center justify-between gap-3 rounded-lg border border-slate-600 bg-slate-950/70 px-3 py-2">
-                    <span class="text-xs font-medium text-slate-400">Verify Hostname</span>
-                    <label class="relative inline-flex cursor-pointer items-center">
-                      <input
-                        type="checkbox"
-                        class="peer sr-only"
-                        checked={upstream.verify_hostname}
-                        on:change={(e) => updateUpstream(upstreamIndex, 'verify_hostname', checkedValue(e))}
-                        disabled={isSaving}
+            <Table.Root>
+              <Table.Header>
+                <Table.Row>
+                  <Table.Head>Upstream</Table.Head>
+                  <Table.Head class="text-right">Share</Table.Head>
+                  <Table.Head>State</Table.Head>
+                  <Table.Head class="text-right">In flight</Table.Head>
+                  <Table.Head class="text-right">Latency</Table.Head>
+                </Table.Row>
+              </Table.Header>
+              <Table.Body>
+                {#each service.upstreams as upstream (upstream.addr)}
+                  {@const liveUpstream = upstreamStatus(service.name)[upstream.addr]}
+                  <Table.Row class={upstream.enabled ? '' : 'opacity-60'}>
+                    <Table.Cell class="font-mono text-xs">
+                      {upstream.addr}
+                      {#if upstream.tls}
+                        <Badge variant="outline" class="ml-1.5">TLS</Badge>
+                      {/if}
+                    </Table.Cell>
+                    <Table.Cell class="text-right tabular-nums">
+                      {#if upstream.enabled}
+                        {liveUpstream ? `${(liveUpstream.share * 100).toFixed(0)}%` : '—'}
+                      {:else}
+                        drained
+                      {/if}
+                    </Table.Cell>
+                    <Table.Cell>
+                      <StatusDot
+                        status={!upstream.enabled
+                          ? 'disabled'
+                          : !liveUpstream
+                            ? 'unknown'
+                            : liveUpstream.circuit_open
+                              ? 'circuit-open'
+                              : liveUpstream.probe_healthy
+                                ? 'healthy'
+                                : 'down'}
+                        reason={!upstream.enabled
+                          ? 'Drained: still configured, taking no traffic.'
+                          : liveUpstream?.circuit_open
+                            ? `Circuit open after ${liveUpstream.consecutive_failures} failures${
+                                liveUpstream.circuit_reopens_in_ms
+                                  ? `, retrying in ${Math.ceil(liveUpstream.circuit_reopens_in_ms / 1000)}s`
+                                  : ''
+                              }.`
+                            : liveUpstream?.probe_healthy
+                              ? 'Probes are passing and the circuit is closed.'
+                              : 'The last health probe failed.'}
+                        showLabel
+                        tooltip={false}
                       />
-                      <div class="h-5 w-9 rounded-full bg-slate-700 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-slate-400 after:transition-all peer-checked:bg-cyan-600 peer-checked:after:translate-x-full peer-checked:after:bg-white disabled:opacity-50"></div>
-                    </label>
-                  </label>
-                </div>
-
-                <!-- Advanced Settings -->
-                <div class="mt-4">
-                  <button
-                    class="flex w-full items-center justify-between rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-xs text-slate-400 transition-colors hover:bg-slate-800/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                    on:click={() => toggleAdvancedUpstream(upstreamIndex)}
-                    disabled={isSaving}
-                  >
-                    <span class="text-xs font-medium text-slate-400">Advanced Timeout Settings</span>
-                    <span class={collapseIconClass(advancedUpstreamExpanded[upstreamIndex] ?? false)}>
-                      ▼
-                    </span>
-                  </button>
-
-                  {#if advancedUpstreamExpanded[upstreamIndex]}
-                    <div class="mt-2 grid gap-3 rounded-lg border border-slate-700 bg-slate-950/50 p-3 sm:grid-cols-2 lg:grid-cols-3">
-                      <!-- Connect Timeout -->
-                      <label class="space-y-1">
-                        <span class="text-[11px] font-medium text-slate-500">Connect Timeout (ms)</span>
-                        <input
-                          type="number"
-                          min="0"
-                          class="w-full rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-xs tabular-nums text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
-                          value={upstream.connect_timeout_ms ?? ''}
-                          placeholder="default"
-                          on:input={(e) => updateUpstream(upstreamIndex, 'connect_timeout_ms', toNullableNumber(inputValue(e)))}
-                          disabled={isSaving}
-                        />
-                      </label>
-
-                      <!-- Total Connect Timeout -->
-                      <label class="space-y-1">
-                        <span class="text-[11px] font-medium text-slate-500">Total Connect Timeout (ms)</span>
-                        <input
-                          type="number"
-                          min="0"
-                          class="w-full rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-xs tabular-nums text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
-                          value={upstream.total_connect_timeout_ms ?? ''}
-                          placeholder="default"
-                          on:input={(e) => updateUpstream(upstreamIndex, 'total_connect_timeout_ms', toNullableNumber(inputValue(e)))}
-                          disabled={isSaving}
-                        />
-                      </label>
-
-                      <!-- Read Timeout -->
-                      <label class="space-y-1">
-                        <span class="text-[11px] font-medium text-slate-500">Read Timeout (ms)</span>
-                        <input
-                          type="number"
-                          min="0"
-                          class="w-full rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-xs tabular-nums text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
-                          value={upstream.read_timeout_ms ?? ''}
-                          placeholder="default"
-                          on:input={(e) => updateUpstream(upstreamIndex, 'read_timeout_ms', toNullableNumber(inputValue(e)))}
-                          disabled={isSaving}
-                        />
-                      </label>
-
-                      <!-- Write Timeout -->
-                      <label class="space-y-1">
-                        <span class="text-[11px] font-medium text-slate-500">Write Timeout (ms)</span>
-                        <input
-                          type="number"
-                          min="0"
-                          class="w-full rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-xs tabular-nums text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
-                          value={upstream.write_timeout_ms ?? ''}
-                          placeholder="default"
-                          on:input={(e) => updateUpstream(upstreamIndex, 'write_timeout_ms', toNullableNumber(inputValue(e)))}
-                          disabled={isSaving}
-                        />
-                      </label>
-
-                      <!-- Idle Timeout -->
-                      <label class="space-y-1">
-                        <span class="text-[11px] font-medium text-slate-500">Idle Timeout (ms)</span>
-                        <input
-                          type="number"
-                          min="0"
-                          class="w-full rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-xs tabular-nums text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
-                          value={upstream.idle_timeout_ms ?? ''}
-                          placeholder="default"
-                          on:input={(e) => updateUpstream(upstreamIndex, 'idle_timeout_ms', toNullableNumber(inputValue(e)))}
-                          disabled={isSaving}
-                        />
-                      </label>
-                    </div>
-                  {/if}
-                </div>
-              </div>
-            {/each}
-
-            {#if selectedService.upstreams.length === 0}
-              <div class="px-5 py-10 text-center">
-                <p class="text-sm text-slate-500">No upstreams configured</p>
-                <button
-                  class="mt-2 text-sm text-cyan-400 hover:text-cyan-300 disabled:opacity-50 disabled:cursor-not-allowed"
-                  on:click={handleAddUpstream}
-                  disabled={isSaving}
-                >
-                  + Add an upstream
-                </button>
-              </div>
-            {/if}
-          </div>
-        </section>
-      </div>
-    {:else}
-      <!-- ================================================================= -->
-      <!-- List View -->
-      <!-- ================================================================= -->
-      <div class="space-y-4">
-        <!-- Search Bar -->
-        <div class="flex items-center gap-4">
-          <div class="relative flex-1">
-            <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">
-              🔍
-            </span>
-            <input
-              type="text"
-              class="w-full rounded-lg border border-slate-700 bg-slate-950/70 py-2.5 pl-10 pr-4 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
-              placeholder="Search services by name or load balancing strategy..."
-              value={searchQuery}
-              on:input={handleSearch}
-            />
-          </div>
-          <div class="flex items-center gap-2 text-sm text-slate-400">
-            <span class="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 tabular-nums">
-              {filteredServices.length} / {services.length}
-            </span>
-          </div>
-        </div>
-
-        <!-- Services Table -->
-        <div class="overflow-hidden rounded-xl border border-slate-700 bg-slate-950/70">
-          {#if filteredServices.length === 0}
-            <div class="flex flex-col items-center justify-center px-6 py-20">
-              <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-700 bg-slate-800/60">
-                <span class="text-3xl text-slate-500">⚡</span>
-              </div>
-              {#if searchQuery}
-                <h3 class="text-base font-semibold text-slate-300">No matching services</h3>
-                <p class="mt-1 text-sm text-slate-500">
-                  No services match "{searchQuery}". Try a different search term or
-                  <button
-                    class="ml-1 text-cyan-400 hover:text-cyan-300"
-                    on:click={() => searchQuery = ''}
-                  >
-                    clear the search
-                  </button>
-                </p>
-              {:else}
-                <h3 class="text-base font-semibold text-slate-300">No services configured</h3>
-                <p class="mt-1 text-sm text-slate-500">
-                  Get started by adding your first service.
-                </p>
-                <button
-                  class="mt-4 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                  on:click={handleOpenCreateModal}
-                  disabled={isSaving}
-                >
-                  <span class="mr-1">+</span>
-                  Add Service
-                </button>
-              {/if}
-            </div>
-          {:else}
-            <div class="overflow-x-auto">
-              <table class="min-w-full divide-y divide-slate-800 text-sm">
-                <thead class="bg-slate-900 text-slate-300">
-                  <tr>
-                    <th class="px-4 py-3 text-left font-semibold">Name</th>
-                    <th class="px-4 py-3 text-left font-semibold">Load Balancing</th>
-                    <th class="px-4 py-3 text-left font-semibold">Upstreams</th>
-                    <th class="px-4 py-3 text-left font-semibold">Circuit Breaker</th>
-                    <th class="px-4 py-3 text-right font-semibold">Actions</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-800">
-                  {#each filteredServices as { service, index } (index)}
-                    <tr
-                      class={rowClass(index)}
-                      on:click={() => handleRowClick(index)}
-                    >
-                      <td class="px-4 py-3">
-                        <div class="flex items-center gap-2">
-                          <span class="font-medium text-slate-100">{service.name || 'Unnamed'}</span>
-                          {#if countRoutesForService(service.name) > 0}
-                            <span class="rounded-full border border-cyan-400/40 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-200">
-                              {countRoutesForService(service.name)} route(s)
-                            </span>
-                          {/if}
-                        </div>
-                      </td>
-                      <td class="px-4 py-3 text-slate-300">
-                        {formatLbStrategy(service.lb)}
-                      </td>
-                      <td class="px-4 py-3 text-slate-400">
-                        {service.upstreams.length}
-                      </td>
-                      <td class="px-4 py-3">
-                        <span class={cbBadgeClass(service.circuit_breaker.enabled)}>
-                          {service.circuit_breaker.enabled ? 'ON' : 'OFF'}
-                        </span>
-                      </td>
-                      <td class="px-4 py-3">
-                        <div class="flex items-center justify-end gap-1.5">
-                          <button
-                            class="rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            on:click|stopPropagation={() => handleViewService(index)}
-                            disabled={isSaving}
-                            title="View"
-                          >
-                            👁
-                          </button>
-                          <button
-                            class="rounded-md border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-xs text-cyan-300 transition-colors hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                            on:click|stopPropagation={() => handleEditService(index)}
-                            disabled={isSaving}
-                            title="Edit"
-                          >
-                            ✏
-                          </button>
-                          <button
-                            class="rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            on:click|stopPropagation={() => handleDuplicateService(index)}
-                            disabled={isSaving}
-                            title="Duplicate"
-                          >
-                            📋
-                          </button>
-                          <button
-                            class="rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-1 text-xs text-rose-300 transition-colors hover:bg-rose-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                            on:click|stopPropagation={() => handleDeleteFromList(index)}
-                            disabled={isSaving}
-                            title="Delete"
-                          >
-                            🗑
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-          {/if}
-        </div>
-
-        {#if services.length > 0 && filteredServices.length === 0 && searchQuery}
-          <div class="text-center text-sm text-slate-500">
-            <span class="text-slate-400">{services.length} services total</span>
-          </div>
-        {/if}
-      </div>
-    {/if}
+                    </Table.Cell>
+                    <Table.Cell class="text-right tabular-nums">
+                      {liveUpstream?.inflight ?? '—'}
+                    </Table.Cell>
+                    <Table.Cell class="text-right tabular-nums">
+                      {liveUpstream && liveUpstream.ewma_us > 0
+                        ? formatLatency(liveUpstream.ewma_us / 1000)
+                        : '—'}
+                    </Table.Cell>
+                  </Table.Row>
+                {/each}
+              </Table.Body>
+            </Table.Root>
+          </section>
+        {/each}
+      {/if}
+    </div>
   </div>
-</AppLayout>
+</div>
+
+<ServiceSheet
+  bind:open={sheetOpen}
+  service={sheetService}
+  mode={sheetMode}
+  {services}
+  {routes}
+  status={sheetService ? upstreamStatus(sheetService.name) : {}}
+  {saving}
+  {serverError}
+  onsave={save}
+  oncancel={closeSheet}
+  ondelete={(service) => askDelete(service.name)}
+/>
+
+<ConfirmDialog
+  bind:open={confirmOpen}
+  variant="destructive"
+  title={`Delete “${confirmTarget}”?`}
+  description="The upstreams behind it stop being probed, and the config loses how they were set up."
+  confirmLabel="Delete"
+  pending={saving}
+  onconfirm={confirmDelete}
+  oncancel={() => (confirmTarget = null)}
+/>
