@@ -71,6 +71,7 @@ impl RuntimeConfig {
             path_prefix: route.path_prefix.as_str(),
             methods: route.methods,
             is_default: route.is_default,
+            enabled: route.enabled,
         }));
 
         Self {
@@ -150,6 +151,9 @@ pub struct RouteRuntime {
     pub path_prefix: String,
     pub methods: crate::router::MethodMask,
     pub is_default: bool,
+    /// Mirrors the config flag. A disabled route is kept here so the admin API
+    /// can still list it; it is simply absent from the index.
+    pub enabled: bool,
     pub service_idx: usize,
     /// Global rules merged with the route's own, compiled once per reload.
     pub request_headers: CompiledHeaderRules,
@@ -254,6 +258,7 @@ impl RouteRuntime {
             path_prefix: config.path_prefix,
             methods: method_mask(&config.methods),
             is_default: config.is_default,
+            enabled: config.enabled,
             service_idx,
             request_headers,
             response_headers,
@@ -332,6 +337,30 @@ impl ServiceRuntime {
                 self.select_power_of_two(attempted, |upstream| upstream.inflight() as u64)
             }
             LbStrategy::P2cEwma => self.select_power_of_two(attempted, UpstreamRuntime::load_score),
+        }?;
+
+        self.upstreams
+            .get(chosen_idx)
+            .map(|upstream| (chosen_idx, upstream))
+    }
+
+    /// What `next_upstream` would return, without changing anything.
+    ///
+    /// The route tester has to answer "where would this request go?" without
+    /// nudging the live round-robin cursor, so this reads the cursor instead of
+    /// advancing it. Strategies that draw at random have no answer to give and
+    /// return `None`; the caller says so rather than inventing one.
+    pub fn peek_upstream(&self, hash_seed: u64) -> Option<(usize, &UpstreamRuntime)> {
+        if self.upstreams.is_empty() || self.ring.is_empty() {
+            return None;
+        }
+
+        let chosen_idx = match self.lb {
+            LbStrategy::RoundRobin => {
+                self.select_from_ring(self.rr_cursor.load(Ordering::Relaxed), &[])
+            }
+            LbStrategy::Hash => self.select_hash(hash_seed, &[]),
+            LbStrategy::Random | LbStrategy::LeastConn | LbStrategy::P2cEwma => None,
         }?;
 
         self.upstreams

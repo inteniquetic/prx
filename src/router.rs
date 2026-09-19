@@ -28,6 +28,8 @@
 //!    route, because that would silently route a method past the restriction
 //!    the operator asked for.
 //! 6. A route marked `is_default` is the fallback when nothing else matches.
+//! 7. A route with `enabled = false` is not in the index at all: it never
+//!    matches, and it cannot be the default route either.
 
 use rustc_hash::FxHashMap;
 
@@ -73,6 +75,16 @@ pub fn method_mask(methods: &[String]) -> MethodMask {
         .iter()
         .filter_map(|m| method_bit(m))
         .fold(METHOD_ANY, |acc, bit| acc | bit)
+}
+
+/// Method names for a mask, in the canonical order. Empty means "any method",
+/// which is how the config expresses it too.
+pub fn method_names(mask: MethodMask) -> Vec<String> {
+    METHODS
+        .iter()
+        .filter(|(_, bit)| mask & bit != 0)
+        .map(|(name, _)| (*name).to_string())
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -302,6 +314,9 @@ pub struct IndexedRoute<'a> {
     pub path_prefix: &'a str,
     pub methods: MethodMask,
     pub is_default: bool,
+    /// A disabled route keeps its place in the config (and its index) but is
+    /// left out of the index entirely.
+    pub enabled: bool,
 }
 
 impl RouteIndex {
@@ -317,6 +332,12 @@ impl RouteIndex {
         };
 
         for (route_idx, route) in routes.into_iter().enumerate() {
+            // Enumerate before skipping: a disabled route still owns its index
+            // in the config, and everything else addresses routes by it.
+            if !route.enabled {
+                continue;
+            }
+
             if route.is_default && index.default_route.is_none() {
                 index.default_route = Some(route_idx);
             }
@@ -414,6 +435,7 @@ mod tests {
             path_prefix: path,
             methods: METHOD_ANY,
             is_default: false,
+            enabled: true,
         }
     }
 
@@ -428,6 +450,7 @@ mod tests {
             path_prefix: path,
             methods: method_mask(&owned),
             is_default: false,
+            enabled: true,
         }
     }
 
@@ -437,7 +460,47 @@ mod tests {
             path_prefix: path,
             methods: METHOD_ANY,
             is_default: true,
+            enabled: true,
         }
+    }
+
+    fn disabled<'a>(host: Option<&'a str>, path: &'a str) -> IndexedRoute<'a> {
+        IndexedRoute {
+            enabled: false,
+            ..route(host, path)
+        }
+    }
+
+    #[test]
+    fn a_disabled_route_is_not_in_the_index() {
+        let index = RouteIndex::build(vec![
+            disabled(Some("api.example.com"), "/"),
+            route(None, "/"),
+        ]);
+        // Index 0 is parked, so the any-host route at index 1 takes it.
+        assert_eq!(matched(&index, "api.example.com", "/"), Some(1));
+    }
+
+    #[test]
+    fn a_disabled_route_keeps_the_index_of_the_ones_after_it() {
+        // Routes are addressed by their position in the config everywhere else,
+        // so skipping one must not renumber the rest.
+        let index = RouteIndex::build(vec![
+            disabled(Some("a.example.com"), "/"),
+            route(Some("b.example.com"), "/"),
+        ]);
+        assert_eq!(matched(&index, "b.example.com", "/"), Some(1));
+        assert_eq!(matched(&index, "a.example.com", "/"), None);
+    }
+
+    #[test]
+    fn a_disabled_default_route_is_not_the_fallback() {
+        let index = RouteIndex::build(vec![IndexedRoute {
+            enabled: false,
+            ..default_route("/")
+        }]);
+        assert_eq!(index.default_route(), None);
+        assert_eq!(matched(&index, "anything.test", "/whatever"), None);
     }
 
     fn matched(index: &RouteIndex, host: &str, path: &str) -> Option<usize> {

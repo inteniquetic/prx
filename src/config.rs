@@ -791,6 +791,10 @@ impl Default for RouteConfig {
             path_prefix: default_path_prefix(),
             methods: Vec::new(),
             is_default: false,
+            // Never derive Default for this struct: `#[serde(default = ...)]`
+            // only applies while parsing, so a derived one would build routes
+            // that are off.
+            enabled: true,
             request_headers: HeaderRules::default(),
             response_headers: HeaderRules::default(),
             rate_limit: RateLimitConfig::default(),
@@ -888,6 +892,11 @@ pub struct RouteConfig {
     pub methods: Vec<String>,
     #[serde(default)]
     pub is_default: bool,
+    /// A disabled route stays in the file but is left out of the route index,
+    /// so it never matches — the way to park a route without losing how it was
+    /// configured.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     #[serde(default)]
     pub request_headers: HeaderRules,
     #[serde(default)]

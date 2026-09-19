@@ -24,7 +24,11 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
 use crate::{
-    config::{LbStrategy, PrxConfig},
+    config::{
+        CacheConfig, ConcurrencyLimitConfig, HeaderRules, LbStrategy, PrxConfig, RateLimitConfig,
+        RouteConfig,
+    },
+    router::RouteMatch,
     runtime::RuntimeConfig,
 };
 
@@ -38,6 +42,7 @@ pub const ADMIN_SERVICES_PATH: &str = "/admin/services";
 pub const ADMIN_SERVICES_NAME_PATH: &str = "/admin/services/{name}";
 pub const ADMIN_ROUTES_PATH: &str = "/admin/routes";
 pub const ADMIN_ROUTES_NAME_PATH: &str = "/admin/routes/{name}";
+pub const ADMIN_ROUTE_TEST_PATH: &str = "/web/routes/test";
 const WEBUI_INDEX_PATH: &str = "index.html";
 static WEBUI_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/webui/dist");
 
@@ -305,6 +310,12 @@ struct AdminServicePayload {
     upstreams: Vec<AdminUpstreamPayload>,
 }
 
+/// A route exactly as the config holds it.
+///
+/// The advanced blocks travel with it because the UI is the only editor most
+/// people will use: a payload that leaves out header rules, limits or cache
+/// settings turns "edit this route" into "lose whatever the file said about
+/// them".
 #[derive(Debug, Serialize)]
 struct AdminRoutePayload {
     name: String,
@@ -313,6 +324,31 @@ struct AdminRoutePayload {
     path_prefix: String,
     methods: Vec<String>,
     is_default: bool,
+    enabled: bool,
+    request_headers: HeaderRules,
+    response_headers: HeaderRules,
+    rate_limit: RateLimitConfig,
+    concurrency_limit: ConcurrencyLimitConfig,
+    cache: CacheConfig,
+}
+
+impl AdminRoutePayload {
+    fn from_config(route: &RouteConfig) -> Self {
+        Self {
+            name: route.name.clone(),
+            service: route.service.clone(),
+            host: route.host.clone().unwrap_or_default(),
+            path_prefix: route.path_prefix.clone(),
+            methods: route.methods.clone(),
+            is_default: route.is_default,
+            enabled: route.enabled,
+            request_headers: route.request_headers.clone(),
+            response_headers: route.response_headers.clone(),
+            rate_limit: route.rate_limit.clone(),
+            concurrency_limit: route.concurrency_limit.clone(),
+            cache: route.cache.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -401,6 +437,102 @@ struct RouteRequestPayload {
     pub methods: Option<Vec<String>>,
     #[serde(default)]
     pub is_default: Option<bool>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    // Absent means "leave this as it is" on an update, and "take the default"
+    // on a create — so a client that does not know about a block cannot erase
+    // it.
+    #[serde(default)]
+    pub request_headers: Option<HeaderRules>,
+    #[serde(default)]
+    pub response_headers: Option<HeaderRules>,
+    #[serde(default)]
+    pub rate_limit: Option<RateLimitConfig>,
+    #[serde(default)]
+    pub concurrency_limit: Option<ConcurrencyLimitConfig>,
+    #[serde(default)]
+    pub cache: Option<CacheConfig>,
+}
+
+/// "If a request like this arrived, where would it go?"
+#[derive(Debug, Deserialize)]
+struct RouteTestRequest {
+    #[serde(default = "default_test_method")]
+    method: String,
+    #[serde(default)]
+    host: String,
+    #[serde(default = "default_test_path")]
+    path: String,
+}
+
+fn default_test_method() -> String {
+    "GET".to_string()
+}
+
+fn default_test_path() -> String {
+    "/".to_string()
+}
+
+#[derive(Debug, Serialize)]
+struct RouteTestResponse {
+    /// `matched`, `method_not_allowed` or `not_found`.
+    outcome: &'static str,
+    /// The request as the matcher saw it, after host normalization.
+    request: RouteTestEcho,
+    route: Option<RouteTestRoutePayload>,
+    service: Option<RouteTestServicePayload>,
+}
+
+#[derive(Debug, Serialize)]
+struct RouteTestEcho {
+    method: String,
+    host: String,
+    normalized_host: String,
+    path: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RouteTestRoutePayload {
+    index: usize,
+    name: String,
+    host: String,
+    path_prefix: String,
+    methods: Vec<String>,
+    is_default: bool,
+    enabled: bool,
+    /// Which tier of the matching rules this route won on: `exact_host`,
+    /// `wildcard_host`, `any_host`, or `default_route` when it only caught the
+    /// request as the fallback.
+    matched_by: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct RouteTestServicePayload {
+    name: String,
+    lb: String,
+    selection: RouteTestSelection,
+    upstreams: Vec<RouteTestUpstream>,
+}
+
+#[derive(Debug, Serialize)]
+struct RouteTestSelection {
+    /// False for the strategies that draw at random: there is no single
+    /// upstream to name, and pretending otherwise would be a guess.
+    deterministic: bool,
+    would_pick: Option<String>,
+    note: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RouteTestUpstream {
+    addr: String,
+    weight: u16,
+    /// Whether this upstream is in the running for the next request.
+    available: bool,
+    circuit_open: bool,
+    probe_healthy: bool,
+    inflight: usize,
+    ewma_us: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -510,14 +642,7 @@ impl From<PrxConfig> for AdminConfigPayload {
         let routes = config
             .routes
             .iter()
-            .map(|route| AdminRoutePayload {
-                name: route.name.clone(),
-                service: route.service.clone(),
-                host: route.host.clone().unwrap_or_default(),
-                path_prefix: route.path_prefix.clone(),
-                methods: route.methods.clone(),
-                is_default: route.is_default,
-            })
+            .map(AdminRoutePayload::from_config)
             .collect();
 
         Self {
@@ -880,6 +1005,182 @@ async fn post_route_health(
     let verdicts = probe_verdicts(&state.active_config);
     let payload = render_route_health_payload(config, timeout_ms, &verdicts).await;
     json_response(StatusCode::OK, &payload)
+}
+
+/// `POST /web/routes/test` — runs one imaginary request through the live route
+/// index.
+///
+/// It calls the same `select` the proxy calls, on the same snapshot, so the
+/// answer cannot drift from what traffic actually does; a tester that
+/// re-implements the rules is a tester that lies the day the rules change.
+async fn post_route_test(State(state): State<AdminState>, body: Body) -> Response<Body> {
+    let bytes = match body::to_bytes(body, MAX_ADMIN_CONFIG_BODY_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed_to_read_request_body: {err:#}\n"),
+            );
+        }
+    };
+
+    let request = if bytes.is_empty() {
+        RouteTestRequest {
+            method: default_test_method(),
+            host: String::new(),
+            path: default_test_path(),
+        }
+    } else {
+        match serde_json::from_slice::<RouteTestRequest>(&bytes) {
+            Ok(request) => request,
+            Err(err) => {
+                return text_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid_request_body: {err:#}\n"),
+                );
+            }
+        }
+    };
+
+    if !request.path.starts_with('/') {
+        return text_response(
+            StatusCode::BAD_REQUEST,
+            b"path_must_start_with_slash\n".to_vec(),
+        );
+    }
+
+    let snapshot = state.active_config.load();
+    json_response(StatusCode::OK, &run_route_test(&snapshot, &request))
+}
+
+fn run_route_test(config: &RuntimeConfig, request: &RouteTestRequest) -> RouteTestResponse {
+    let normalized_host = crate::runtime::normalize_host(&request.host).into_owned();
+    let outcome = config.select(&request.host, &request.path, Some(&request.method));
+
+    let echo = RouteTestEcho {
+        method: request.method.to_ascii_uppercase(),
+        host: request.host.clone(),
+        normalized_host: normalized_host.clone(),
+        path: request.path.clone(),
+    };
+
+    let idx = match outcome {
+        RouteMatch::Matched(idx) => idx,
+        RouteMatch::MethodNotAllowed => {
+            return RouteTestResponse {
+                outcome: "method_not_allowed",
+                request: echo,
+                route: None,
+                service: None,
+            };
+        }
+        RouteMatch::NotFound => {
+            return RouteTestResponse {
+                outcome: "not_found",
+                request: echo,
+                route: None,
+                service: None,
+            };
+        }
+    };
+
+    let Some(route) = config.route(idx) else {
+        return RouteTestResponse {
+            outcome: "not_found",
+            request: echo,
+            route: None,
+            service: None,
+        };
+    };
+
+    let matched_by = match_tier(route, &normalized_host, &request.path);
+    let route_payload = RouteTestRoutePayload {
+        index: idx,
+        name: route.name.to_string(),
+        host: route.host.clone().unwrap_or_default(),
+        path_prefix: route.path_prefix.clone(),
+        methods: crate::router::method_names(route.methods),
+        is_default: route.is_default,
+        enabled: route.enabled,
+        matched_by,
+    };
+
+    let service = config.service(route.service_idx).map(|service| {
+        // The same key the proxy would hash for a hash-balanced service.
+        let hash_seed = crate::runtime::hash_key(&[&normalized_host, &request.path]);
+        let picked = service.peek_upstream(hash_seed);
+        let deterministic = picked.is_some();
+
+        RouteTestServicePayload {
+            name: service.name.clone(),
+            lb: lb_to_string(service.lb.clone()).to_string(),
+            selection: RouteTestSelection {
+                deterministic,
+                would_pick: picked.map(|(_, upstream)| upstream.addr.clone()),
+                note: match &service.lb {
+                    LbStrategy::RoundRobin => {
+                        "Round robin: the next request takes the following upstream in the ring."
+                    }
+                    LbStrategy::Hash => {
+                        "Hashed on host and path, so the same request always lands on the same \
+                         upstream while the pool is unchanged."
+                    }
+                    LbStrategy::Random => "Random: any available upstream can take it.",
+                    LbStrategy::LeastConn => {
+                        "Least connections, sampled two at a time — the pick depends on live \
+                         in-flight counts."
+                    }
+                    LbStrategy::P2cEwma => {
+                        "Power of two choices on latency — the pick depends on live EWMA values."
+                    }
+                }
+                .to_string(),
+            },
+            upstreams: service
+                .upstreams
+                .iter()
+                .map(|upstream| RouteTestUpstream {
+                    addr: upstream.addr.clone(),
+                    weight: upstream.weight,
+                    available: !upstream.is_circuit_open() && upstream.is_probe_healthy(),
+                    circuit_open: upstream.is_circuit_open(),
+                    probe_healthy: upstream.is_probe_healthy(),
+                    inflight: upstream.inflight(),
+                    ewma_us: upstream.ewma_us(),
+                })
+                .collect(),
+        }
+    });
+
+    RouteTestResponse {
+        outcome: "matched",
+        request: echo,
+        route: Some(route_payload),
+        service,
+    }
+}
+
+/// Which rule won. A route that covers neither the host nor the path only
+/// caught the request because it is the default.
+fn match_tier(
+    route: &crate::runtime::RouteRuntime,
+    normalized_host: &str,
+    path: &str,
+) -> &'static str {
+    let host_tier = match route.host.as_deref() {
+        None | Some("") => Some("any_host"),
+        Some(pattern) => match pattern.strip_prefix("*.") {
+            Some(suffix) => (normalized_host == suffix
+                || normalized_host.ends_with(&format!(".{suffix}")))
+            .then_some("wildcard_host"),
+            None => (normalized_host == pattern).then_some("exact_host"),
+        },
+    };
+
+    match host_tier {
+        Some(tier) if path.starts_with(&route.path_prefix) => tier,
+        _ => "default_route",
+    }
 }
 
 fn lb_to_string(lb: LbStrategy) -> &'static str {
@@ -1525,14 +1826,7 @@ async fn list_routes(State(state): State<AdminState>) -> Response<Body> {
             let routes: Vec<AdminRoutePayload> = config
                 .routes
                 .iter()
-                .map(|r| AdminRoutePayload {
-                    name: r.name.clone(),
-                    service: r.service.clone(),
-                    host: r.host.clone().unwrap_or_default(),
-                    path_prefix: r.path_prefix.clone(),
-                    methods: r.methods.clone(),
-                    is_default: r.is_default,
-                })
+                .map(AdminRoutePayload::from_config)
                 .collect();
             json_response(StatusCode::OK, &routes)
         }
@@ -1550,15 +1844,7 @@ async fn get_route(
     match state.config_admin.read_parsed_config() {
         Ok(config) => {
             if let Some(route) = config.routes.iter().find(|r| r.name == name) {
-                let route_payload = AdminRoutePayload {
-                    name: route.name.clone(),
-                    service: route.service.clone(),
-                    host: route.host.clone().unwrap_or_default(),
-                    path_prefix: route.path_prefix.clone(),
-                    methods: route.methods.clone(),
-                    is_default: route.is_default,
-                };
-                json_response(StatusCode::OK, &route_payload)
+                json_response(StatusCode::OK, &AdminRoutePayload::from_config(route))
             } else {
                 text_response(StatusCode::NOT_FOUND, b"route_not_found\n".to_vec())
             }
@@ -1641,6 +1927,7 @@ async fn create_route(State(state): State<AdminState>, body: Body) -> Response<B
                 return Err(anyhow::anyhow!("only one route can be marked as default"));
             }
 
+            let defaults = crate::config::RouteConfig::default();
             let route = crate::config::RouteConfig {
                 name: payload.name.clone(),
                 service: payload.service.clone(),
@@ -1648,9 +1935,16 @@ async fn create_route(State(state): State<AdminState>, body: Body) -> Response<B
                 path_prefix: payload.path_prefix.unwrap_or_else(|| "/".to_string()),
                 methods: payload.methods.unwrap_or_default(),
                 is_default: payload.is_default.unwrap_or(false),
-                // Not exposed by the admin API yet; edit Prx.toml for these
-                // until the schema-generated payloads of T205 land.
-                ..Default::default()
+                enabled: payload.enabled.unwrap_or(true),
+                request_headers: payload.request_headers.unwrap_or(defaults.request_headers),
+                response_headers: payload
+                    .response_headers
+                    .unwrap_or(defaults.response_headers),
+                rate_limit: payload.rate_limit.unwrap_or(defaults.rate_limit),
+                concurrency_limit: payload
+                    .concurrency_limit
+                    .unwrap_or(defaults.concurrency_limit),
+                cache: payload.cache.unwrap_or(defaults.cache),
             };
 
             config.routes.push(route);
@@ -1764,13 +2058,25 @@ async fn update_route(
                 is_default: payload
                     .is_default
                     .unwrap_or(config.routes[index].is_default),
-                // Preserved: the admin API cannot express these yet, and an
-                // update through the UI must not silently drop them.
-                request_headers: config.routes[index].request_headers.clone(),
-                response_headers: config.routes[index].response_headers.clone(),
-                rate_limit: config.routes[index].rate_limit.clone(),
-                concurrency_limit: config.routes[index].concurrency_limit.clone(),
-                cache: config.routes[index].cache.clone(),
+                enabled: payload.enabled.unwrap_or(config.routes[index].enabled),
+                // A block the request does not mention keeps whatever the file
+                // said, so an older client cannot wipe settings it has no field
+                // for.
+                request_headers: payload
+                    .request_headers
+                    .unwrap_or_else(|| config.routes[index].request_headers.clone()),
+                response_headers: payload
+                    .response_headers
+                    .unwrap_or_else(|| config.routes[index].response_headers.clone()),
+                rate_limit: payload
+                    .rate_limit
+                    .unwrap_or_else(|| config.routes[index].rate_limit.clone()),
+                concurrency_limit: payload
+                    .concurrency_limit
+                    .unwrap_or_else(|| config.routes[index].concurrency_limit.clone()),
+                cache: payload
+                    .cache
+                    .unwrap_or_else(|| config.routes[index].cache.clone()),
             };
 
             config.routes[index] = route;
@@ -1825,6 +2131,7 @@ fn build_router(state: AdminState) -> Router {
             ADMIN_ROUTE_HEALTH_PATH,
             get(get_route_health).post(post_route_health),
         )
+        .route(ADMIN_ROUTE_TEST_PATH, axum::routing::post(post_route_test))
         .route(ADMIN_CACHE_PATH, get(get_cache_status).delete(purge_cache))
         .route(ADMIN_TLS_STATUS_PATH, get(get_tls_status))
         // Service CRUD endpoints
@@ -1952,6 +2259,194 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::runtime::RuntimeConfig;
+
+    /// A config with one route per matching tier, so the tester can be checked
+    /// against the matcher on every rule rather than only the easy one.
+    const TEST_ROUTES: &str = r#"
+[server]
+listen = ["127.0.0.1:18080"]
+health_path = "/healthz"
+ready_path = "/readyz"
+
+[[service]]
+name = "api"
+lb = "round_robin"
+
+[[service.upstream]]
+addr = "127.0.0.1:19001"
+
+[[service.upstream]]
+addr = "127.0.0.1:19002"
+
+[[route]]
+name = "exact-deep"
+service = "api"
+host = "api.example.com"
+path_prefix = "/v1/users"
+
+[[route]]
+name = "exact-shallow"
+service = "api"
+host = "api.example.com"
+path_prefix = "/"
+
+[[route]]
+name = "wildcard"
+service = "api"
+host = "*.example.com"
+path_prefix = "/"
+
+[[route]]
+name = "any-host"
+service = "api"
+path_prefix = "/internal"
+
+[[route]]
+name = "get-only"
+service = "api"
+host = "methods.example.com"
+path_prefix = "/"
+methods = ["GET"]
+
+[[route]]
+name = "parked"
+service = "api"
+host = "parked.example.com"
+path_prefix = "/"
+enabled = false
+
+[[route]]
+name = "fallback"
+service = "api"
+path_prefix = "/nothing-matches-this"
+is_default = true
+"#;
+
+    fn test_runtime() -> RuntimeConfig {
+        let config = PrxConfig::from_toml_str(TEST_ROUTES).expect("test config parses");
+        config.validate().expect("test config is valid");
+        RuntimeConfig::from_config(config)
+    }
+
+    fn test_request(method: &str, host: &str, path: &str) -> RouteTestRequest {
+        RouteTestRequest {
+            method: method.to_string(),
+            host: host.to_string(),
+            path: path.to_string(),
+        }
+    }
+
+    #[test]
+    fn route_tester_agrees_with_the_matcher() {
+        // The point of the endpoint is that it cannot disagree with production
+        // traffic, so the test asserts exactly that rather than re-deriving the
+        // expected route by hand.
+        let runtime = test_runtime();
+        let cases = [
+            ("GET", "api.example.com", "/v1/users/42"),
+            ("GET", "api.example.com", "/something-else"),
+            ("POST", "shop.example.com", "/cart"),
+            ("GET", "example.com", "/"),
+            ("GET", "other.test", "/internal/metrics"),
+            ("GET", "other.test", "/elsewhere"),
+            ("POST", "methods.example.com", "/"),
+            ("GET", "methods.example.com", "/"),
+            ("GET", "parked.example.com", "/"),
+            ("GET", "api.example.com:8443", "/v1/users"),
+        ];
+
+        for (method, host, path) in cases {
+            let response = run_route_test(&runtime, &test_request(method, host, path));
+            match runtime.select(host, path, Some(method)) {
+                RouteMatch::Matched(idx) => {
+                    assert_eq!(response.outcome, "matched", "{method} {host}{path}");
+                    assert_eq!(
+                        response.route.expect("a matched route is reported").index,
+                        idx,
+                        "{method} {host}{path}"
+                    );
+                }
+                RouteMatch::MethodNotAllowed => {
+                    assert_eq!(
+                        response.outcome, "method_not_allowed",
+                        "{method} {host}{path}"
+                    );
+                    assert!(response.route.is_none());
+                }
+                RouteMatch::NotFound => {
+                    assert_eq!(response.outcome, "not_found", "{method} {host}{path}");
+                    assert!(response.route.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn route_tester_names_the_rule_that_won() {
+        let runtime = test_runtime();
+        let tier = |method: &str, host: &str, path: &str| {
+            run_route_test(&runtime, &test_request(method, host, path))
+                .route
+                .expect("matched")
+                .matched_by
+        };
+
+        assert_eq!(tier("GET", "api.example.com", "/v1/users/42"), "exact_host");
+        assert_eq!(tier("GET", "shop.example.com", "/cart"), "wildcard_host");
+        assert_eq!(tier("GET", "other.test", "/internal/metrics"), "any_host");
+        // Nothing covers this host or path: only the default route caught it.
+        assert_eq!(tier("GET", "other.test", "/elsewhere"), "default_route");
+    }
+
+    #[test]
+    fn route_tester_reports_the_route_a_request_would_reach() {
+        let runtime = test_runtime();
+        let route = |method: &str, host: &str, path: &str| {
+            run_route_test(&runtime, &test_request(method, host, path))
+                .route
+                .expect("matched")
+                .name
+        };
+
+        // Longest path prefix wins inside one host...
+        assert_eq!(
+            route("GET", "api.example.com", "/v1/users/42"),
+            "exact-deep"
+        );
+        assert_eq!(route("GET", "api.example.com", "/v1"), "exact-shallow");
+        // ...and an exact host beats the wildcard that also covers it.
+        assert_eq!(route("GET", "api.example.com", "/"), "exact-shallow");
+        assert_eq!(route("GET", "shop.example.com", "/"), "wildcard");
+    }
+
+    #[test]
+    fn a_disabled_route_never_matches() {
+        let runtime = test_runtime();
+        let response = run_route_test(&runtime, &test_request("GET", "parked.example.com", "/"));
+        // The parked route is out of the index entirely, so the next rule that
+        // covers the host takes the request — here the `*.example.com` route.
+        assert_eq!(response.outcome, "matched");
+        assert_eq!(response.route.expect("matched").name, "wildcard");
+    }
+
+    #[test]
+    fn the_tester_does_not_disturb_the_load_balancer() {
+        // Answering "where would this go?" must not consume a round-robin slot;
+        // otherwise looking at the UI would skew live traffic.
+        let runtime = test_runtime();
+        let first = run_route_test(&runtime, &test_request("GET", "api.example.com", "/"))
+            .service
+            .expect("service")
+            .selection
+            .would_pick;
+        let second = run_route_test(&runtime, &test_request("GET", "api.example.com", "/"))
+            .service
+            .expect("service")
+            .selection
+            .would_pick;
+        assert_eq!(first, second);
+        assert!(first.is_some(), "round robin has a next upstream to name");
+    }
 
     #[test]
     fn webui_serves_embedded_assets() {
