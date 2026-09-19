@@ -132,8 +132,9 @@ p99 ดีกว่า ≥ 20% ตอน connection reuse สูง, peak RSS �
 
 - `vendor/pingora-core` คอมไพล์ไม่ผ่านกับ libc ที่ lock ไว้ (`initgroups` รับ `gid_t` บน Linux
   แต่โค้ดส่ง `c_int`) — แก้แล้ว ไม่งั้นวัดอะไรไม่ได้เลย
+  (ภายหลัง T005 อัปเป็น pingora 0.9 ซึ่ง upstream แก้เรื่องนี้แล้ว จึงลบ `vendor/` ทิ้งทั้งหมด)
 - `cargo audit` แดงอยู่ก่อนแล้ว: `pingora-cache` 0.7.0 (cache poisoning, 8.4 high) และ `h2` 0.4.13
-  → ดู [T005](tasks/T005-dependency-security-upgrade.md)
+  → แก้แล้วใน [T005](tasks/T005-dependency-security-upgrade.md)
 - `metrics::observe_request` ถูกเรียกอยู่ใต้ `if !self.access_log { return; }` ใน `logging()`
   แปลว่า **ปิด access log แล้ว metrics ของ request หายไปด้วย** → บันทึกไว้ที่ [T401](tasks/T401-metrics-expansion.md)
 

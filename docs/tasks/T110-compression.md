@@ -23,7 +23,7 @@ min_body_bytes = 1024
 content_types = ["text/*", "application/json", "application/javascript", "image/svg+xml"]
 ```
 
-2. ใช้ compression ของ Pingora ถ้ามี (ตรวจ `vendor/pingora-core` ก่อนเขียนเอง)
+2. ใช้ compression ของ Pingora ถ้ามี (ตรวจ source ของ `pingora-core` ก่อนเขียนเอง)
 3. ห้าม re-compress ถ้า upstream ส่งมา compressed แล้ว; ห้าม compress ถ้า `Content-Type` ไม่อยู่ใน allowlist
 4. ต้องทำงานร่วมกับ T109 ให้ถูก: cache key ต้อง vary ตาม encoding (เก็บ variant แยก หรือ cache ต้นฉบับแล้วบีบตอนตอบ — เลือกอย่างใดอย่างหนึ่งแล้วเขียนเหตุผลไว้)
 5. Metrics: `prx_compression_total{algo}`, `prx_compression_bytes_saved_total`, และ CPU time ที่ใช้
@@ -41,7 +41,7 @@ content_types = ["text/*", "application/json", "application/javascript", "image/
 
 ## ผลลัพธ์ที่ส่งมอบ
 
-**ใช้ของ pingora ไม่เขียนเอง** — ตรวจตามที่ task กำหนดแล้วพบว่า `vendor/pingora-core` มี
+**ใช้ของ pingora ไม่เขียนเอง** — ตรวจตามที่ task กำหนดแล้วพบว่า `pingora-core` มี
 `ResponseCompressionBuilder` ที่บีบแบบ streaming พร้อม gzip/brotli/zstd (เป็น dependency ตรง ไม่ต้องเปิด feature)
 การเขียน compressor เองจะได้ของที่แย่กว่า: ถ้า buffer ทั้ง body ก่อนบีบ response ใหญ่ๆ จะเสีย streaming ไป
 

@@ -140,7 +140,10 @@ scripts/release-gate.sh
 ```
 
 Security hardening note:
-`Cargo.toml` patches `pingora-core` and `pingora-load-balancing` to local vendored copies under `vendor/` so `cargo audit` can run with zero exceptions.
+prx builds against the published pingora 0.9 crates — there is no `vendor/`
+fork and no `[patch.crates-io]` section. `cargo audit` runs with no ignore
+flags and exits 0; the warning-class advisories that remain are listed with
+reasons in `ops/ZERO-EXCEPTION-POLICY.md`.
 
 Operational references:
 
