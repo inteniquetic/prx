@@ -1,4 +1,5 @@
 import { normalizePrxConfig } from '../configNormalize';
+import { reportFailure, reportSuccess } from '../stores/connection';
 import type { PrxConfig, ServiceConfig, RouteConfig } from '../types/config';
 
 const ADMIN_CONFIG_ENDPOINT = '/web/config';
@@ -16,10 +17,17 @@ const fetchWithTimeout = async (
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(input, {
+    const response = await fetch(input, {
       ...init,
       signal: controller.signal
     });
+    // Reachability, not correctness: a 500 still proves the admin API is there,
+    // and the caller is the one that decides what the status code means.
+    reportSuccess();
+    return response;
+  } catch (error) {
+    reportFailure(error);
+    throw error;
   } finally {
     window.clearTimeout(timeoutId);
   }

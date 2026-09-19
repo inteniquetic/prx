@@ -13,9 +13,12 @@ npm run dev
 ## Build
 
 ```bash
-npm run build        # vite build + ตรวจ bundle budget
-npm run check        # svelte-check + ตรวจ contrast ของ token
-npm run styleguide   # เปิดหน้ารวม component ทั้งหมด (dev เท่านั้น)
+npm run build          # vite build + ตรวจ bundle budget
+npm run check          # svelte-check + ตรวจ contrast ของ token
+npm run styleguide     # เปิดหน้ารวม component ทั้งหมด (dev เท่านั้น)
+npm run shell:check    # ขับ app shell ใน Chromium: deep link / keyboard / 375px / palette
+npm run styleguide:check  # วัด contrast จากหน้าที่ render จริง
+npm run smoke          # ขับ UI ที่ฝังใน binary จริง (ต้องมี prx รันอยู่)
 ```
 
 ## Features
@@ -28,6 +31,62 @@ npm run styleguide   # เปิดหน้ารวม component ทั้ง�
 - บันทึก config กลับผ่าน Admin API (`PUT /web/config`)
 - Export / Import เป็น JSON
 - แสดงผล TOML preview พร้อม copy ได้ทันที
+
+---
+
+# App shell
+
+## Routing
+
+ใช้ URL จริง (History API) ไม่ใช่ hash — `/routes/api-v1` refresh แล้วยังอยู่ที่เดิม
+และแปะลิงก์ส่งให้คนอื่นได้ ตัว router อยู่ใน `src/lib/stores/navigation.ts`
+
+| path | หน้า |
+| ---- | ---- |
+| `/` | Dashboard |
+| `/routes` · `/routes/:name` | Routes (list / detail) |
+| `/services` · `/services/:name` | Services (list / detail) |
+| `/tls` | TLS — placeholder จนถึง T308 |
+| `/settings` | Settings |
+| `/audit` | Audit — placeholder จนถึง T206 |
+
+ฝั่ง server: `handle_webui_get` ใน `src/admin.rs` คืน `index.html` ให้ทุก path
+ที่ไม่ได้อยู่ในโฟลเดอร์ asset ที่ฝังมา (`assets/`, `fonts/`) ส่วน asset ที่หาไม่เจอ
+ยังคืน 404 ตามเดิม — ตอบ HTML ให้ `.js` ที่หายไปจะกลายเป็น syntax error ที่ debug ยากกว่าเดิม
+(เงื่อนไขเดิมคือ "path ไม่มีจุด" ซึ่งทำให้ route ที่ตั้งชื่อตามโดเมน เช่น `api.example.com` โดน 404)
+
+**กติกาของ detail page:** URL เป็นเจ้าของ selection หน้าเพจไม่ set เอง
+เวลาเปิด route หน้าเพจ `dispatch('select', name)` → shell เปลี่ยน URL → prop กลับเข้าหน้าเพจ
+ทิศทางเดียวแบบนี้ทำให้ deep link ไม่ถูก render แรก (ที่ config ยังไม่มา) เขียนทับ
+ส่วนชื่อที่ไม่มีใน config จะเด้งกลับ list พร้อม toast บอกเหตุผล ไม่ปล่อยให้ URL โกหก
+
+## ส่วนประกอบ
+
+- **Sidebar** (`layout/Sidebar.svelte`) — เมนูแบ่งเป็น 3 กลุ่ม, badge จำนวน route ที่ไม่ healthy
+  และ upstream ที่ down, ยุบเหลือไอคอนได้ (จำใน localStorage `prx-sidebar-collapsed`,
+  ตอนยุบใช้ tooltip เป็น label) และต่ำกว่า `md` จะหายไปกลายเป็น drawer (`Sheet`)
+- **Topbar** (`layout/Topbar.svelte`) — breadcrumb, ปุ่มเปิด palette, ป้าย "draft ยังไม่ apply",
+  สถานะการต่อ admin API, เมนู theme (radio 3 ตัวเลือก), เมนู account
+- **Command palette** (`layout/CommandPalette.svelte`) — `Cmd/Ctrl + K`
+  ค้น route จากชื่อ/host/path/service, ค้น service จากชื่อ/address ของ upstream,
+  กระโดดไปหน้า และ action ด่วน (เพิ่ม route, เช็ค health, apply/review draft)
+  กรองเองไม่ใช้ตัวกรองของ bits-ui เพราะต้อง match host ด้วยและต้องตัดผลลัพธ์ที่แสดง
+  ให้เหลือกลุ่มละ 7 แถว — config 500 route จึงเปิดได้ใน ~46ms (budget 100ms)
+- **สถานะการเชื่อมต่อ** (`stores/connection.ts`) — ทุก request ผ่าน `$lib/api/admin`
+  รายงานผลเข้า store นี้ และมี heartbeat ถาม admin API ทุก 15 วินาที
+  (backoff ถึง 60 วินาทีเมื่อล่ม, หยุดเมื่อ tab ไม่ได้อยู่หน้าจอ)
+  พลาด 3 ครั้งติดถึงจะเรียกว่า offline — ครั้งเดียวอาจเป็นแค่ deploy
+
+## คีย์บอร์ด
+
+| คีย์ | ทำอะไร |
+| ---- | ------ |
+| `Tab` แรกสุด | Skip to content — ข้าม sidebar ทั้งแถบในคีย์เดียว |
+| `Cmd/Ctrl + K` | เปิด/ปิด command palette |
+| `Enter` บนเมนู/แถวตาราง | เปิดหน้า / เปิด route |
+| `Esc` | ปิด dialog, drawer, palette |
+
+`npm run shell:check` ยืนยันว่าเดินจากหน้าเปล่าไปถึงพิมพ์แก้ route ได้ด้วยคีย์บอร์ดล้วน
 
 ---
 

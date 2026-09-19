@@ -21,6 +21,8 @@
   // ---------------------------------------------------------------------------
 
   export let config: PrxConfig;
+  /** Which service the URL is pointing at — `/services/:name`. */
+  export let selectedServiceName: string | null = null;
 
   // ---------------------------------------------------------------------------
   // Events
@@ -28,6 +30,8 @@
 
   const dispatch = createEventDispatcher<{
     navigate: NavPage;
+    /** The service now on screen, so the shell can put it in the address bar. */
+    select: string | null;
   }>();
 
   // ---------------------------------------------------------------------------
@@ -76,6 +80,27 @@
   // ---------------------------------------------------------------------------
   // View State
   // ---------------------------------------------------------------------------
+
+  // Same deal as Routes: the URL owns the selection, the page reports changes.
+  $: {
+    const found = selectedServiceName
+      ? services.findIndex((entry) => entry.name === selectedServiceName)
+      : -1;
+    const next = found >= 0 ? found : null;
+    if (next !== selectedServiceIndex) {
+      selectedServiceIndex = next;
+    }
+  }
+
+  // The page asks for a selection instead of assigning one, so the URL stays
+  // the single source of truth even before the config has loaded.
+  const selectService = (index: number | null) => {
+    dispatch('select', index === null ? null : services[index]?.name ?? null);
+  };
+
+  const selectServiceByName = (name: string | null) => {
+    dispatch('select', name);
+  };
 
   $: isDetailView = selectedServiceIndex !== null;
   $: selectedService = selectedServiceIndex !== null
@@ -177,10 +202,13 @@
       configStore.set(newConfig);
       config = newConfig;
 
-      // Re-select the service if we were in detail view
+      // Re-select the service if we were in detail view; the name survives a
+      // reorder, the index does not.
       if (selectedService !== null) {
-        const newIndex = newConfig.services.findIndex((s: ServiceConfig) => s.name === selectedService.name);
-        selectedServiceIndex = newIndex >= 0 ? newIndex : null;
+        const stillThere = newConfig.services.some(
+          (s: ServiceConfig) => s.name === selectedService.name
+        );
+        selectServiceByName(stillThere ? selectedService.name : null);
       }
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Failed to refresh config');
@@ -283,10 +311,9 @@
       await createService(serviceData);
       showCreateModal = false;
       await refreshConfig();
-      // Select the newly created service
-      const newIndex = config.services.findIndex(s => s.name === serviceData.name);
-      if (newIndex >= 0) {
-        selectedServiceIndex = newIndex;
+      // Open the service that was just created.
+      if (config.services.some((s) => s.name === serviceData.name)) {
+        selectServiceByName(serviceData.name);
       }
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Failed to create service');
@@ -318,7 +345,7 @@
       isSaving = true;
       clearError();
       await deleteService(serviceName);
-      selectedServiceIndex = null;
+      selectService(null);
       showDeleteConfirm = false;
       await refreshConfig();
     } catch (err) {
@@ -355,15 +382,15 @@
   };
 
   const handleRowClick = (index: number) => {
-    selectedServiceIndex = index;
+    selectService(index);
   };
 
   const handleViewService = (index: number) => {
-    selectedServiceIndex = index;
+    selectService(index);
   };
 
   const handleEditService = (index: number) => {
-    selectedServiceIndex = index;
+    selectService(index);
   };
 
   const handleDeleteFromList = (index: number) => {
@@ -377,9 +404,7 @@
     }
     handleDeleteService(serviceName);
     if (selectedServiceIndex === index) {
-      selectedServiceIndex = null;
-    } else if (selectedServiceIndex !== null && selectedServiceIndex > index) {
-      selectedServiceIndex = selectedServiceIndex - 1;
+      selectService(null);
     }
   };
 
@@ -395,7 +420,7 @@
 
   const handleCloseDetail = () => {
     if (!isSaving) {
-      selectedServiceIndex = null;
+      selectService(null);
       showDeleteConfirm = false;
     }
   };

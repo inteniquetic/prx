@@ -1,13 +1,18 @@
 // Loads the built UI out of a running prx and drives it like a person would.
 //
 // `npm run build` and `npm run check` both pass on code that throws the moment
-// it mounts — the Svelte 4 -> 5 migration is exactly that kind of change — so
+// it mounts — the Svelte 4 -> 5 migration was exactly that kind of change — so
 // this walks the real pages in a real browser and fails on any console error.
+// It runs against the binary, which is the only place the UI is actually
+// served the way a user gets it: embedded assets, SPA fallback and all.
 //
 // Usage: npm run smoke -- [base-url]     (default http://127.0.0.1:9090)
 import { chromium } from 'playwright';
 
-const base = process.argv[2] ?? process.env.PRX_ADMIN_URL ?? 'http://127.0.0.1:9090';
+const base = (process.argv[2] ?? process.env.PRX_ADMIN_URL ?? 'http://127.0.0.1:9090').replace(
+  /\/$/,
+  ''
+);
 
 // The container ships Chromium at a fixed path and blocks `playwright install`,
 // so point at it directly rather than letting Playwright resolve a download.
@@ -15,7 +20,7 @@ const executablePath =
   process.env.PLAYWRIGHT_CHROMIUM ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
 
 const browser = await chromium.launch({ executablePath });
-const page = await browser.newPage();
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 
 const problems = [];
 const external = [];
@@ -29,49 +34,84 @@ page.on('request', (req) => {
   if (!['127.0.0.1', 'localhost'].includes(hostname)) external.push(req.url());
 });
 
-const navButton = (label) =>
-  page.locator('nav button, aside button').filter({ hasText: label }).first();
+// By href, not by name: a menu entry grows a status badge ("Routes 2") the
+// moment an upstream goes down, and the test should not care.
+const navLink = (path) => page.locator(`nav a[href="${path}"]`).first();
+const path = () => new URL(page.url()).pathname;
 
 try {
   await page.goto(base, { waitUntil: 'networkidle' });
 
-  for (const label of ['Services', 'Routes', 'Settings', 'Dashboard']) {
-    await navButton(label).click();
+  // The shell navigates with real URLs now, so every page is checked for both
+  // what it renders and what it leaves in the address bar.
+  for (const [label, expected] of [
+    ['Services', '/services'],
+    ['Routes', '/routes'],
+    ['Settings', '/settings'],
+    ['Dashboard', '/']
+  ]) {
+    await navLink(expected).click();
     await page.waitForTimeout(400);
     const heading = (await page.locator('h1, h2').first().innerText()).trim();
     if (heading !== label) problems.push(`${label} page showed heading "${heading}"`);
+    if (path() !== expected) problems.push(`${label} left the URL at "${path()}"`);
+  }
+
+  // A deep link has to survive the round trip through the server: this is the
+  // SPA fallback in src/admin.rs doing its job, which only the binary exercises.
+  await navLink('/routes').click();
+  await page.waitForTimeout(400);
+  await page.locator('tbody tr').first().click();
+  await page.waitForTimeout(400);
+  const deepLink = page.url();
+  if (!path().startsWith('/routes/')) {
+    problems.push(`opening a route left the URL at "${path()}"`);
+  } else {
+    await page.goto(deepLink, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(400);
+    if (page.url() !== deepLink) problems.push(`reloading ${deepLink} redirected to ${page.url()}`);
+    if ((await page.getByRole('button', { name: 'Back to Routes' }).count()) !== 1) {
+      problems.push(`reloading ${deepLink} did not reopen the route`);
+    }
   }
 
   // Opening and dismissing a modal covers the event plumbing (dispatch,
   // window keydown, the backdrop button) that a render-only check misses.
-  await navButton('Services').click();
+  await navLink('/services').click();
   await page.waitForTimeout(300);
   await page.locator('button').filter({ hasText: /Add Service/i }).first().click();
   await page.waitForTimeout(400);
   if ((await page.locator('[role="dialog"]').count()) !== 1) problems.push('modal did not open');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
-  if ((await page.locator('[role="dialog"]').count()) !== 0) problems.push('Escape did not close the modal');
+  if ((await page.locator('[role="dialog"]').count()) !== 0)
+    problems.push('Escape did not close the modal');
 
-  // Theme: the button cycles light -> dark -> system and the choice has to
-  // survive a reload without the page flashing the wrong one first.
-  const themeButton = page.locator('nav button, aside button').filter({ hasText: /Light|Dark|System/ }).first();
-  const seen = [];
-  for (let i = 0; i < 3; i += 1) {
-    await themeButton.click();
-    await page.waitForTimeout(200);
-    seen.push({
-      // The button renders an icon above the word, so match on the word only.
-      label: (await themeButton.innerText()).trim().split('\n').pop().trim(),
-      dark: await page.evaluate(() => document.documentElement.classList.contains('dark'))
-    });
+  // The command palette is the other keyboard surface, and it is portalled and
+  // filtered at runtime — plenty of room for a mount-time throw to hide.
+  await page.keyboard.press('Control+k');
+  await page.waitForTimeout(400);
+  if ((await page.locator('[data-slot="command-item"]').count()) === 0) {
+    problems.push('the command palette opened empty');
   }
-  const labels = seen.map((s) => s.label);
-  if (new Set(labels).size !== 3) problems.push(`theme button did not cycle: ${labels.join(' -> ')}`);
-  const lightState = seen.find((s) => s.label === 'Light');
-  const darkState = seen.find((s) => s.label === 'Dark');
-  if (lightState?.dark !== false) problems.push('Light did not remove the dark class');
-  if (darkState?.dark !== true) problems.push('Dark did not add the dark class');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+
+  // Theme: the menu sets it and the choice has to survive a reload without the
+  // page flashing the wrong one first.
+  for (const [choice, wantsDark] of [
+    ['Light', false],
+    ['Dark', true]
+  ]) {
+    await page.getByRole('button', { name: /^Theme:/ }).click();
+    await page.waitForTimeout(250);
+    await page.getByRole('menuitemradio', { name: choice }).click();
+    await page.waitForTimeout(250);
+    const isDark = await page.evaluate(() =>
+      document.documentElement.classList.contains('dark')
+    );
+    if (isDark !== wantsDark) problems.push(`${choice} did not apply the right class`);
+  }
 
   const stored = await page.evaluate(() => localStorage.getItem('prx-theme'));
   await page.reload({ waitUntil: 'networkidle' });
@@ -105,6 +145,7 @@ if (problems.length) {
   process.exit(1);
 }
 console.log(
-  `smoke passed against ${base}: 4 pages, modal open/close, theme cycle + persistence, ` +
-    'self-hosted fonts, no console errors, no external requests'
+  `smoke passed against ${base}: 4 pages with real URLs, a deep link through the server, ` +
+    'modal open/close, command palette, theme menu + persistence, self-hosted fonts, ' +
+    'no console errors, no external requests'
 );

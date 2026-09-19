@@ -998,12 +998,27 @@ fn handle_webui_get(path: &str) -> Response<Body> {
         return static_response(normalized, file.contents().to_vec());
     }
 
-    // SPA fallback for client-side routes.
-    if !normalized.contains('.') {
-        return fallback_index();
+    // A miss inside one of the bundled asset directories is a real 404: handing
+    // back HTML for a missing script only turns it into a syntax error further
+    // down the line. Everything else belongs to the client-side router, so it
+    // gets index.html — including a path like /routes/api.example.com, which a
+    // "does it contain a dot" test would have mistaken for a file request.
+    if first_segment(normalized).is_some_and(is_asset_dir) {
+        return text_response(StatusCode::NOT_FOUND, b"not_found\n".to_vec());
     }
 
-    text_response(StatusCode::NOT_FOUND, b"not_found\n".to_vec())
+    fallback_index()
+}
+
+fn first_segment(path: &str) -> Option<&str> {
+    path.split('/').next().filter(|segment| !segment.is_empty())
+}
+
+/// True for a top-level directory that exists in the embedded UI build.
+fn is_asset_dir(segment: &str) -> bool {
+    WEBUI_DIST
+        .dirs()
+        .any(|dir| dir.path().to_str() == Some(segment))
 }
 
 async fn get_config(
@@ -1937,6 +1952,40 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::runtime::RuntimeConfig;
+
+    #[test]
+    fn webui_serves_embedded_assets() {
+        let response = handle_webui_get("index.html");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn webui_falls_back_to_index_for_client_routes() {
+        for path in ["routes", "routes/api-v1", "services/checkout"] {
+            let response = handle_webui_get(path);
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "{path} should be handed to the client router"
+            );
+        }
+    }
+
+    #[test]
+    fn webui_falls_back_for_a_route_named_after_a_host() {
+        // Route names are often hostnames. The dot in one used to be read as a
+        // file extension, which 404'd a link the UI hands out itself.
+        let response = handle_webui_get("routes/api.example.com");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn webui_still_404s_a_missing_asset() {
+        // HTML in place of a missing script would surface as a parse error in
+        // the browser rather than a cache miss anyone can read.
+        let response = handle_webui_get("assets/not-a-real-bundle.js");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 
     fn sample_config(listen: &str) -> String {
         format!(

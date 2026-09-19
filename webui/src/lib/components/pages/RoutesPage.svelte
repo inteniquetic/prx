@@ -14,6 +14,8 @@
   // ---------------------------------------------------------------------------
 
   export let config: PrxConfig;
+  /** Which route the URL is pointing at — `/routes/:name`. */
+  export let selectedRouteName: string | null = null;
   export let routeHealthByIndex: Record<number, RouteHealthItem> = {};
   export let healthLoading: boolean = false;
   export let healthError: string = '';
@@ -25,6 +27,8 @@
   const dispatch = createEventDispatcher<{
     refreshHealth: void;
     navigate: NavPage;
+    /** The route now on screen, so the shell can put it in the address bar. */
+    select: string | null;
   }>();
 
   // ---------------------------------------------------------------------------
@@ -87,6 +91,25 @@
   // ---------------------------------------------------------------------------
   // View State
   // ---------------------------------------------------------------------------
+
+  // The URL owns the selection: a refresh on /routes/api-v1 has to reopen it.
+  $: {
+    const found = selectedRouteName
+      ? routes.findIndex((entry) => entry.name === selectedRouteName)
+      : -1;
+    const next = found >= 0 ? found : null;
+    if (next !== selectedRouteIndex) {
+      selectedRouteIndex = next;
+    }
+  }
+
+  // ...and the page never assigns the selection directly: it asks for one with
+  // `select`, the shell puts it in the URL, and the block above opens it. One
+  // writer means a deep link cannot be overwritten by a first render that has
+  // not seen the config yet.
+  const selectRoute = (index: number | null) => {
+    dispatch('select', index === null ? null : routes[index]?.name ?? null);
+  };
 
   $: isDetailView = selectedRouteIndex !== null;
   $: selectedRoute = selectedRouteIndex !== null
@@ -194,17 +217,17 @@
 
   const handleRowClick = (index: number) => {
     detailMode = 'edit';
-    selectedRouteIndex = index;
+    selectRoute(index);
   };
 
   const handleViewRoute = (index: number) => {
     detailMode = 'view';
-    selectedRouteIndex = index;
+    selectRoute(index);
   };
 
   const handleEditRoute = (index: number) => {
     detailMode = 'edit';
-    selectedRouteIndex = index;
+    selectRoute(index);
   };
 
   const handleDeleteRoute = async (index: number) => {
@@ -216,7 +239,7 @@
     errorMessage = '';
     try {
       await deleteRoute(route.name);
-      selectedRouteIndex = null;
+      selectRoute(null);
       await refreshConfig();
     } catch (err) {
       errorMessage = (err as Error).message || 'Failed to delete route';
@@ -249,7 +272,7 @@
   };
 
   const handleCloseDetail = () => {
-    selectedRouteIndex = null;
+    selectRoute(null);
     clearError();
   };
 
@@ -267,7 +290,7 @@
     errorMessage = '';
     try {
       await updateRoute(originalName, route);
-      selectedRouteIndex = null;
+      selectRoute(null);
       await refreshConfig();
     } catch (err) {
       errorMessage = (err as Error).message || 'Failed to update route';

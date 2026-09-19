@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import Sidebar from './lib/components/layout/Sidebar.svelte';
-  import AppLayout from './lib/components/layout/AppLayout.svelte';
+  import { get } from 'svelte/store';
+  import AppShell from './lib/components/layout/AppShell.svelte';
   import DashboardPage from './lib/components/pages/DashboardPage.svelte';
+  import PlaceholderPage from './lib/components/pages/PlaceholderPage.svelte';
   import RoutesPage from './lib/components/pages/RoutesPage.svelte';
   import ServicesPage from './lib/components/pages/ServicesPage.svelte';
   import SettingsPage from './lib/components/pages/SettingsPage.svelte';
@@ -21,7 +22,16 @@
     tomlPreview,
     validationIssues
   } from './lib/stores/config';
-  import { currentPage, navigate } from './lib/stores/navigation';
+  import {
+    currentName,
+    currentPage,
+    initRouter,
+    navigate,
+    type NavBadge,
+    type NavPage
+  } from './lib/stores/navigation';
+  import { startHeartbeat } from './lib/stores/connection';
+  import { toast } from './lib/components/ui/sonner';
   import { initTheme } from './lib/stores/theme';
   import type { PrxConfig } from './lib/types/config';
 
@@ -38,6 +48,15 @@
   let adminStatusMessage = 'Ready';
   let adminStatusTone: 'neutral' | 'ok' | 'error' = 'neutral';
   let lastSyncedAt = '';
+
+  // Set once the admin API has answered, so nothing judges a URL against the
+  // placeholder config the store starts with.
+  let configLoaded = false;
+
+  // The TOML the proxy is running, as far as this tab knows. Anything the
+  // editor produces that differs from it is an unapplied draft, which the
+  // topbar says out loud so nobody closes the tab thinking it was saved.
+  let appliedToml = '';
 
   // Helpers
   const currentTimestamp = (): string =>
@@ -78,6 +97,8 @@
     try {
       const config = await loadConfigFromAdmin();
       configStore.set(config);
+      appliedToml = get(tomlPreview);
+      configLoaded = true;
       clearRouteHealthState();
       lastSyncedAt = currentTimestamp();
       setAdminStatus('Config loaded successfully.', 'ok');
@@ -134,7 +155,9 @@
     setAdminStatus('Saving config...');
 
     try {
-      const result = await saveTomlToAdmin($tomlPreview);
+      const saved = $tomlPreview;
+      const result = await saveTomlToAdmin(saved);
+      appliedToml = saved;
       lastSyncedAt = currentTimestamp();
       setAdminStatus(`Saved: ${result}`, 'ok');
       void refreshRouteHealth();
@@ -260,6 +283,73 @@
     importFromJson(e.detail);
   };
 
+  const openRoute = (name: string | null) => {
+    navigate(name ? { page: 'routes', name } : 'routes');
+  };
+
+  const openService = (name: string | null) => {
+    navigate(name ? { page: 'services', name } : 'services');
+  };
+
+  const onRoutesSelect = (e: CustomEvent<string | null>) => openRoute(e.detail);
+  const onServicesSelect = (e: CustomEvent<string | null>) => openService(e.detail);
+
+  // A deep link to something that is no longer in the config: drop back to the
+  // list and say why, rather than leaving the address bar naming a route that
+  // is not on screen.
+  $: if (configLoaded && $currentName) {
+    if (
+      $currentPage === 'routes' &&
+      !$configStore.routes.some((route) => route.name === $currentName)
+    ) {
+      toast.error(`No route named “${$currentName}”`);
+      navigate('routes', { replace: true });
+    } else if (
+      $currentPage === 'services' &&
+      !$configStore.services.some((service) => service.name === $currentName)
+    ) {
+      toast.error(`No service named “${$currentName}”`);
+      navigate('services', { replace: true });
+    }
+  }
+
+  // Shell state
+  $: hasDraft = appliedToml !== '' && $tomlPreview !== appliedToml;
+
+  $: unhealthyRoutes = routeHealthResponse
+    ? routeHealthResponse.routes.filter((route) => !route.healthy).length
+    : 0;
+
+  $: downUpstreams = routeHealthResponse
+    ? routeHealthResponse.routes.reduce(
+        (total, route) => total + (route.total_upstreams - route.reachable_upstreams),
+        0
+      )
+    : 0;
+
+  // Counts only appear once a probe has actually run: a silent zero and "we
+  // never checked" are not the same thing.
+  $: navBadges = {
+    ...(unhealthyRoutes > 0
+      ? {
+          routes: {
+            count: unhealthyRoutes,
+            label: unhealthyRoutes === 1 ? 'route unhealthy' : 'routes unhealthy',
+            tone: 'destructive'
+          } as NavBadge
+        }
+      : {}),
+    ...(downUpstreams > 0
+      ? {
+          services: {
+            count: downUpstreams,
+            label: downUpstreams === 1 ? 'upstream down' : 'upstreams down',
+            tone: 'warning'
+          } as NavBadge
+        }
+      : {})
+  } as Partial<Record<NavPage, NavBadge>>;
+
   // Reactive: clear health state when config changes
   $: if (
     routeHealthTomlSnapshot &&
@@ -273,58 +363,87 @@
     // index.html already set the class before paint; this keeps `system`
     // following the OS while the page stays open.
     const stopTheme = initTheme();
+    const stopRouter = initRouter();
     void reloadFromServer();
-    return stopTheme;
+    // Keeps the topbar's "online" honest between user actions.
+    const stopHeartbeat = startHeartbeat(() => loadConfigFromAdmin());
+
+    return () => {
+      stopHeartbeat();
+      stopRouter();
+      stopTheme();
+    };
   });
 </script>
 
-<div class="flex h-screen w-screen overflow-hidden text-foreground">
-  <Sidebar />
-
-  <main class="flex-1 flex flex-col overflow-hidden bg-background">
-    {#if $currentPage === 'dashboard'}
-      <DashboardPage
-        config={$configStore}
-        routeHealth={routeHealthResponse}
-        healthLoading={isCheckingRouteHealth}
-        healthError={routeHealthError}
-        on:navigate={onDashboardNavigate}
-        on:addRoute={onDashboardAddRoute}
-        on:refreshHealth={onDashboardRefreshHealth}
-        on:exportJson={onDashboardExportJson}
-      />
-    {:else if $currentPage === 'services'}
-      <ServicesPage
-        config={$configStore}
-        on:navigate={onServicesNavigate}
-      />
-    {:else if $currentPage === 'routes'}
-      <RoutesPage
-        config={$configStore}
-        {routeHealthByIndex}
-        healthLoading={isCheckingRouteHealth}
-        healthError={routeHealthError}
-        on:addRoute={onRoutesAddRoute}
-        on:deleteRoute={onRoutesDeleteRoute}
-        on:duplicateRoute={onRoutesDuplicateRoute}
-        on:refreshHealth={onRoutesRefreshHealth}
-        on:navigate={onRoutesNavigate}
-      />
-    {:else if $currentPage === 'settings'}
-      <SettingsPage
-        config={$configStore}
-        tomlPreview={$tomlPreview}
-        validationIssues={$validationIssues}
-        isSaving={isSavingToServer}
-        isLoading={isLoadingFromServer}
-        statusMessage={adminStatusMessage}
-        statusTone={adminStatusTone}
-        lastSynced={lastSyncedAt}
-        on:save={onSettingsSave}
-        on:reload={onSettingsReload}
-        on:exportJson={onSettingsExportJson}
-        on:importJson={onSettingsImportJson}
-      />
-    {/if}
-  </main>
-</div>
+<AppShell
+  config={$configStore}
+  badges={navBadges}
+  {hasDraft}
+  onaddRoute={addRouteAndEdit}
+  onapplyDraft={() => void saveToServer()}
+  onrefreshHealth={() => void refreshRouteHealth()}
+>
+  {#if $currentPage === 'dashboard'}
+    <DashboardPage
+      config={$configStore}
+      routeHealth={routeHealthResponse}
+      healthLoading={isCheckingRouteHealth}
+      healthError={routeHealthError}
+      on:navigate={onDashboardNavigate}
+      on:addRoute={onDashboardAddRoute}
+      on:refreshHealth={onDashboardRefreshHealth}
+      on:exportJson={onDashboardExportJson}
+    />
+  {:else if $currentPage === 'services'}
+    <ServicesPage
+      config={$configStore}
+      selectedServiceName={$currentName}
+      on:select={onServicesSelect}
+      on:navigate={onServicesNavigate}
+    />
+  {:else if $currentPage === 'routes'}
+    <RoutesPage
+      config={$configStore}
+      selectedRouteName={$currentName}
+      {routeHealthByIndex}
+      healthLoading={isCheckingRouteHealth}
+      healthError={routeHealthError}
+      on:select={onRoutesSelect}
+      on:addRoute={onRoutesAddRoute}
+      on:deleteRoute={onRoutesDeleteRoute}
+      on:duplicateRoute={onRoutesDuplicateRoute}
+      on:refreshHealth={onRoutesRefreshHealth}
+      on:navigate={onRoutesNavigate}
+    />
+  {:else if $currentPage === 'tls'}
+    <PlaceholderPage
+      title="TLS"
+      subtitle="Certificates, SNI and ACME"
+      task="T308"
+      description="Certificates are configured in Settings for now. This page will show what is loaded, when each certificate expires and how ACME renewal is going."
+    />
+  {:else if $currentPage === 'audit'}
+    <PlaceholderPage
+      title="Audit"
+      subtitle="Who changed what, and when"
+      task="T206"
+      description="The admin API does not record a change log yet. Once it does, every config apply will be listed here with its author and diff."
+    />
+  {:else if $currentPage === 'settings'}
+    <SettingsPage
+      config={$configStore}
+      tomlPreview={$tomlPreview}
+      validationIssues={$validationIssues}
+      isSaving={isSavingToServer}
+      isLoading={isLoadingFromServer}
+      statusMessage={adminStatusMessage}
+      statusTone={adminStatusTone}
+      lastSynced={lastSyncedAt}
+      on:save={onSettingsSave}
+      on:reload={onSettingsReload}
+      on:exportJson={onSettingsExportJson}
+      on:importJson={onSettingsImportJson}
+    />
+  {/if}
+</AppShell>
