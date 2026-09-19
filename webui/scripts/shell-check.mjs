@@ -129,6 +129,50 @@ await context.route('**/web/services/status', (route) =>
     body: JSON.stringify({ checked_at_epoch_ms: Date.now(), services: [] })
   })
 );
+// The dashboard opens the live-stats stream as soon as it is on screen (T306);
+// the numbers themselves are the dashboard check's business, not this one's.
+await context.route('**/web/stats/stream', (route) =>
+  route.fulfill({
+    status: 200,
+    headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store' },
+    body: 'retry: 30000\n\nevent: hello\ndata: 0\n\n'
+  })
+);
+await context.route('**/web/stats', (route) =>
+  route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      epoch_ms: Date.now(),
+      interval_ms: 1000,
+      seq: 1,
+      uptime_seconds: 10,
+      sample: {
+        epoch_ms: Date.now(),
+        window_seconds: 1,
+        rps: 42,
+        rps_2xx: 40,
+        rps_3xx: 0,
+        rps_4xx: 1,
+        rps_5xx: 1,
+        error_ratio_4xx: 0.02,
+        error_ratio_5xx: 0.02,
+        p50_ms: 2,
+        p95_ms: 9,
+        p99_ms: 18,
+        inflight: 3,
+        upstreams_healthy: 1,
+        upstreams_total: 1,
+        cache_hit_ratio: null
+      },
+      history: [],
+      routes: [],
+      services: [],
+      events: [],
+      stream_clients: 1,
+      max_stream_clients: 16
+    })
+  })
+);
 
 const page = await context.newPage();
 page.setDefaultTimeout(10_000);

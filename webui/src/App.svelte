@@ -208,22 +208,6 @@
   };
 
   // Page event handlers
-  const onDashboardNavigate = (e: CustomEvent) => {
-    navigate(e.detail);
-  };
-
-  const onDashboardAddRoute = () => {
-    addRouteAndEdit();
-  };
-
-  const onDashboardRefreshHealth = () => {
-    void refreshRouteHealth();
-  };
-
-  const onDashboardExportJson = () => {
-    exportAsJson();
-  };
-
   const onSettingsSave = () => {
     void saveToServer();
   };
@@ -352,15 +336,15 @@
   onrefreshHealth={() => void refreshRouteHealth()}
 >
   {#if $currentPage === 'dashboard'}
+    <!-- The dashboard reads the live-stats stream itself (T306); the config is
+         only there for what it cannot know from traffic, like which routes
+         cache. -->
     <DashboardPage
       config={$configStore}
-      routeHealth={routeHealthResponse}
-      healthLoading={isCheckingRouteHealth}
-      healthError={routeHealthError}
-      on:navigate={onDashboardNavigate}
-      on:addRoute={onDashboardAddRoute}
-      on:refreshHealth={onDashboardRefreshHealth}
-      on:exportJson={onDashboardExportJson}
+      onnavigate={(page) => navigate(page)}
+      onselectRoute={openRoute}
+      onselectService={openService}
+      onaddRoute={addRouteAndEdit}
     />
   {:else if $currentPage === 'services'}
     <ServicesPage

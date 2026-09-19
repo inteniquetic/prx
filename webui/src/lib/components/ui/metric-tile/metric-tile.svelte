@@ -3,7 +3,9 @@
   import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
   import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
   import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
+  import InfoIcon from '@lucide/svelte/icons/info';
   import Sparkline from './sparkline.svelte';
+  import * as Tooltip from '$lib/components/ui/tooltip';
   import { formatDelta } from '$lib/format';
   import { cn } from '$lib/utils';
 
@@ -18,6 +20,12 @@
     /** Latency and error rate are better when they fall; throughput is not. */
     betterWhen = 'higher',
     deltaLabel = 'vs previous window',
+    /**
+     * Where the number comes from. A dashboard that cannot say which metric a
+     * tile is reading is a dashboard nobody can act on, so this shows as an
+     * info affordance next to the label.
+     */
+    hint,
     history = [],
     class: className
   }: {
@@ -28,6 +36,7 @@
     delta?: number | null;
     betterWhen?: 'higher' | 'lower' | 'neutral';
     deltaLabel?: string;
+    hint?: string;
     history?: number[];
     class?: string;
   } = $props();
@@ -60,6 +69,17 @@
       <Icon class="size-4 shrink-0" aria-hidden="true" />
     {/if}
     <span>{label}</span>
+    {#if hint}
+      <Tooltip.Root>
+        <Tooltip.Trigger
+          class="rounded-sm text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          aria-label="{label}: where this number comes from"
+        >
+          <InfoIcon class="size-3.5" aria-hidden="true" />
+        </Tooltip.Trigger>
+        <Tooltip.Content class="max-w-64">{hint}</Tooltip.Content>
+      </Tooltip.Root>
+    {/if}
   </div>
 
   <div class="flex items-baseline gap-1.5">

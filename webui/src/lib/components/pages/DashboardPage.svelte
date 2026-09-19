@@ -1,556 +1,377 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import AppLayout from '../layout/AppLayout.svelte';
-  import StatsCard from '../dashboard/StatsCard.svelte';
-  import type { PrxConfig, RouteConfig, ServiceConfig } from '../../types/config';
-  import type { RouteHealthResponse, RouteHealthItem } from '../../api/admin';
-  import type { NavPage } from '../../stores/navigation';
+  import { onMount } from 'svelte';
 
-  export let config: PrxConfig;
-  export let routeHealth: RouteHealthResponse | null = null;
-  export let healthLoading: boolean = false;
-  export let healthError: string = '';
+  import ActivityIcon from '@lucide/svelte/icons/activity';
+  import DatabaseZapIcon from '@lucide/svelte/icons/database-zap';
+  import GaugeIcon from '@lucide/svelte/icons/gauge';
+  import PlusIcon from '@lucide/svelte/icons/plus';
+  import ServerIcon from '@lucide/svelte/icons/server';
+  import TimerIcon from '@lucide/svelte/icons/timer';
+  import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 
-  const dispatch = createEventDispatcher<{
-    navigate: NavPage;
-    addRoute: void;
-    refreshHealth: void;
-    exportJson: void;
-  }>();
+  import { Button } from '$lib/components/ui/button';
+  import { MetricTile } from '$lib/components/ui/metric-tile';
 
-  // ---------------------------------------------------------------------------
-  // Computed values
-  // ---------------------------------------------------------------------------
+  import EventStrip from '../dashboard/EventStrip.svelte';
+  import RouteLeaderboard from '../dashboard/RouteLeaderboard.svelte';
+  import StatusBanner, { type SystemProblem, type SystemState } from '../dashboard/StatusBanner.svelte';
+  import TimeseriesChart, { type ChartSeries } from '../dashboard/TimeseriesChart.svelte';
+  import UpstreamGrid from '../dashboard/UpstreamGrid.svelte';
 
-  $: services = config.services ?? [];
+  import type { StatsSample } from '$lib/api/stats';
+  import { formatCount, formatLatency, formatPercent, formatThroughput } from '$lib/format';
+  import { liveStats, startLiveStats } from '$lib/stores/stats';
+  import type { PrxConfig } from '$lib/types/config';
 
-  $: routes = config.routes ?? [];
+  let {
+    config,
+    onnavigate,
+    onselectRoute,
+    onselectService,
+    onaddRoute
+  }: {
+    config: PrxConfig;
+    onnavigate?: (page: 'routes' | 'services' | 'settings') => void;
+    onselectRoute?: (name: string) => void;
+    onselectService?: (name: string) => void;
+    onaddRoute?: () => void;
+  } = $props();
 
-  $: totalServices = services.length;
+  // The stream lives exactly as long as this page is on screen: leaving the
+  // dashboard closes it, which is what keeps the server's 16 slots free for
+  // tabs that are actually looking.
+  onMount(() => startLiveStats());
 
-  $: totalRoutes = routes.length;
+  const live = $derived($liveStats);
+  const sample = $derived(live.sample);
+  const history = $derived(live.history);
 
-  $: totalUpstreams = services.reduce(
-    (sum, service) => sum + (service.upstreams?.length ?? 0),
-    0
+  // --- what the numbers mean --------------------------------------------------
+
+  const cacheEnabled = $derived(
+    (config.routes ?? []).some((route) => route.cache?.enabled === true)
   );
 
-  $: tlsEnabledCount = services.reduce(
-    (sum, service) =>
-      sum + (service.upstreams?.filter((u) => u.tls === true).length ?? 0),
-    0
+  /** The sample from about a minute ago, which is what each delta compares to. */
+  const previous = $derived<StatsSample | null>(
+    history.length > 60 ? history[history.length - 61] : null
   );
 
-  $: circuitBreakerCount = services.filter(
-    (service) => service.circuit_breaker?.enabled === true
-  ).length;
+  const delta = (pick: (entry: StatsSample) => number | null): number | null => {
+    if (!sample || !previous) return null;
+    const now = pick(sample);
+    const before = pick(previous);
+    if (now === null || before === null) return null;
+    return now - before;
+  };
 
-  // Service lookup by name
-  $: serviceByName = (() => {
-    const map: Record<string, ServiceConfig> = {};
-    for (const service of services) {
-      map[service.name] = service;
+  /** Sparkline data: gaps are dropped rather than drawn as zero. */
+  const spark = (pick: (entry: StatsSample) => number | null): number[] => {
+    const values: number[] = [];
+    for (const entry of history) {
+      const value = pick(entry);
+      if (value !== null && Number.isFinite(value)) values.push(value);
     }
-    return map;
-  })();
+    return values;
+  };
 
-  // Health summary
-  $: healthRoutes = routeHealth?.routes ?? [];
+  const timestamps = $derived(history.map((entry) => entry.epoch_ms));
 
-  $: healthyCount = healthRoutes.filter(
-    (r) => r.healthy && r.reachable_upstreams === r.total_upstreams
-  ).length;
-
-  $: degradedCount = healthRoutes.filter(
-    (r) => r.reachable_upstreams > 0 && r.reachable_upstreams < r.total_upstreams
-  ).length;
-
-  $: downCount = healthRoutes.filter(
-    (r) => r.reachable_upstreams === 0
-  ).length;
-
-  $: unknownCount = Math.max(0, totalRoutes - healthRoutes.length);
-
-  // Unique services that have been health-checked
-  $: healthCheckedServices = (() => {
-    const serviceSet = new Set<string>();
-    for (const item of healthRoutes) {
-      serviceSet.add(item.service);
+  const trafficSeries = $derived<ChartSeries[]>([
+    {
+      key: '2xx',
+      label: '2xx',
+      color: 'var(--success)',
+      values: history.map((entry) => entry.rps_2xx)
+    },
+    {
+      key: '3xx',
+      label: '3xx',
+      color: 'var(--muted-foreground)',
+      values: history.map((entry) => entry.rps_3xx)
+    },
+    {
+      key: '4xx',
+      label: '4xx',
+      color: 'var(--warning)',
+      values: history.map((entry) => entry.rps_4xx)
+    },
+    {
+      key: '5xx',
+      label: '5xx',
+      color: 'var(--destructive)',
+      values: history.map((entry) => entry.rps_5xx)
     }
-    return serviceSet.size;
-  })();
+  ]);
 
-  // Recent routes (first 5)
-  $: recentRoutes = routes.slice(0, 5);
-
-  $: hasMoreRoutes = routes.length > 5;
-
-  // Recent services (first 3)
-  $: recentServices = services.slice(0, 3);
-
-  $: hasMoreServices = services.length > 3;
-
-  // Health data by route index for quick lookup
-  $: healthByIndex = (() => {
-    const map: Record<number, RouteHealthItem> = {};
-    for (const item of healthRoutes) {
-      map[item.route_index] = item;
+  // One hue, light to dark, plus a dash pattern: the three percentiles stay
+  // apart without relying on three different colours.
+  const latencySeries = $derived<ChartSeries[]>([
+    {
+      key: 'p50',
+      label: 'p50',
+      color: 'color-mix(in oklab, var(--primary) 62%, var(--card))',
+      dash: '2 3',
+      values: history.map((entry) => entry.p50_ms)
+    },
+    {
+      key: 'p95',
+      label: 'p95',
+      color: 'color-mix(in oklab, var(--primary) 82%, var(--card))',
+      dash: '6 3',
+      values: history.map((entry) => entry.p95_ms)
+    },
+    {
+      key: 'p99',
+      label: 'p99',
+      color: 'var(--primary)',
+      values: history.map((entry) => entry.p99_ms)
     }
-    return map;
-  })();
+  ]);
 
-  // Health data by service name for service preview
-  $: healthByService = (() => {
-    const map: Record<string, RouteHealthItem> = {};
-    for (const item of healthRoutes) {
-      if (!map[item.service]) {
-        map[item.service] = item;
+  // --- is anything wrong ------------------------------------------------------
+
+  const systemState = $derived<SystemState>(
+    !live.loaded || !sample
+      ? 'unknown'
+      : sample.upstreams_total > 0 && sample.upstreams_healthy === 0
+        ? 'down'
+        : sample.upstreams_healthy < sample.upstreams_total || sample.error_ratio_5xx >= 0.05
+          ? 'degraded'
+          : 'ok'
+  );
+
+  const problems = $derived.by(() => {
+    const found: SystemProblem[] = [];
+    if (!sample) return found;
+
+    for (const service of live.services) {
+      if (service.total === 0) continue;
+      if (service.healthy === 0) {
+        found.push({
+          text: `Every upstream in “${service.name}” is out of the pool.`,
+          action: { label: 'Open service', go: () => onselectService?.(service.name) }
+        });
+      } else if (service.healthy < service.total) {
+        found.push({
+          text: `“${service.name}” is down to ${service.healthy} of ${service.total} upstreams.`,
+          action: { label: 'Open service', go: () => onselectService?.(service.name) }
+        });
       }
     }
-    return map;
-  })();
 
-  // ---------------------------------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------------------------------
-
-  const getRouteHealth = (routeIndex: number): RouteHealthItem | null =>
-    healthByIndex[routeIndex] ?? null;
-
-  const getServiceHealth = (serviceName: string): RouteHealthItem | null =>
-    healthByService[serviceName] ?? null;
-
-  const routeHealthStatus = (routeIndex: number): 'healthy' | 'degraded' | 'down' | 'unknown' => {
-    const health = getRouteHealth(routeIndex);
-    if (!health) return 'unknown';
-    if (health.reachable_upstreams === 0) return 'down';
-    if (health.reachable_upstreams < health.total_upstreams) return 'degraded';
-    return health.healthy ? 'healthy' : 'degraded';
-  };
-
-  const serviceHealthStatus = (serviceName: string): 'healthy' | 'degraded' | 'down' | 'unknown' => {
-    const health = getServiceHealth(serviceName);
-    if (!health) return 'unknown';
-    if (health.reachable_upstreams === 0) return 'down';
-    if (health.reachable_upstreams < health.total_upstreams) return 'degraded';
-    return health.healthy ? 'healthy' : 'degraded';
-  };
-
-  const statusDotClass = (status: string): string => {
-    switch (status) {
-      case 'healthy':
-        return 'bg-success';
-      case 'degraded':
-        return 'bg-warning';
-      case 'down':
-        return 'bg-destructive';
-      default:
-        return 'bg-muted-foreground/60';
+    if (sample.error_ratio_5xx >= 0.05) {
+      const worst = live.routes
+        .slice()
+        .sort((a, b) => b.requests_5xx - a.requests_5xx)
+        .find((route) => route.requests_5xx > 0);
+      found.push({
+        text: `${formatPercent(sample.error_ratio_5xx)} of requests are answering 5xx${
+          worst ? `, worst on “${worst.name}”` : ''
+        }.`,
+        action: worst
+          ? { label: 'Open route', go: () => onselectRoute?.(worst.name) }
+          : undefined
+      });
     }
-  };
 
-  const statusBadgeClass = (status: string): string => {
-    switch (status) {
-      case 'healthy':
-        return 'rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-xs font-semibold text-success';
-      case 'degraded':
-        return 'rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-xs font-semibold text-warning';
-      case 'down':
-        return 'rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive';
-      default:
-        return 'rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-semibold text-foreground/80';
+    for (const event of live.events) {
+      if (event.kind === 'cert_expiry' && event.level !== 'info') {
+        found.push({
+          text: event.message,
+          action: { label: 'Open settings', go: () => onnavigate?.('settings') }
+        });
+        break;
+      }
     }
-  };
 
-  const formatLbStrategy = (lb: string): string => {
-    switch (lb) {
-      case 'round_robin':
-        return 'Round Robin';
-      case 'random':
-        return 'Random';
-      case 'hash':
-        return 'Hash';
-      default:
-        return lb;
-    }
-  };
+    return found;
+  });
 
-  const formatMethods = (methods: string[]): string => {
-    if (!methods || methods.length === 0) return 'All';
-    return methods.map((m) => m.toUpperCase()).join(', ');
-  };
+  /** Axis ticks carry no unit: the title and legend already said it. */
+  const compactRate = (value: number): string =>
+    value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k` : `${Math.round(value)}`;
+  const compactMs = (value: number): string =>
+    value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}`;
 
-  const healthStatusText = (status: string): string => {
-    switch (status) {
-      case 'healthy':
-        return 'UP';
-      case 'degraded':
-        return 'DEGRADED';
-      case 'down':
-        return 'DOWN';
-      default:
-        return 'UNKNOWN';
-    }
-  };
+  const routes = $derived(config.routes ?? []);
+  const services = $derived(config.services ?? []);
 
-  const healthCheckedAt = (): string => {
-    if (!routeHealth?.checked_at_epoch_ms) return '';
-    const date = new Date(routeHealth.checked_at_epoch_ms);
-    return date.toLocaleTimeString();
-  };
-
-  const getServiceForRoute = (route: RouteConfig): ServiceConfig | null =>
-    serviceByName[route.service] ?? null;
-
-  const healthTooltipDetail = (status: string): string => {
-    switch (status) {
-      case 'healthy':
-        return 'All upstreams reachable';
-      case 'degraded':
-        return 'Partial upstream failure';
-      case 'down':
-        return 'No upstreams reachable';
-      default:
-        return 'Not yet checked';
-    }
-  };
+  const connectionNote = $derived(
+    live.status === 'live'
+      ? 'live'
+      : live.status === 'polling'
+        ? 'polling'
+        : live.status === 'connecting'
+          ? 'connecting'
+          : live.status === 'reconnecting'
+            ? 'reconnecting'
+            : 'offline'
+  );
 </script>
 
-<AppLayout title="Dashboard" subtitle="Overview of your proxy configuration">
-  <svelte:fragment slot="header-actions">
-    <button
-      class="rounded-md border border-success/40 bg-success/10 px-3 py-1.5 text-xs font-semibold text-success transition-colors hover:bg-success/20"
-      on:click={() => dispatch('exportJson')}
-    >
-      Export JSON
-    </button>
-    <button
-      class="rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
-      on:click={() => dispatch('refreshHealth')}
-    >
-      {healthLoading ? 'Checking...' : 'Refresh Health'}
-    </button>
-  </svelte:fragment>
+<div class="flex h-full min-h-0 flex-col">
+  <header
+    class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-6"
+  >
+    <div class="min-w-0">
+      <h1 class="truncate text-xl font-semibold">Dashboard</h1>
+      <p class="mt-0.5 text-sm text-muted-foreground">
+        {routes.length} route{routes.length === 1 ? '' : 's'} ·
+        {services.length} service{services.length === 1 ? '' : 's'} ·
+        <span data-slot="live-status">{connectionNote}</span>
+      </p>
+    </div>
 
-  <div class="space-y-6 p-6">
-    <!-- Stats Cards Row -->
-    <section>
-      <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-        Overview
-      </h2>
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <StatsCard
-          icon="◆"
-          label="Services"
-          value={totalServices}
-          color="cyan"
+    <div class="flex shrink-0 flex-wrap items-center gap-2">
+      <Button variant="outline" size="sm" onclick={() => onnavigate?.('routes')}>
+        <ActivityIcon aria-hidden="true" />
+        <span class="hidden sm:inline">All routes</span>
+      </Button>
+      <Button size="sm" onclick={() => onaddRoute?.()}>
+        <PlusIcon aria-hidden="true" />
+        Add route
+      </Button>
+    </div>
+  </header>
+
+  <div class="min-h-0 flex-1 overflow-y-auto">
+    <div class="grid gap-4 p-4 sm:p-6">
+      <StatusBanner
+        state={systemState}
+        {problems}
+        connection={live.status}
+        connectionError={live.error}
+      />
+
+      <!-- Every tile says where its number comes from, because "error rate"
+           means four different things depending on what you counted. -->
+      <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        <MetricTile
+          label="Requests"
+          icon={GaugeIcon}
+          value={formatThroughput(sample?.rps ?? null)}
+          delta={delta((entry) => entry.rps)}
+          deltaLabel="vs a minute ago"
+          history={spark((entry) => entry.rps)}
+          hint="Requests finished per second, from prx_requests_total across every route."
         />
-        <StatsCard
-          icon="⇌"
-          label="Routes"
-          value={totalRoutes}
-          color="violet"
+        <MetricTile
+          label="p99 latency"
+          icon={TimerIcon}
+          value={formatLatency(sample?.p99_ms ?? null)}
+          betterWhen="lower"
+          delta={delta((entry) => entry.p99_ms)}
+          deltaLabel="vs a minute ago"
+          history={spark((entry) => entry.p99_ms)}
+          hint="99th percentile over this second, interpolated from the prx_request_latency_ms histogram."
         />
-        <StatsCard
-          icon="◉"
-          label="Active Upstreams"
-          value={totalUpstreams}
-          color="emerald"
+        <MetricTile
+          label="5xx rate"
+          icon={TriangleAlertIcon}
+          value={formatPercent(sample?.error_ratio_5xx ?? null)}
+          betterWhen="lower"
+          delta={delta((entry) => entry.error_ratio_5xx * 100)}
+          deltaLabel="points vs a minute ago"
+          history={spark((entry) => entry.error_ratio_5xx)}
+          hint="Share of requests answering 5xx, from prx_requests_total split by status class. 4xx is counted separately."
         />
-        <StatsCard
-          icon="🔒"
-          label="TLS Enabled"
-          value={tlsEnabledCount}
-          color="amber"
+        <MetricTile
+          label="4xx rate"
+          icon={TriangleAlertIcon}
+          value={formatPercent(sample?.error_ratio_4xx ?? null)}
+          betterWhen="lower"
+          delta={delta((entry) => entry.error_ratio_4xx * 100)}
+          deltaLabel="points vs a minute ago"
+          history={spark((entry) => entry.error_ratio_4xx)}
+          hint="Share of requests answering 4xx — usually the client's doing, not the proxy's."
         />
-        <StatsCard
-          icon="⚡"
-          label="Circuit Breakers"
-          value={circuitBreakerCount}
-          color="rose"
+        <MetricTile
+          label="In flight"
+          icon={ActivityIcon}
+          value={formatCount(sample?.inflight ?? null)}
+          betterWhen="neutral"
+          delta={delta((entry) => entry.inflight)}
+          deltaLabel="vs a minute ago"
+          history={spark((entry) => entry.inflight)}
+          hint="Requests being served right now, from the prx_inflight_requests gauge."
         />
-      </div>
-    </section>
-
-    <!-- Health Overview Section -->
-    <section>
-      <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-        Health Status
-      </h2>
-      <div class="rounded-2xl border border-border/80 bg-card/80 p-5 backdrop-blur">
-        {#if healthError}
-          <div class="mb-4 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive">
-            Health check failed: {healthError}
-          </div>
+        {#if cacheEnabled}
+          <MetricTile
+            label="Cache hits"
+            icon={DatabaseZapIcon}
+            value={formatPercent(sample?.cache_hit_ratio ?? null)}
+            delta={delta((entry) =>
+              entry.cache_hit_ratio === null ? null : entry.cache_hit_ratio * 100
+            )}
+            deltaLabel="points vs a minute ago"
+            history={spark((entry) => entry.cache_hit_ratio)}
+            hint="Hits as a share of cache lookups in this second, from prx_cache_total."
+          />
+        {:else}
+          <MetricTile
+            label="Upstreams ready"
+            icon={ServerIcon}
+            value={sample ? `${sample.upstreams_healthy}/${sample.upstreams_total}` : '—'}
+            betterWhen="higher"
+            history={spark((entry) => entry.upstreams_healthy)}
+            hint="Upstreams taking traffic, counted from the running config: drained ones are left out, circuit-open and failing ones count as not ready."
+          />
         {/if}
+      </section>
 
-        <!-- Summary Stats -->
-        <div class="mb-4 flex flex-wrap items-center gap-6">
-          <div class="text-xs text-muted-foreground">
-            {healthCheckedServices} of {totalServices} services checked
-          </div>
-          <div class="flex items-center gap-2">
-            <span class="h-2.5 w-2.5 rounded-full bg-success" ></span>
-            <span class="text-sm font-medium text-foreground">
-              {healthyCount} Healthy
-            </span>
-          </div>
-          <div class="flex items-center gap-2">
-            <span class="h-2.5 w-2.5 rounded-full bg-warning" ></span>
-            <span class="text-sm font-medium text-foreground">
-              {degradedCount} Degraded
-            </span>
-          </div>
-          <div class="flex items-center gap-2">
-            <span class="h-2.5 w-2.5 rounded-full bg-destructive" ></span>
-            <span class="text-sm font-medium text-foreground">
-              {downCount} Down
-            </span>
-          </div>
-          {#if unknownCount > 0}
-            <div class="flex items-center gap-2">
-              <span class="h-2.5 w-2.5 rounded-full bg-muted-foreground/60" ></span>
-              <span class="text-sm font-medium text-foreground">
-                {unknownCount} Unknown
-              </span>
-            </div>
-          {/if}
-        </div>
+      <section class="grid gap-4 xl:grid-cols-2">
+        <TimeseriesChart
+          title="Requests per second"
+          description="Stacked by status class, so the error share is the coloured band."
+          series={trafficSeries}
+          {timestamps}
+          mode="stacked"
+          format={(value) => (value === null ? '—' : formatThroughput(value))}
+          formatTick={compactRate}
+          floor={1}
+        />
+        <TimeseriesChart
+          title="Latency percentiles"
+          description="From the request histogram — a gap means no request finished that second."
+          series={latencySeries}
+          {timestamps}
+          format={(value) => (value === null ? '—' : formatLatency(value))}
+          formatTick={compactMs}
+          floor={10}
+        />
+      </section>
 
-        <!-- Route Health Dots (grouped by service health) -->
-        <div class="flex flex-wrap items-center gap-2">
-          {#each routes as route, idx}
-            <div
-              class="group relative"
-              title="{route.name}: {routeHealthStatus(idx)}"
-            >
-              <span class="h-3 w-3 rounded-full {statusDotClass(routeHealthStatus(idx))} transition-transform hover:scale-125" ></span>
-              <!-- Tooltip on hover -->
-              <div class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-border bg-muted px-2 py-1 text-xs text-foreground opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
-                <div class="font-medium">{route.name}</div>
-                <div class="mt-0.5 text-muted-foreground">
-                  Service: {route.service}
-                </div>
-                <div class="mt-0.5 text-muted-foreground">
-                  {healthTooltipDetail(routeHealthStatus(idx))}
-                </div>
-              </div>
-            </div>
-          {/each}
-        </div>
+      <section class="grid gap-4 xl:grid-cols-2">
+        <RouteLeaderboard
+          title="Top routes"
+          description="Most traffic in the last minute."
+          routes={live.routes}
+          rank="traffic"
+          onselect={(name) => onselectRoute?.(name)}
+        />
+        <RouteLeaderboard
+          title="Worst routes"
+          description="Highest error rate, then slowest p99."
+          routes={live.routes}
+          rank="trouble"
+          onselect={(name) => onselectRoute?.(name)}
+        />
+      </section>
 
-        {#if healthCheckedAt()}
-          <p class="mt-3 text-xs text-muted-foreground">
-            Last checked: {healthCheckedAt()}
-          </p>
-        {/if}
-      </div>
-    </section>
+      <section class="grid gap-4 xl:grid-cols-2">
+        <UpstreamGrid
+          services={live.services}
+          onselect={(name) => onselectService?.(name)}
+        />
+        <EventStrip events={live.events} />
+      </section>
 
-    <!-- Quick Actions Row -->
-    <section>
-      <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-        Quick Actions
-      </h2>
-      <div class="flex flex-wrap gap-3">
-        <button
-          class="inline-flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
-          on:click={() => dispatch('navigate', 'services')}
-        >
-          <span class="text-base">◆</span>
-          New Service
-        </button>
-        <button
-          class="inline-flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
-          on:click={() => dispatch('addRoute')}
-        >
-          <span class="text-base">+</span>
-          New Route
-        </button>
-        <button
-          class="inline-flex items-center gap-2 rounded-xl border border-success/40 bg-success/10 px-4 py-2.5 text-sm font-semibold text-success transition-colors hover:bg-success/20"
-          on:click={() => dispatch('exportJson')}
-        >
-          <span class="text-base">↓</span>
-          Export Config
-        </button>
-        <button
-          class="inline-flex items-center gap-2 rounded-xl border border-border bg-muted px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-muted"
-          on:click={() => dispatch('navigate', 'settings')}
-        >
-          <span class="text-base">⟨/⟩</span>
-          View TOML
-        </button>
-      </div>
-    </section>
-
-    <!-- Recent Services Preview -->
-    <section>
-      <div class="mb-3 flex items-center justify-between">
-        <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-          Recent Services
-        </h2>
-        {#if hasMoreServices}
-          <button
-            class="text-sm font-medium text-primary transition-colors hover:text-primary"
-            on:click={() => dispatch('navigate', 'services')}
-          >
-            View All Services →
-          </button>
-        {/if}
-      </div>
-
-      <div class="rounded-2xl border border-border/80 bg-card/80 backdrop-blur">
-        <div class="grid grid-cols-1 divide-y divide-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-          {#if recentServices.length === 0}
-            <div class="px-4 py-8 text-center text-muted-foreground sm:col-span-3">
-              No services configured yet.
-              <button
-                class="ml-2 text-primary hover:text-primary"
-                on:click={() => dispatch('navigate', 'services')}
-              >
-                Add your first service →
-              </button>
-            </div>
-          {:else}
-            {#each recentServices as service}
-              <div class="flex flex-col gap-2 px-4 py-4">
-                <div class="flex items-center justify-between">
-                  <span class="font-medium text-foreground">{service.name}</span>
-                  <span class="h-2 w-2 rounded-full {statusDotClass(serviceHealthStatus(service.name))}" ></span>
-                </div>
-                <div class="flex items-center gap-3 text-xs text-muted-foreground">
-                  <span>{formatLbStrategy(service.lb)}</span>
-                  <span>·</span>
-                  <span>{service.upstreams.length} upstream{service.upstreams.length !== 1 ? 's' : ''}</span>
-                </div>
-                {#if serviceHealthStatus(service.name) !== 'unknown'}
-                  <span class={statusBadgeClass(serviceHealthStatus(service.name))}>
-                    {healthStatusText(serviceHealthStatus(service.name))}
-                  </span>
-                {/if}
-              </div>
-            {/each}
-          {/if}
-        </div>
-
-        {#if hasMoreServices}
-          <div class="border-t border-border/80 px-4 py-3">
-            <button
-              class="w-full text-center text-sm font-medium text-muted-foreground transition-colors hover:text-primary"
-              on:click={() => dispatch('navigate', 'services')}
-            >
-              Showing {recentServices.length} of {services.length} services — View All →
-            </button>
-          </div>
-        {/if}
-      </div>
-    </section>
-
-    <!-- Recent Routes Preview -->
-    <section>
-      <div class="mb-3 flex items-center justify-between">
-        <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-          Recent Routes
-        </h2>
-        {#if hasMoreRoutes}
-          <button
-            class="text-sm font-medium text-primary transition-colors hover:text-primary"
-            on:click={() => dispatch('navigate', 'routes')}
-          >
-            View All Routes →
-          </button>
-        {/if}
-      </div>
-
-      <div class="rounded-2xl border border-border/80 bg-card/80 backdrop-blur">
-        <div class="overflow-hidden rounded-xl border border-border bg-background/70">
-          <table class="min-w-full divide-y divide-border text-sm">
-            <thead class="bg-card text-foreground/80">
-              <tr>
-                <th class="px-4 py-3 text-left font-semibold">Name</th>
-                <th class="px-4 py-3 text-left font-semibold">Service</th>
-                <th class="px-4 py-3 text-left font-semibold">Host</th>
-                <th class="px-4 py-3 text-left font-semibold">Path</th>
-                <th class="px-4 py-3 text-left font-semibold">Methods</th>
-                <th class="px-4 py-3 text-left font-semibold">Health</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-border">
-              {#if recentRoutes.length === 0}
-                <tr>
-                  <td class="px-4 py-8 text-center text-muted-foreground" colspan="6">
-                    No routes configured yet.
-                    <button
-                      class="ml-2 text-primary hover:text-primary"
-                      on:click={() => dispatch('addRoute')}
-                    >
-                      Add your first route →
-                    </button>
-                  </td>
-                </tr>
-              {:else}
-                {#each recentRoutes as route, idx}
-                  <tr class="transition-colors hover:bg-card/70">
-                    <td class="px-4 py-3">
-                      <span class="font-medium text-foreground">{route.name}</span>
-                      {#if route.is_default}
-                        <span class="ml-2 rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-[10px] font-semibold text-success">
-                          default
-                        </span>
-                      {/if}
-                    </td>
-                    <td class="px-4 py-3">
-                      <span class="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
-                        {route.service}
-                      </span>
-                    </td>
-                    <td class="px-4 py-3 text-foreground/80">
-                      {#if route.host}
-                        {route.host}
-                      {:else}
-                        <span class="text-muted-foreground">—</span>
-                      {/if}
-                    </td>
-                    <td class="px-4 py-3 text-foreground/80">
-                      <code class="rounded bg-muted px-1.5 py-0.5 text-xs">{route.path_prefix}</code>
-                    </td>
-                    <td class="px-4 py-3">
-                      {#if route.methods.length === 0}
-                        <span class="text-xs text-muted-foreground">All</span>
-                      {:else}
-                        <div class="flex flex-wrap gap-1">
-                          {#each route.methods as method}
-                            <span class="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
-                              {method.toUpperCase()}
-                            </span>
-                          {/each}
-                        </div>
-                      {/if}
-                    </td>
-                    <td class="px-4 py-3">
-                      <span class={statusBadgeClass(routeHealthStatus(idx))}>
-                        {healthStatusText(routeHealthStatus(idx))}
-                      </span>
-                    </td>
-                  </tr>
-                {/each}
-              {/if}
-            </tbody>
-          </table>
-        </div>
-
-        {#if hasMoreRoutes}
-          <div class="border-t border-border/80 px-4 py-3">
-            <button
-              class="w-full text-center text-sm font-medium text-muted-foreground transition-colors hover:text-primary"
-              on:click={() => dispatch('navigate', 'routes')}
-            >
-              Showing {recentRoutes.length} of {routes.length} routes — View All →
-            </button>
-          </div>
-        {/if}
-      </div>
-    </section>
+      <p class="text-xs text-muted-foreground">
+        Live numbers cover the last five minutes and are held in memory only —
+        restarting prx starts them over. For anything longer, scrape
+        <code class="rounded bg-muted px-1">/metrics</code>.
+      </p>
+    </div>
   </div>
-</AppLayout>
+</div>
