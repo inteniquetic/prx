@@ -20,6 +20,7 @@ use crate::{
     },
     headers::CompiledHeaderRules,
     limiter::{ConcurrencyLimiter, RateLimiter},
+    plugin::{Plugin, PluginChain},
     router::{IndexedRoute, RouteIndex, RouteMatch, method_mask},
 };
 
@@ -53,6 +54,33 @@ impl RuntimeConfig {
 
         // Routes keep their config order: the index encodes precedence, so
         // route indices stay stable and predictable for logs and the admin API.
+        // Each [[plugin]] is built once and shared by every route that lists
+        // it, so two routes with the same plugin share its state rather than
+        // getting a copy each — which is what makes a rate limiter or a
+        // compiled rule set behave the way an operator expects (T501).
+        let mut built_plugins: std::collections::HashMap<String, Arc<dyn Plugin>> =
+            std::collections::HashMap::new();
+        for plugin in &config.plugins {
+            if !plugin.enabled {
+                continue;
+            }
+            match crate::plugin::build_plugin(plugin) {
+                Ok(built) => {
+                    built_plugins.insert(plugin.name.clone(), built);
+                }
+                // `check_plugins` rejects this before a file is ever applied,
+                // so reaching here means the config was loaded past validation.
+                // Dropping the one plugin beats refusing to serve at all.
+                Err(err) => {
+                    tracing::error!(
+                        plugin = %plugin.name,
+                        kind = %plugin.kind,
+                        "failed to build plugin, it will not run: {err:#}"
+                    );
+                }
+            }
+        }
+
         let routes = config
             .routes
             .into_iter()
@@ -62,6 +90,7 @@ impl RuntimeConfig {
                     &service_index,
                     &global_request_headers,
                     &global_response_headers,
+                    &built_plugins,
                 )
             })
             .collect::<Vec<_>>();
@@ -169,6 +198,9 @@ pub struct RouteRuntime {
     pub rate_limit: Option<RouteRateLimit>,
     pub concurrency_limit: ConcurrencyLimitConfig,
     pub concurrency: ConcurrencyLimiter,
+    /// Compiled once per reload (T501). Empty for every route that does not
+    /// list any, which is the case the whole design is built around.
+    pub plugins: PluginChain,
 }
 
 /// A route's response cache and the settings it was built from.
@@ -195,6 +227,7 @@ impl RouteRuntime {
         service_index: &std::collections::HashMap<String, usize>,
         global_request_headers: &CompiledHeaderRules,
         global_response_headers: &CompiledHeaderRules,
+        built_plugins: &std::collections::HashMap<String, Arc<dyn Plugin>>,
     ) -> Self {
         let host = config
             .host
@@ -257,6 +290,21 @@ impl RouteRuntime {
             }
         });
 
+        // A name that is not in the map was either unknown or disabled, and
+        // both were reported by `check_plugins` before this ran. Skipping it
+        // here keeps a bad name from taking the whole reload down.
+        let plugins = if config.plugins.is_empty() {
+            PluginChain::empty()
+        } else {
+            PluginChain::new(
+                config
+                    .plugins
+                    .iter()
+                    .filter_map(|wanted| built_plugins.get(wanted).map(Arc::clone))
+                    .collect(),
+            )
+        };
+
         Self {
             name: config.name.into(),
             host,
@@ -271,6 +319,7 @@ impl RouteRuntime {
             rate_limit,
             concurrency_limit: config.concurrency_limit,
             concurrency: ConcurrencyLimiter::default(),
+            plugins,
         }
     }
 }
@@ -1001,6 +1050,7 @@ mod tests {
             compression: Default::default(),
             services,
             routes,
+            plugins: Vec::new(),
         })
     }
 
@@ -1171,6 +1221,129 @@ mod tests {
         let r2 = runtime.route(1).expect("r2 exists");
         assert_eq!(r2.service_idx, 0); // "first" is at index 0
         assert_eq!(runtime.service(r2.service_idx).unwrap().name, "first");
+    }
+
+    // --- plugin chains (T501) ----------------------------------------------
+
+    fn echo_plugin(name: &str, value: &str) -> crate::config::PluginConfig {
+        let mut settings = toml::map::Map::new();
+        settings.insert(
+            "request_header".into(),
+            toml::Value::String("x-mark".into()),
+        );
+        settings.insert("value".into(), toml::Value::String(value.into()));
+        crate::config::PluginConfig {
+            name: name.to_string(),
+            kind: "echo-header".to_string(),
+            enabled: true,
+            config: toml::Value::Table(settings),
+        }
+    }
+
+    fn runtime_with_plugins(
+        plugins: Vec<crate::config::PluginConfig>,
+        route_plugins: Vec<Vec<String>>,
+    ) -> RuntimeConfig {
+        let routes = route_plugins
+            .into_iter()
+            .enumerate()
+            .map(|(index, names)| RouteConfig {
+                name: format!("r{index}"),
+                service: "api".to_string(),
+                path_prefix: format!("/{index}"),
+                is_default: index == 0,
+                plugins: names,
+                ..Default::default()
+            })
+            .collect();
+
+        RuntimeConfig::from_config(PrxConfig {
+            server: ServerConfig::default(),
+            observability: ObservabilityConfig::default(),
+            headers: Default::default(),
+            compression: Default::default(),
+            services: vec![service(
+                "api",
+                LbStrategy::default(),
+                0,
+                vec![upstream("127.0.0.1:3000")],
+            )],
+            routes,
+            plugins,
+        })
+    }
+
+    #[test]
+    fn a_route_that_lists_no_plugins_gets_an_empty_chain() {
+        let runtime = runtime_with_plugins(vec![echo_plugin("mark", "one")], vec![vec![]]);
+        let route = runtime.route(0).expect("route should exist");
+        assert!(route.plugins.is_empty());
+        // The whole point: nothing to iterate and no phase to enter.
+        assert!(
+            !route
+                .plugins
+                .handles(crate::plugin::PhaseMask::REQUEST_HEAD)
+        );
+    }
+
+    #[test]
+    fn a_chain_is_built_in_the_order_the_route_listed() {
+        let runtime = runtime_with_plugins(
+            vec![echo_plugin("a", "one"), echo_plugin("b", "two")],
+            vec![vec!["b".to_string(), "a".to_string()]],
+        );
+        let route = runtime.route(0).expect("route should exist");
+        assert_eq!(route.plugins.names(), vec!["b", "a"]);
+    }
+
+    #[test]
+    fn two_routes_using_one_plugin_share_the_same_instance() {
+        let runtime = runtime_with_plugins(
+            vec![echo_plugin("mark", "one")],
+            vec![vec!["mark".to_string()], vec!["mark".to_string()]],
+        );
+        let first = runtime
+            .route(0)
+            .expect("route 0")
+            .plugins
+            .iter()
+            .next()
+            .cloned();
+        let second = runtime
+            .route(1)
+            .expect("route 1")
+            .plugins
+            .iter()
+            .next()
+            .cloned();
+        let (first, second) = (
+            first.expect("plugin on route 0"),
+            second.expect("plugin on route 1"),
+        );
+        // Shared, not copied: a plugin that holds a limiter or a compiled rule
+        // set has to behave as one thing across the routes that name it.
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn a_disabled_plugin_is_left_out_of_the_chain() {
+        let mut disabled = echo_plugin("mark", "one");
+        disabled.enabled = false;
+        let runtime = runtime_with_plugins(vec![disabled], vec![vec!["mark".to_string()]]);
+        let route = runtime.route(0).expect("route should exist");
+        assert!(
+            route.plugins.is_empty(),
+            "enabled = false should keep a plugin out of the chain entirely"
+        );
+    }
+
+    #[test]
+    fn a_name_that_cannot_be_built_does_not_take_the_reload_down() {
+        // `check_plugins` rejects this before anyone can apply it; if it is
+        // reached anyway, serving without the plugin beats not serving.
+        let runtime = runtime_with_plugins(vec![], vec![vec!["ghost".to_string()]]);
+        let route = runtime.route(0).expect("route should still exist");
+        assert!(route.plugins.is_empty());
     }
 }
 

@@ -18,6 +18,7 @@ import {
   type UpstreamH2,
   type LbStrategy,
   type AcmeConfig,
+  type PluginConfig,
   type PrxConfig,
   type RateLimitConfig,
   type TlsConfig,
@@ -50,6 +51,9 @@ type ConfigInput = Partial<PrxConfig> & {
   route?: PartialRoute[];
   routes?: PartialRoute[];
   observability?: PartialObservability;
+  /** `[[plugin]]` arrives as `plugin` from the file and `plugins` as JSON. */
+  plugin?: unknown[];
+  plugins?: unknown[];
 };
 
 const parseNullableNumber = (value: unknown): number | null => {
@@ -280,7 +284,21 @@ const normalizeRoute = (route: PartialRoute, routeIndex: number): RouteConfig =>
     response_headers: normalizeHeaderRules(source.response_headers),
     rate_limit: normalizeRateLimit(source.rate_limit),
     concurrency_limit: normalizeConcurrencyLimit(source.concurrency_limit),
-    cache: normalizeRouteCache(source.cache)
+    cache: normalizeRouteCache(source.cache),
+    // A route with no `plugins` key has none; an absent list is not a reason
+    // to invent one (T501).
+    plugins: Array.isArray(source.plugins) ? source.plugins.map(String) : []
+  };
+};
+
+/** `[[plugin]]` blocks. `config` is passed through as the kind defines it. */
+const normalizePlugin = (value: unknown): PluginConfig => {
+  const source = asRecord(value);
+  return {
+    name: String(source.name ?? ''),
+    kind: String(source.kind ?? ''),
+    enabled: source.enabled === undefined ? true : Boolean(source.enabled),
+    config: asRecord(source.config)
   };
 };
 
@@ -365,6 +383,12 @@ export const normalizePrxConfig = (input: ConfigInput): PrxConfig => {
           : String(input.observability.prometheus_listen)
     },
     services: serviceSource.map(normalizeService),
-    routes: routeSource.map(normalizeRoute)
+    routes: routeSource.map(normalizeRoute),
+    plugins: (Array.isArray(input.plugins)
+      ? input.plugins
+      : Array.isArray(input.plugin)
+        ? input.plugin
+        : []
+    ).map(normalizePlugin)
   };
 };

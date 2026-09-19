@@ -13,6 +13,7 @@ pub mod headers;
 pub mod health;
 pub mod limiter;
 pub mod metrics;
+pub mod plugin;
 pub mod proxy;
 pub mod reload;
 pub mod router;

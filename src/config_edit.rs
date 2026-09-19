@@ -538,6 +538,57 @@ is_default = true
     }
 
     #[test]
+    fn a_plugin_setting_can_be_edited_like_any_other_field() {
+        // `[[plugin]]` is reached by the same path syntax as everything else
+        // (T501): no special case in the editor, and no new syntax to learn.
+        let text = r#"# keep me
+[[plugin]]
+name = "mark"
+kind = "echo-header"
+
+[plugin.config]
+request_header = "X-Mark"
+value = "one"
+
+[[route]]
+name = "api"
+service = "api"
+plugins = ["mark"]
+"#;
+
+        let edited = apply_edits(
+            text,
+            &[
+                EditOp {
+                    path: "plugin[0].config.value".to_string(),
+                    action: EditAction::Set,
+                    value: Some("two".into()),
+                },
+                EditOp {
+                    path: "plugin[0].enabled".to_string(),
+                    action: EditAction::Set,
+                    value: Some(false.into()),
+                },
+                EditOp {
+                    path: "route[0].plugins".to_string(),
+                    action: EditAction::Set,
+                    value: Some(serde_json::json!(["mark", "other"])),
+                },
+            ],
+        )
+        .expect("plugin paths should resolve");
+
+        assert!(edited.contains(r#"value = "two""#), "{edited}");
+        assert!(edited.contains("enabled = false"), "{edited}");
+        assert!(
+            edited.contains(r#"plugins = ["mark", "other"]"#),
+            "{edited}"
+        );
+        // The comment is the whole reason this goes through toml_edit.
+        assert!(edited.starts_with("# keep me"), "{edited}");
+    }
+
+    #[test]
     fn a_draft_that_is_not_toml_yet_is_refused_whole() {
         let error = apply_edits("[server]\nlisten = [\n", &[])
             .expect_err("a half-typed file cannot be patched");

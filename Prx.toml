@@ -97,3 +97,21 @@ service = "api-v1"
 host = ""
 path_prefix = "/"
 is_default = true
+
+# ── Plugins (T501) ──
+#
+# Declared once here and listed by name on the routes that want them. A route
+# that lists none behaves exactly as it did before plugins existed, so this
+# whole section can be deleted without changing anything above it.
+#
+# `echo-header` is the plugin that exists to exercise the system — it is left
+# disabled because marking every request is not something a real proxy wants.
+
+[[plugin]]
+name = "mark"
+kind = "echo-header"
+enabled = false
+
+[plugin.config]
+request_header = "X-Prx-Mark"
+value = "prx"

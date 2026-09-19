@@ -201,6 +201,16 @@ export interface RouteConfig {
   rate_limit: RateLimitConfig;
   concurrency_limit: ConcurrencyLimitConfig;
   cache: RouteCacheConfig;
+  /** Names of the `[[plugin]]` blocks this route runs, in order (T501). */
+  plugins: string[];
+}
+
+/** One `[[plugin]]` block. `config` is whatever that `kind` accepts. */
+export interface PluginConfig {
+  name: string;
+  kind: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
 }
 
 export const HTTP_METHODS = [
@@ -237,6 +247,7 @@ export interface PrxConfig {
   };
   services: ServiceConfig[];
   routes: RouteConfig[];
+  plugins: PluginConfig[];
 }
 
 export const createDefaultUpstream = (): UpstreamConfig => ({
@@ -345,7 +356,8 @@ export const createDefaultRoute = (idx: number, serviceName?: string): RouteConf
   response_headers: createDefaultHeaderRules(),
   rate_limit: createDefaultRateLimit(),
   concurrency_limit: createDefaultConcurrencyLimit(),
-  cache: createDefaultRouteCache()
+  cache: createDefaultRouteCache(),
+  plugins: []
 });
 
 export const createDefaultConfig = (): PrxConfig => ({
@@ -366,5 +378,6 @@ export const createDefaultConfig = (): PrxConfig => ({
     prometheus_listen: ''
   },
   services: [createDefaultService(1)],
-  routes: [createDefaultRoute(1)]
+  routes: [createDefaultRoute(1)],
+  plugins: []
 });

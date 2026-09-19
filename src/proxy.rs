@@ -19,6 +19,7 @@ use crate::config::{LbStrategy, RateLimitKey, StickyMode, UpstreamH2};
 use crate::headers::HeaderContext;
 use crate::limiter::Decision as LimitDecision;
 use crate::metrics;
+use crate::plugin::{LogInfo, PhaseMask, PluginChain, PluginDecision, PluginState, StateSlots};
 use crate::router::RouteMatch;
 use crate::runtime::{RuntimeConfig, hash_key, normalize_host};
 
@@ -183,6 +184,54 @@ impl PrxProxy {
         session
             .write_response_header(Box::new(header), true)
             .await?;
+        Ok(true)
+    }
+
+    /// Runs the request-head phase of a route's plugins (T501).
+    ///
+    /// Returns the response a plugin wants sent, if one does. The chain stops
+    /// at the first plugin that answers: everything after it was written on the
+    /// assumption that the request was still going somewhere.
+    async fn run_request_head(
+        chain: &PluginChain,
+        session: &mut Session,
+        ctx: &mut RequestCtx,
+        route_name: &str,
+    ) -> Result<Option<(u16, Bytes)>> {
+        let mut slots = StateSlots::new(chain, &mut ctx.plugin_state);
+        for (index, plugin) in chain.iter().enumerate() {
+            if !plugin.phases().contains(PhaseMask::REQUEST_HEAD) {
+                continue;
+            }
+            let mut pctx = crate::plugin::PluginCtx {
+                route_name,
+                state: slots.slot(index),
+            };
+            match plugin
+                .on_request_head(session.req_header_mut(), &mut pctx)
+                .await?
+            {
+                PluginDecision::Continue => {}
+                PluginDecision::Respond { status, body } => {
+                    debug!(plugin = %plugin.name(), status, "plugin answered the request");
+                    metrics::inc_plugin_response(route_name, plugin.name());
+                    return Ok(Some((status, body)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Sends what a plugin decided to answer with.
+    async fn respond_from_plugin(session: &mut Session, status: u16, body: Bytes) -> Result<bool> {
+        let mut header = ResponseHeader::build(status, Some(2))?;
+        header.insert_header("content-length", body.len().to_string())?;
+        session
+            .write_response_header(Box::new(header), body.is_empty())
+            .await?;
+        if !body.is_empty() {
+            session.write_response_body(Some(body), true).await?;
+        }
         Ok(true)
     }
 
@@ -516,6 +565,16 @@ pub struct RequestCtx {
     /// Response being assembled for the cache: status, headers and body so far.
     cache_pending: Option<PendingCacheEntry>,
     upstream_addr: Option<String>,
+    /// Per-plugin state for this request (T501). Stays `None` for every route
+    /// that lists no plugins, and for chains where no plugin asks for state —
+    /// which is what keeps the common path free of an allocation.
+    plugin_state: Option<Box<PluginState>>,
+    /// Set when a plugin answered from a response phase: the upstream's body is
+    /// dropped and this is sent instead.
+    plugin_body: Option<Bytes>,
+    /// True once `plugin_body` has gone out, so the rest of the upstream body
+    /// can be discarded rather than appended to it.
+    plugin_body_sent: bool,
 }
 
 impl Default for RequestCtx {
@@ -540,6 +599,9 @@ impl Default for RequestCtx {
             cache_leader: false,
             cache_pending: None,
             upstream_addr: None,
+            plugin_state: None,
+            plugin_body: None,
+            plugin_body_sent: false,
         }
     }
 }
@@ -682,6 +744,20 @@ impl ProxyHttp for PrxProxy {
                         return Self::respond_limited(session, status, None).await;
                     }
                     ctx.holds_concurrency_slot = max_concurrent > 0;
+
+                    // Plugins run after the limits and before the cache (T501).
+                    // After the limits, because a flood should be turned away
+                    // by the cheap check rather than by whatever a plugin
+                    // costs; before the cache, because a request a plugin would
+                    // reject must not be handed a stored 200 instead.
+                    if route.plugins.handles(PhaseMask::REQUEST_HEAD) {
+                        let name = Arc::clone(&route.name);
+                        if let Some((status, body)) =
+                            Self::run_request_head(&route.plugins, session, ctx, &name).await?
+                        {
+                            return Self::respond_from_plugin(session, status, body).await;
+                        }
+                    }
 
                     // Caching happens after the limits so a cached response
                     // still counts against a client's allowance.
@@ -985,6 +1061,30 @@ impl ProxyHttp for PrxProxy {
             }
         }
 
+        // Plugins see the upstream request after the route's header rules, so
+        // a plugin can act on the headers that will actually be sent (T501).
+        let chain = ctx
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| ctx.route_idx.and_then(|idx| snapshot.route(idx)))
+            .filter(|route| route.plugins.handles(PhaseMask::UPSTREAM_REQUEST))
+            .map(|route| (route.plugins.clone(), Arc::clone(&route.name)));
+        if let Some((chain, route_name)) = chain {
+            let mut slots = StateSlots::new(&chain, &mut ctx.plugin_state);
+            for (index, plugin) in chain.iter().enumerate() {
+                if !plugin.phases().contains(PhaseMask::UPSTREAM_REQUEST) {
+                    continue;
+                }
+                let mut pctx = crate::plugin::PluginCtx {
+                    route_name: &route_name,
+                    state: slots.slot(index),
+                };
+                plugin
+                    .on_upstream_request(upstream_request, &mut pctx)
+                    .await?;
+            }
+        }
+
         self.record_upstream_success(ctx);
         Ok(())
     }
@@ -995,6 +1095,57 @@ impl ProxyHttp for PrxProxy {
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> Result<()> {
+        // Plugins go first, because this function returns early in several
+        // places and a phase that only sometimes runs is worse than one that
+        // does not exist (T501).
+        let chain = ctx
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| ctx.route_idx.and_then(|idx| snapshot.route(idx)))
+            .filter(|route| route.plugins.handles(PhaseMask::RESPONSE_HEAD))
+            .map(|route| (route.plugins.clone(), Arc::clone(&route.name)));
+        if let Some((chain, route_name)) = chain {
+            let mut answered = None;
+            {
+                let mut slots = StateSlots::new(&chain, &mut ctx.plugin_state);
+                for (index, plugin) in chain.iter().enumerate() {
+                    if !plugin.phases().contains(PhaseMask::RESPONSE_HEAD) {
+                        continue;
+                    }
+                    let mut pctx = crate::plugin::PluginCtx {
+                        route_name: &route_name,
+                        state: slots.slot(index),
+                    };
+                    match plugin
+                        .on_response_head(upstream_response, &mut pctx)
+                        .await?
+                    {
+                        PluginDecision::Continue => {}
+                        PluginDecision::Respond { status, body } => {
+                            metrics::inc_plugin_response(&route_name, plugin.name());
+                            answered = Some((status, body, plugin.name().to_string()));
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if let Some((status, body, plugin_name)) = answered {
+                debug!(plugin = %plugin_name, status, "plugin replaced the upstream response");
+                upstream_response.set_status(status)?;
+                upstream_response.insert_header("content-length", body.len().to_string())?;
+                // Whatever framing the upstream chose no longer describes what
+                // is about to be sent.
+                upstream_response.remove_header("transfer-encoding");
+                upstream_response.remove_header("content-encoding");
+                ctx.plugin_body = Some(body);
+                ctx.plugin_body_sent = false;
+                // A response the upstream did not produce must not be stored
+                // as though it had.
+                ctx.cache_pending = None;
+            }
+        }
+
         let Some(snapshot) = &ctx.snapshot else {
             return Ok(());
         };
@@ -1065,6 +1216,41 @@ impl ProxyHttp for PrxProxy {
     where
         Self::CTX: Send + Sync,
     {
+        // A plugin answered from `response_filter`: send its body once, then
+        // swallow whatever the upstream is still streaming. The content-length
+        // set there describes this body, so none of the upstream's may follow
+        // it out (T501).
+        if let Some(replacement) = ctx.plugin_body.take() {
+            *body = Some(replacement);
+            ctx.plugin_body_sent = true;
+            return Ok(None);
+        }
+        if ctx.plugin_body_sent {
+            *body = None;
+            return Ok(None);
+        }
+
+        // Plugins that watch the body do so on what the client will receive.
+        let chain = ctx
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| ctx.route_idx.and_then(|idx| snapshot.route(idx)))
+            .filter(|route| route.plugins.handles(PhaseMask::RESPONSE_BODY))
+            .map(|route| (route.plugins.clone(), Arc::clone(&route.name)));
+        if let Some((chain, route_name)) = chain {
+            let mut slots = StateSlots::new(&chain, &mut ctx.plugin_state);
+            for (index, plugin) in chain.iter().enumerate() {
+                if !plugin.phases().contains(PhaseMask::RESPONSE_BODY) {
+                    continue;
+                }
+                let mut pctx = crate::plugin::PluginCtx {
+                    route_name: &route_name,
+                    state: slots.slot(index),
+                };
+                plugin.on_response_body(body, end_of_stream, &mut pctx)?;
+            }
+        }
+
         let Some(pending) = ctx.cache_pending.as_mut() else {
             return Ok(None);
         };
@@ -1222,6 +1408,35 @@ impl ProxyHttp for PrxProxy {
             .map(|resp| resp.status.as_u16())
             .unwrap_or_else(|| if e.is_some() { 500 } else { 0 });
 
+        // The log phase runs for every request that reached a route, including
+        // the ones a plugin answered itself — which is the whole point: a
+        // plugin that blocks has to be able to record that it did (T501).
+        let chain = ctx
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| ctx.route_idx.and_then(|idx| snapshot.route(idx)))
+            .filter(|route| route.plugins.handles(PhaseMask::LOG))
+            .map(|route| route.plugins.clone());
+        if let Some(chain) = chain {
+            let info = LogInfo {
+                route_name: route_name.as_ref(),
+                status,
+                latency_ms: latency_ms as u64,
+                failed: e.is_some(),
+            };
+            let mut slots = StateSlots::new(&chain, &mut ctx.plugin_state);
+            for (index, plugin) in chain.iter().enumerate() {
+                if !plugin.phases().contains(PhaseMask::LOG) {
+                    continue;
+                }
+                let mut pctx = crate::plugin::PluginCtx {
+                    route_name: info.route_name,
+                    state: slots.slot(index),
+                };
+                plugin.on_log(&info, &mut pctx);
+            }
+        }
+
         // Metrics are recorded whether or not the access log is on: they are
         // separate signals, and tying them together silently emptied /metrics
         // for anyone running with access_log = false. The latency goes in with
@@ -1262,6 +1477,47 @@ impl ProxyHttp for PrxProxy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a request on a plugin-free route pays for the plugin system.
+    ///
+    /// The chain itself lives in `RouteRuntime`, shared by every request, so
+    /// the per-request cost is only what `RequestCtx` carries. Pinned here
+    /// rather than described in a comment, because "it costs nothing" is a
+    /// claim that rots quietly (T501).
+    #[test]
+    fn the_plugin_system_costs_a_request_three_empty_fields() {
+        let ctx = RequestCtx::default();
+        assert!(ctx.plugin_state.is_none());
+        assert!(ctx.plugin_body.is_none());
+        assert!(!ctx.plugin_body_sent);
+
+        // An Option<Box<_>> is a pointer, an Option<Bytes> is a slice header,
+        // and the flag rides in existing padding. No heap is touched for a
+        // request that never meets a plugin.
+        assert!(
+            std::mem::size_of::<Option<Box<crate::plugin::PluginState>>>()
+                == std::mem::size_of::<usize>(),
+            "the state slot stopped being a bare pointer"
+        );
+    }
+
+    #[test]
+    fn a_route_without_plugins_enters_no_phase() {
+        let runtime = build_runtime(0, 1);
+        let route = runtime.route(0).expect("route should exist");
+        for phase in [
+            PhaseMask::REQUEST_HEAD,
+            PhaseMask::UPSTREAM_REQUEST,
+            PhaseMask::RESPONSE_HEAD,
+            PhaseMask::RESPONSE_BODY,
+            PhaseMask::LOG,
+        ] {
+            assert!(
+                !route.plugins.handles(phase),
+                "a plugin-free route would have entered a plugin phase"
+            );
+        }
+    }
     use crate::config::{
         CircuitBreakerConfig, LbStrategy, ObservabilityConfig, PrxConfig, RouteConfig,
         ServerConfig, ServiceConfig, UpstreamConfig,
@@ -1321,6 +1577,7 @@ mod tests {
             compression: Default::default(),
             services: vec![service("default", max_retries, upstream_count)],
             routes: vec![route("default", "default")],
+            plugins: Vec::new(),
         }))
     }
 
@@ -1343,6 +1600,7 @@ mod tests {
             compression: Default::default(),
             services: vec![service],
             routes: vec![route("default", "default")],
+            plugins: Vec::new(),
         }))
     }
 
