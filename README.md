@@ -47,12 +47,15 @@ Endpoints:
 - `GET /web/config?format=json` read normalized config payload for WebUI
 - `POST /web/config/validate` validate TOML without writing: every error and warning in
   one pass, each with the line, column and field path it is about
+- `POST /web/config/edit` apply field edits to a config without writing: `{toml, ops}` with
+  `{path, action, value}` per op, rewritten by `toml_edit` so comments and layout survive
 - `GET /web/health/routes` check route upstream TCP health status
 - `POST /web/health/routes` check health from provided TOML payload (used by WebUI draft)
 - `PUT /web/config` write new `Prx.toml` (validated before apply). `If-Match: <etag>` makes
   the write conditional — a config that changed in the meantime answers `409` with the
   current file instead of being overwritten. `?dry_run=true` answers with the validation
   report and writes nothing
+- `POST /web/tls/acme/renew` order a certificate now instead of at the next check
 - `GET /web/cache` cache statistics per route
 - `DELETE /web/cache[?route=<name>]` purge cached responses
 

@@ -8,6 +8,7 @@ pub mod acme;
 pub mod admin;
 pub mod cache;
 pub mod config;
+pub mod config_edit;
 pub mod headers;
 pub mod health;
 pub mod limiter;

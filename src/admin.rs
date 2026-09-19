@@ -34,6 +34,7 @@ use crate::{
         CacheConfig, ConcurrencyLimitConfig, HeaderRules, HealthCheckConfig, LbStrategy, PrxConfig,
         RateLimitConfig, RouteConfig, ServiceConfig, StickyConfig, UpstreamConfig, UpstreamH2,
     },
+    config_edit::{self, EditOp},
     router::RouteMatch,
     runtime::RuntimeConfig,
     stats::{self, EventLevel},
@@ -45,6 +46,8 @@ pub const ADMIN_CONFIG_VALIDATE_PATH: &str = "/web/config/validate";
 pub const ADMIN_ROUTE_HEALTH_PATH: &str = "/web/health/routes";
 pub const ADMIN_CACHE_PATH: &str = "/web/cache";
 pub const ADMIN_TLS_STATUS_PATH: &str = "/web/tls/status";
+pub const ADMIN_TLS_ACME_RENEW_PATH: &str = "/web/tls/acme/renew";
+pub const ADMIN_CONFIG_EDIT_PATH: &str = "/web/config/edit";
 pub const DEFAULT_ADMIN_LISTEN: &str = "127.0.0.1:9090";
 const MAX_ADMIN_CONFIG_BODY_BYTES: usize = 10 * 1024 * 1024;
 pub const ADMIN_SERVICES_PATH: &str = "/admin/services";
@@ -254,6 +257,8 @@ struct AdminState {
     acme_status: crate::acme::SharedStatus,
     /// Present when a TLS listener is configured.
     tls_resolver: Option<Arc<crate::tls::CertResolver>>,
+    /// Present when ACME is enabled: the handle that asks for an order now.
+    acme_renew: Option<crate::acme::SharedRenew>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -301,6 +306,8 @@ struct AdminServerPayload {
     grace_period_seconds: Option<u64>,
     graceful_shutdown_timeout_seconds: Option<u64>,
     config_reload_debounce_ms: u64,
+    /// Accept HTTP/2 over cleartext on the plain listeners.
+    h2c: bool,
     tls: Option<AdminTlsPayload>,
 }
 
@@ -311,9 +318,22 @@ struct AdminTlsPayload {
     cert_path: Option<String>,
     key_path: Option<String>,
     enable_h2: bool,
-    /// Every certificate this listener can serve, including the single-cert
-    /// form, so the UI shows one consistent list.
+    /// The `[[server.tls.cert]]` blocks, as the file has them.
     certs: Vec<AdminTlsCertPayload>,
+    /// Automatic certificates, so the Settings page can show and edit them
+    /// without a second request (T308).
+    acme: AdminAcmePayload,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminAcmePayload {
+    enabled: bool,
+    email: Vec<String>,
+    directory_url: String,
+    domains: Vec<String>,
+    storage_dir: String,
+    renew_before_days: u32,
+    ca_root_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -740,9 +760,14 @@ impl From<PrxConfig> for AdminConfigPayload {
             grace_period_seconds: config.server.grace_period_seconds,
             graceful_shutdown_timeout_seconds: config.server.graceful_shutdown_timeout_seconds,
             config_reload_debounce_ms: config.server.config_reload_debounce_ms,
+            h2c: config.server.h2c,
             tls: config.server.tls.map(|tls| {
+                // The `[[server.tls.cert]]` blocks as written, not merged with
+                // the single-certificate form above: the Settings page edits
+                // these by index, so it has to see the same list the file has.
                 let certs = tls
-                    .all_certs()
+                    .certs
+                    .clone()
                     .into_iter()
                     .map(|cert| AdminTlsCertPayload {
                         domains: cert.domains,
@@ -757,6 +782,15 @@ impl From<PrxConfig> for AdminConfigPayload {
                     key_path: tls.key_path,
                     enable_h2: tls.enable_h2,
                     certs,
+                    acme: AdminAcmePayload {
+                        enabled: tls.acme.enabled,
+                        email: tls.acme.email,
+                        directory_url: tls.acme.directory_url,
+                        domains: tls.acme.domains,
+                        storage_dir: tls.acme.storage_dir,
+                        renew_before_days: tls.acme.renew_before_days,
+                        ca_root_path: tls.acme.ca_root_path,
+                    },
                 }
             }),
         };
@@ -1669,6 +1703,73 @@ async fn post_config_validate(State(state): State<AdminState>, body: Body) -> Re
             current_etag,
         },
     )
+}
+
+/// `POST /web/config/edit` (T308): the Settings forms change one field at a
+/// time, and the answer is the same file with that field changed.
+#[derive(Debug, Deserialize)]
+struct EditRequest {
+    /// The draft to edit — normally what the editor is showing, not the file on
+    /// disk, so form edits and hand edits pile up in the same draft.
+    toml: String,
+    #[serde(default)]
+    ops: Vec<EditOp>,
+}
+
+#[derive(Debug, Serialize)]
+struct EditResponse {
+    toml: String,
+    #[serde(flatten)]
+    report: ValidationReport,
+}
+
+async fn post_config_edit(body: Body) -> Response<Body> {
+    let text = match read_config_body(body).await {
+        Ok(text) => text,
+        Err(response) => return response,
+    };
+
+    let request: EditRequest = match serde_json::from_str(&text) {
+        Ok(request) => request,
+        Err(err) => {
+            return text_response(StatusCode::BAD_REQUEST, format!("invalid_request: {err}\n"));
+        }
+    };
+
+    match config_edit::apply_edits(&request.toml, &request.ops) {
+        Ok(edited) => {
+            // The report comes back with the text: a form that has just made
+            // the config invalid should say so on the same round trip.
+            let (report, _) = validate::validate_text(&edited);
+            json_response(
+                StatusCode::OK,
+                &EditResponse {
+                    toml: edited,
+                    report,
+                },
+            )
+        }
+        Err(err) => text_response(StatusCode::BAD_REQUEST, format!("edit_failed: {err:#}\n")),
+    }
+}
+
+/// `POST /web/tls/acme/renew` (T308): order a certificate now rather than at
+/// the next twelve-hourly check.
+async fn post_acme_renew(State(state): State<AdminState>) -> Response<Body> {
+    let Some(renew) = state.acme_renew.as_ref() else {
+        return text_response(
+            StatusCode::CONFLICT,
+            b"acme_not_enabled: turn on [server.tls.acme] and restart prx first\n".to_vec(),
+        );
+    };
+
+    renew.request();
+    stats::record_event(
+        EventLevel::Info,
+        "acme_renew",
+        "Certificate order requested from the admin API",
+    );
+    text_response(StatusCode::ACCEPTED, b"renew_requested\n".to_vec())
 }
 
 /// What a client gets back when its `If-Match` no longer matches the file:
@@ -2649,6 +2750,14 @@ fn build_router(state: AdminState) -> Router {
             axum::routing::post(post_config_validate),
         )
         .route(
+            ADMIN_CONFIG_EDIT_PATH,
+            axum::routing::post(post_config_edit),
+        )
+        .route(
+            ADMIN_TLS_ACME_RENEW_PATH,
+            axum::routing::post(post_acme_renew),
+        )
+        .route(
             ADMIN_ROUTE_HEALTH_PATH,
             get(get_route_health).post(post_route_health),
         )
@@ -2699,6 +2808,7 @@ impl AdminAxumService {
         active_config: Arc<ArcSwap<RuntimeConfig>>,
         acme_status: crate::acme::SharedStatus,
         tls_resolver: Option<Arc<crate::tls::CertResolver>>,
+        acme_renew: Option<crate::acme::SharedRenew>,
     ) -> Self {
         Self {
             name: "prx-admin-axum".to_string(),
@@ -2709,6 +2819,7 @@ impl AdminAxumService {
                 active_config,
                 acme_status,
                 tls_resolver,
+                acme_renew,
             },
         }
     }
@@ -3208,6 +3319,7 @@ is_default = true
             active_config: Arc::new(ArcSwap::from_pointee(RuntimeConfig::from_config(parsed))),
             acme_status: Arc::new(std::sync::RwLock::new(crate::acme::AcmeStatus::default())),
             tls_resolver: None,
+            acme_renew: None,
         }
     }
 
@@ -3418,6 +3530,83 @@ is_default = true
             serde_json::from_str(&response_text(response).await).expect("json report");
         assert_eq!(payload["valid"], true);
         assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn an_edit_changes_one_field_and_leaves_the_rest_of_the_file_alone() {
+        let original = format!(
+            "# a comment worth keeping\n{}",
+            sample_config("127.0.0.1:8080")
+        );
+        let (_dir, config_path) = seeded(&original);
+        let _state = admin_state(&config_path);
+
+        let request = serde_json::json!({
+            "toml": original,
+            "ops": [{ "path": "observability.log_level", "value": "debug" }]
+        });
+        let response = post_config_edit(Body::from(request.to_string())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&response_text(response).await).expect("json");
+        let edited = payload["toml"].as_str().expect("the edited file");
+        assert!(edited.contains("log_level = \"debug\""), "{edited}");
+        assert!(
+            edited.contains("# a comment worth keeping"),
+            "editing a field must not re-render the file: {edited}"
+        );
+        assert_eq!(
+            payload["valid"], true,
+            "the edit answers with the validation report too"
+        );
+        assert_eq!(
+            fs::read_to_string(&config_path).unwrap(),
+            original,
+            "editing a draft writes nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_edit_to_a_draft_that_does_not_parse_is_refused() {
+        let request = serde_json::json!({
+            "toml": "[server]\nlisten = [\n",
+            "ops": [{ "path": "server.threads", "value": 4 }]
+        });
+
+        let response = post_config_edit(Body::from(request.to_string())).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_text(response).await.contains("not valid TOML"));
+    }
+
+    #[tokio::test]
+    async fn renewing_a_certificate_without_acme_says_so_instead_of_pretending() {
+        let (_dir, config_path) = seeded(&sample_config("127.0.0.1:8080"));
+        let state = admin_state(&config_path);
+
+        let response = post_acme_renew(State(state)).await;
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(response_text(response).await.contains("acme_not_enabled"));
+    }
+
+    #[tokio::test]
+    async fn renewing_a_certificate_reaches_the_acme_loop() {
+        let (_dir, config_path) = seeded(&sample_config("127.0.0.1:8080"));
+        let renew: crate::acme::SharedRenew = Arc::default();
+        let state = AdminState {
+            acme_renew: Some(renew.clone()),
+            ..admin_state(&config_path)
+        };
+
+        let response = post_acme_renew(State(state)).await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert!(
+            renew.take(),
+            "the loop has to find the request waiting for it"
+        );
     }
 
     #[tokio::test]
