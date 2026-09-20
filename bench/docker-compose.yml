@@ -84,6 +84,60 @@ services:
     depends_on: [backend1, backend2]
     networks: [bench]
 
+  # --- WAF comparison targets (docs/WAF-BENCH-PLAN.md) ---------------------
+  # Every WAF target mounts the same ./waf: one SecLang config, one CRS checkout
+  # (run bench/waf/fetch-crs.sh first).
+
+  # The image's entrypoint templates its own nginx + ModSecurity config from env
+  # vars. It is bypassed so this target differs from `nginx` by three lines.
+  nginx-modsec:
+    profiles: ["nginx-modsec"]
+    container_name: bench-nginx-modsec
+    image: ${BENCH_MODSEC_IMAGE:-owasp/modsecurity-crs:nginx-alpine}
+    entrypoint: ["nginx", "-c", "/bench/nginx-modsec.conf", "-g", "daemon off;"]
+    volumes:
+      - ./configs/nginx-modsec.conf:/bench/nginx-modsec.conf:ro
+      - ./waf:/bench/waf:ro
+    ports:
+      - "18080:8080"
+    cpuset: "${BENCH_PROXY_CPUS:-0,1}"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    depends_on: [backend1, backend2]
+    networks: [bench]
+
+  caddy: &caddy
+    profiles: ["caddy"]
+    container_name: bench-caddy
+    build:
+      context: ./caddy
+      args:
+        CORAZA_CADDY: "${BENCH_CORAZA_CADDY:-v2.6.1}"
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    environment:
+      GOMAXPROCS: "4"
+    volumes:
+      - ./configs/Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "18080:8080"
+    cpuset: "${BENCH_PROXY_CPUS:-0,1}"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    depends_on: [backend1, backend2]
+    networks: [bench]
+
+  caddy-coraza:
+    <<: *caddy
+    profiles: ["caddy-coraza"]
+    container_name: bench-caddy-coraza
+    volumes:
+      - ./configs/Caddyfile.coraza:/etc/caddy/Caddyfile:ro
+      - ./waf:/bench/waf:ro
+
 networks:
   bench:
     driver: bridge

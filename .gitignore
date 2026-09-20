@@ -3,3 +3,6 @@ node_modules/
 bench/backend/target
 bench/results/*.json
 !bench/results/baseline/
+bench/waf/crs/
+bench/waf/corpus/
+bench/results/*.tsv
