@@ -8,6 +8,7 @@ Needs PyYAML (pip install pyyaml) and a CRS checkout (bench/waf/fetch-crs.sh).
 """
 import json
 import random
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlencode
@@ -32,9 +33,21 @@ benign = [
     for _ in range(1000)
 ]
 
-# GET-only, query-string attacks from CRS's own regression suite. oha cannot vary
+# Paranoia level of every rule, read from the rule files themselves.
+level = {}
+for f in crs.glob("rules/*.conf"):
+    for block in re.split(r"\n(?=SecRule|SecAction)", f.read_text()):
+        rule, pl = re.search(r"id:(\d+)", block), re.search(r"paranoia-level/(\d)", block)
+        if rule and pl:
+            level[int(rule.group(1))] = int(pl.group(1))
+
+# GET-only, query-string requests from CRS's own regression suite. oha cannot vary
 # method or body per request, so body-borne attacks are not under load here.
-attacks = set()
+#   attacks: every such request, including negative tests and PL2+ cases that PL1
+#            lets through. For verdicts.sh, where an "allow" is as telling as a block.
+#   blocked: the ones CRS itself expects a PL1 rule to fire on (~98 % are blocked).
+#            For load, where "attack traffic" has to mean traffic that gets blocked.
+attacks, blocked = set(), set()
 for f in sorted(crs.glob("tests/regression/tests/**/*.yaml")):
     for test in (yaml.safe_load(f.read_text()) or {}).get("tests", []):
         for stage in test.get("stages", []):
@@ -49,15 +62,20 @@ for f in sorted(crs.glob("tests/regression/tests/**/*.yaml")):
                 and uri.isascii()
                 and uri.isprintable()
                 and " " not in uri
+                and "#" not in uri  # curl and oha drop everything after a fragment
             ):
                 attacks.add(f"http://{host}{uri}")
-attacks = sorted(attacks)
+                ids = ((stage.get("output") or {}).get("log") or {}).get("expect_ids") or []
+                if ids and all(level.get(r) == 1 for r in ids):
+                    blocked.add(f"http://{host}{uri}")
+attacks, blocked = sorted(attacks), sorted(blocked)
 
-mix = benign * 9 + [rng.choice(attacks) for _ in range(len(benign))]
+mix = benign * 9 + [rng.choice(blocked) for _ in range(len(benign))]
 rng.shuffle(mix)
 
 (out / "benign.txt").write_text("\n".join(benign) + "\n")
 (out / "attacks.txt").write_text("\n".join(attacks) + "\n")
+(out / "blocked.txt").write_text("\n".join(blocked) + "\n")
 (out / "mix.txt").write_text("\n".join(mix) + "\n")
 (out / "form.txt").write_text(
     urlencode({f"field{n}": " ".join(rng.choices(WORDS, k=12)) for n in range(20)})
@@ -73,4 +91,4 @@ for name, size in (("json-16k", 16 << 10), ("json-128k", 128 << 10)):
         items.append(item)
         length += len(json.dumps(item)) + 2
     (out / f"{name}.json").write_text(json.dumps(items))
-print(f"benign={len(benign)} attacks={len(attacks)} mix={len(mix)}")
+print(f"benign={len(benign)} attacks={len(attacks)} blocked={len(blocked)} mix={len(mix)}")

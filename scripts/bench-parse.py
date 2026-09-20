@@ -89,6 +89,7 @@ def main() -> int:
     ap.add_argument("--duration", type=int, required=True)
     ap.add_argument("--load-output", type=Path, required=True)
     ap.add_argument("--stats", type=Path, required=True)
+    ap.add_argument("--rate", type=int, default=None, help="fixed request rate, if any")
     args = ap.parse_args()
 
     raw = args.load_output.read_text(errors="replace")
@@ -109,6 +110,10 @@ def main() -> int:
     cpu_ticks = float(stats.get("cpu_ticks", 0) or 0)
     requests = load.get("requests_total") or 0
     cpu_seconds = cpu_ticks / USER_HZ
+    # Share of the proxy's CPUs that were busy. A "saturation" run well under
+    # 1.0 was limited by something else (connections, load generator, backend)
+    # and its rps says nothing about the proxy.
+    capacity = float(stats.get("cpu_window_s", 0) or 0) * float(stats.get("proxy_cpus", 0) or 0)
     result = {
         "schema": 1,
         "timestamp": args.timestamp,
@@ -119,6 +124,7 @@ def main() -> int:
         "url": args.url,
         "connections": args.connections,
         "duration_s": args.duration,
+        "rate": args.rate,
         "throughput": {
             "requests_per_second": round(load["requests_per_second"], 2),
             "requests_total": requests,
@@ -129,6 +135,7 @@ def main() -> int:
             "peak_rss_kb": int(stats.get("peak_rss_kb", 0) or 0),
             "cpu_seconds": round(cpu_seconds, 3),
             "cpu_us_per_request": round(cpu_seconds * 1e6 / requests, 3) if requests else None,
+            "cpu_utilisation": round(cpu_seconds / capacity, 3) if capacity else None,
         },
         "status_codes": load["status_codes"],
     }

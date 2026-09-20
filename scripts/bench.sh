@@ -87,6 +87,11 @@ scenario_connections() {
 
 start_target() {
   local target="$1"
+  # Another run (or another checkout of this repo) on the same port would be
+  # measured instead of this target, silently.
+  local holder
+  holder="$(docker ps --filter "publish=${BENCH_HOST##*:}" --format '{{.Names}}' | grep -v "^$(container_for "${target}")\$" || true)"
+  [ -z "${holder}" ] || die "port ${BENCH_HOST##*:} is held by ${holder}; another benchmark is running"
   compose --profile "${target}" up -d --build >/dev/null
   # Wait for the proxy to answer before the warmup starts.
   for _ in $(seq 1 60); do
@@ -114,29 +119,32 @@ container_for() {
   esac
 }
 
-# Peak memory and CPU of the proxy inside its container, sampled once per second.
-# Container-level stats are avoided on purpose: they include the runtime's own
-# overhead, which differs between images and would not be a fair comparison.
+# CPU and memory of the proxy inside its container. Container-level stats are
+# avoided on purpose: they include the runtime's own overhead, which differs
+# between images and would not be a fair comparison.
 #
 # Every process is counted, not PID 1: nginx does its work (and holds its rules)
-# in workers, so PID 1 alone reports a master that did nothing. Memory is PSS,
-# not RSS, because workers share pages and summing RSS would count them once
-# each. CPU is a delta over the measured window, so start-up is not billed.
-sample_process_stats() {
-  local container="$1" out="$2" seconds="$3"
-  {
-    local ticks='cat /proc/[0-9]*/stat 2>/dev/null | awk "{s+=\$14+\$15} END{print s+0}"'
-    local pss='cat /proc/[0-9]*/smaps_rollup 2>/dev/null | awk "/^Pss:/{s+=\$2} END{print s+0}"'
-    local peak_rss_kb=0 cpu_start cpu_end rss
-    cpu_start="$(docker exec -u 0 "${container}" sh -c "${ticks}" 2>/dev/null || echo 0)"
-    for _ in $(seq 1 "${seconds}"); do
-      rss="$(docker exec -u 0 "${container}" sh -c "${pss}" 2>/dev/null || echo 0)"
-      [ -n "${rss}" ] && [ "${rss}" -gt "${peak_rss_kb}" ] && peak_rss_kb="${rss}"
-      sleep 1
-    done
-    cpu_end="$(docker exec -u 0 "${container}" sh -c "${ticks}" 2>/dev/null || echo 0)"
-    printf '{"peak_rss_kb":%s,"cpu_ticks":%s}\n' "${peak_rss_kb:-0}" "$(( cpu_end - cpu_start ))" > "${out}"
-  }
+# in workers, so PID 1 alone reports a master that did nothing.
+
+# utime+stime of every process, in ticks. comm (field 2) may contain spaces, so
+# fields are counted from the closing parenthesis, not from the start.
+cpu_ticks() {
+  docker exec -u 0 "$1" sh -c 'cat /proc/[0-9]*/stat 2>/dev/null' 2>/dev/null \
+    | awk '{n=split(substr($0, index($0, ") ") + 2), f, " "); s += f[12] + f[13]} END {print s + 0}'
+}
+
+# Peak PSS until the stop file appears. PSS, not RSS: workers share pages, and
+# summing RSS would count them once each. Every 2 s: smaps_rollup walks the whole
+# address space inside the proxy's own cpuset, which is not free on a large heap.
+sample_peak_pss() {
+  local container="$1" out="$2" stop="$3" peak=0 pss
+  while [ ! -e "${stop}" ]; do
+    pss="$(docker exec -u 0 "${container}" sh -c 'cat /proc/[0-9]*/smaps_rollup 2>/dev/null' 2>/dev/null \
+      | awk '/^Pss:/{s+=$2} END{print s+0}')"
+    [ "${pss:-0}" -gt "${peak}" ] && peak="${pss}"
+    sleep 2
+  done
+  echo "${peak}" > "${out}"
 }
 
 # One waf-* load run. "$@" is what varies: the URL list, or the body and URL.
@@ -152,12 +160,12 @@ waf_load() {
 run_load() {
   local scenario="$1" url="$2" conns="$3" seconds="$4" out="$5"
   case "${scenario}" in
-    waf-*) [ -s "${CORPUS}/benign.txt" ] || die "no corpus: run bench/waf/gen-corpus.py (see its docstring)" ;;
+    waf-*) [ -s "${CORPUS}/blocked.txt" ] || die "no corpus: run bench/waf/gen-corpus.py (see its docstring)" ;;
   esac
   case "${scenario}" in
     waf-get)         waf_load "${conns}" "${seconds}" "${out}" --urls-from-file "${CORPUS}/benign.txt" ;;
     waf-attack-mix)  waf_load "${conns}" "${seconds}" "${out}" --urls-from-file "${CORPUS}/mix.txt" ;;
-    waf-attack-only) waf_load "${conns}" "${seconds}" "${out}" --urls-from-file "${CORPUS}/attacks.txt" ;;
+    waf-attack-only) waf_load "${conns}" "${seconds}" "${out}" --urls-from-file "${CORPUS}/blocked.txt" ;;
     waf-form)        waf_load "${conns}" "${seconds}" "${out}" -m POST -T application/x-www-form-urlencoded -D "${CORPUS}/form.txt" "${url}" ;;
     waf-json-16k)    waf_load "${conns}" "${seconds}" "${out}" -m POST -T application/json -D "${CORPUS}/json-16k.json" "${url}" ;;
     waf-json-128k)   waf_load "${conns}" "${seconds}" "${out}" -m POST -T application/json -D "${CORPUS}/json-128k.json" "${url}" ;;
@@ -173,9 +181,30 @@ run_load() {
   esac
 }
 
+# A WAF target that blocks benign traffic answers without touching the upstream
+# and looks fast; one whose rules did not load looks fast too. Neither is a result.
+check_status_mix() {
+  local scenario="$1" target="$2" file="$3" blocked
+  blocked="$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1]))["status_codes"]; t=sum(c.values()) or 1; print(round(100*c.get("403",0)/t))' "${file}")"
+  case "${scenario}:${target}" in
+    waf-get:*|waf-form:*|waf-json-*:*)
+      [ "${blocked}" -eq 0 ] || die "${target}/${scenario}: ${blocked}% of benign requests were blocked" ;;
+    waf-attack-only:nginx-modsec|waf-attack-only:caddy-coraza|waf-attack-only:prx-waf)
+      [ "${blocked}" -ge 90 ] || die "${target}/${scenario}: only ${blocked}% blocked; are the rules loaded?" ;;
+    waf-attack-mix:nginx-modsec|waf-attack-mix:caddy-coraza|waf-attack-mix:prx-waf)
+      { [ "${blocked}" -ge 5 ] && [ "${blocked}" -le 15 ]; } || die "${target}/${scenario}: ${blocked}% blocked, expected ~10%" ;;
+    waf-attack-*:*)
+      [ "${blocked}" -eq 0 ] || die "${target}/${scenario}: ${blocked}% blocked by a target with no WAF" ;;
+  esac
+}
+
 run_one() {
   local target="$1" scenario="$2"
   container_for "${target}" >/dev/null   # reject an unknown target before starting anything
+  case "${scenario}" in
+    waf-*) ;;
+    *) [ -z "${RATE}" ] || die "RATE only applies to waf-* scenarios" ;;
+  esac
   require_tools "${scenario}"
 
   local path conns url sha stamp
@@ -196,13 +225,22 @@ run_one() {
   run_load "${scenario}" "${url}" "${conns}" "${WARMUP}" "${tmp}/warmup.out" || true
 
   echo "    measuring..."
-  local stats_pid
-  # Backgrounded here, not inside the function: a $(...) around a background job
-  # blocks until the job ends, which sampled an idle proxy before the load began.
-  sample_process_stats "$(container_for "${target}")" "${tmp}/stats.json" "${DURATION}" &
-  stats_pid=$!
+  # CPU is read right before and right after the load, in this shell, so the
+  # window is the load and not a sampler loop that outlives it.
+  local container pss_pid cpu_start cpu_end t_start t_end cpu_delta
+  container="$(container_for "${target}")"
+  sample_peak_pss "${container}" "${tmp}/pss" "${tmp}/stop" &
+  pss_pid=$!
+  cpu_start="$(cpu_ticks "${container}")"; t_start="$(date +%s)"
   run_load "${scenario}" "${url}" "${conns}" "${DURATION}" "${tmp}/load.out"
-  wait "${stats_pid}" 2>/dev/null || true
+  cpu_end="$(cpu_ticks "${container}")"; t_end="$(date +%s)"
+  touch "${tmp}/stop"; wait "${pss_pid}" 2>/dev/null || true
+  # A worker that died mid-run takes its ticks with it; never report negative CPU.
+  cpu_delta=$(( cpu_end - cpu_start )); [ "${cpu_delta}" -ge 0 ] || cpu_delta=0
+  local cpus="${BENCH_PROXY_CPUS:-0,1}"
+  printf '{"peak_rss_kb":%s,"cpu_ticks":%s,"cpu_window_s":%s,"proxy_cpus":%s}\n' \
+    "$(cat "${tmp}/pss" 2>/dev/null || echo 0)" "${cpu_delta}" "$(( t_end - t_start ))" \
+    "$(echo "${cpus}" | tr ',' '\n' | wc -l | tr -d ' ')" > "${tmp}/stats.json"
 
   local out="${RESULT_DIR}/${scenario}${RATE:+-q${RATE}}-${target}-${sha}.json"
   python3 "${ROOT}/scripts/bench-parse.py" \
@@ -216,7 +254,9 @@ run_one() {
     --timestamp "${stamp}" \
     --load-output "${tmp}/load.out" \
     --stats "${tmp}/stats.json" \
+    ${RATE:+--rate "${RATE}"} \
     > "${out}"
+  check_status_mix "${scenario}" "${target}" "${out}"
 
   stop_target "${target}"
   echo "    wrote ${out}"
@@ -229,7 +269,7 @@ main() {
     for target in ${TARGETS:-prx nginx haproxy}; do
       run_one "${target}" "${scenario}"
     done
-    "${ROOT}/scripts/bench-compare.sh" "${scenario}"
+    RATE="${RATE}" "${ROOT}/scripts/bench-compare.sh" "${scenario}"
     return
   fi
   target="${1:?target required: prx|nginx|haproxy}"

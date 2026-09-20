@@ -103,6 +103,12 @@ async fn serve(mut stream: TcpStream, bodies: Arc<Bodies>) -> io::Result<()> {
             "/healthz" => Arc::new(response(b"ok\n")),
             _ => bodies.small.clone(),
         };
+        // A chunked body cannot be framed here. Answering anyway would read the
+        // chunks as further requests and return 200s that mean nothing, so the
+        // connection is closed and the load generator reports errors instead.
+        if header(&buf[..head_end], b"transfer-encoding").is_some() {
+            return Ok(());
+        }
         let body_len = content_length(&buf[..head_end]);
 
         // Drop the request body: what is already buffered, then the rest off
@@ -124,21 +130,24 @@ async fn serve(mut stream: TcpStream, bodies: Arc<Bodies>) -> io::Result<()> {
     }
 }
 
+/// Value of the first header called `name`, matched case-insensitively.
+fn header<'a>(head: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+    head.split(|b| *b == b'\n').find_map(|line| {
+        let colon = line.iter().position(|b| *b == b':')?;
+        line[..colon]
+            .eq_ignore_ascii_case(name)
+            .then(|| &line[colon + 1..])
+    })
+}
+
 // ponytail: Content-Length only. Every proxy under test forwards a length for
 // the fixed-size bodies oha sends; add chunked decoding if a scenario needs it.
+// Until then a chunked request closes the connection (see `serve`).
 fn content_length(head: &[u8]) -> usize {
-    for line in head.split(|b| *b == b'\n') {
-        let Some(colon) = line.iter().position(|b| *b == b':') else {
-            continue;
-        };
-        if line[..colon].eq_ignore_ascii_case(b"content-length") {
-            return std::str::from_utf8(&line[colon + 1..])
-                .ok()
-                .and_then(|v| v.trim().parse().ok())
-                .unwrap_or(0);
-        }
-    }
-    0
+    header(head, b"content-length")
+        .and_then(|v| std::str::from_utf8(v).ok())
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 /// Returns the index just past the `\r\n\r\n` that ends the request head.
@@ -156,7 +165,7 @@ fn request_path(head: &[u8]) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::content_length;
+    use super::{content_length, header};
 
     #[test]
     fn reads_content_length_case_insensitively() {
@@ -169,5 +178,13 @@ mod tests {
     #[test]
     fn no_header_means_no_body() {
         assert_eq!(content_length(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"), 0);
+    }
+
+    #[test]
+    fn a_header_value_that_names_another_header_is_not_that_header() {
+        let head =
+            b"POST / HTTP/1.1\r\nX-Note: content-length: 9\r\nTransfer-Encoding: chunked\r\n\r\n";
+        assert_eq!(content_length(head), 0);
+        assert!(header(head, b"transfer-encoding").is_some());
     }
 }

@@ -732,6 +732,19 @@ This is the first proxy-vs-proxy run the harness has produced, and bare prx spen
 
 **Resolved blockers.** (1) The Docker disk filled because `Dockerfile` does `COPY . .` and `.dockerignore` only excluded the top-level `target/`, so an image build copied `.claude/worktrees/*/target` (2.8 GB) into the build cache; `.dockerignore` fixed, cache pruned. (2) The prx `Dockerfile` pinned `rust:1.85` while `rcgen`/`time` need ≥ 1.88; now 1.93 and the image builds. (3) The `prx` compose service passed `-c <toml>`, which pingora reads as its own YAML server conf, so the bench prx had never started; the path goes in `PRX_CONFIG` only.
 
+### Review of Phase A (independent reviewer, 2026-09-20) — what changed and what it invalidates
+
+An independent read-only review returned 17 findings. One was checked and dismissed: the `nginx` and `nginx-modsec` images run a **byte-identical** `/usr/sbin/nginx` (same sha256, same configure arguments), so the twins already differ by the WAF module only. The rest were fixed:
+
+- **`verdicts.sh` could certify a comparison it never made.** `join` drops URLs present in one file only, timeouts were booked as "allowed", and nothing tied a file to the target that produced it. It now refuses files that do not cover the whole current corpus, treats anything but 200/403 as a failed run, checks which container holds the port, and sends the same headers as the load scenarios. The "0 disagreements in 1,861 URLs" above was re-checked and holds (both files had 1,861 rows, only 200/403), but it must be re-run on the new corpus.
+- **The CPU window was longer than the load window** (one run reported 127 CPU-seconds on a 120 CPU-second budget). CPU is now read synchronously right before and after the load; PSS is sampled separately every 2 s. Results carry `cpu_window_s`, `proxy_cpus` and **`cpu_utilisation`**.
+- **Saturation was never checked.** At 64 connections prx was only ~77 % CPU-busy, so its "18k rps" is connection-bound and **not comparable** to nginx's rps; only CPU µs/request is. Treat any saturation row under ~90 % `cpu_utilisation` as not a W2 data point, and raise `CONNECTIONS` until the proxy is the limit.
+- **`waf-attack-only` was one-third allowed traffic.** The corpus now has two lists: `attacks.txt` (all 859, for verdicts, where an allow is as telling as a block) and `blocked.txt` (533 URLs CRS itself expects a PL1 rule to fire on; 98 % are blocked), which the load scenarios use. **The provisional `waf-attack-*` rows above predate this and will move.**
+- `bench.sh` now fails a run whose status mix is wrong for its scenario (benign blocked, attacks not blocked, a no-WAF target blocking), refuses to start when another run holds the port, rejects `RATE` on non-waf scenarios, clamps negative CPU deltas, and parses `/proc/*/stat` correctly when `comm` contains spaces. `bench-compare.sh` no longer mixes fixed-rate and saturation rows.
+- Both Caddyfiles set `keepalive_idle_conns_per_host 256`; without it Go keeps 2 idle upstream connections per host and redials the rest. **Its effect is not yet measured** — the A/B run collided with another benchmark session on the same port (the collision is what the new port guard prevents). Every provisional Caddy number above predates it.
+- The backend closes a chunked request instead of mis-framing it into meaningless 200s. `#` URIs are dropped from the corpus (curl and oha truncate at the fragment).
+- Proxy-configuration differences that cannot be removed are now recorded in `bench/waf/DEVIATIONS.md`, including why the nginx 504s on `waf-json-128k` are evidence of a stalled worker rather than an isolated proof, and that prx is built without LTO.
+
 ## Threats to validity (say these out loud in `BENCHMARKS.md`)
 
 - **Same host for load and proxy.** `oha` competes for CPU. On Linux pin it with `taskset -c 4-7`; on a 4-core box the proxy numbers are a lower bound.
