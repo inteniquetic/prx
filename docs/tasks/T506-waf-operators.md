@@ -52,3 +52,18 @@
 
 - Anomaly scoring (T507)
 - Persistent collection (`IP`, `SESSION` ที่ต้องมี storage ข้าม request) — ประเมินใน T507
+
+## ส่งต่อจาก T505 (ผลจาก review อิสระของ parser)
+
+ของที่ T505 ตั้งใจปล่อยผ่านตอนโหลด เพราะคำศัพท์อยู่ใน task นี้ — **ต้องปิดที่นี่ ไม่ใช่ตอน request**:
+
+- **ชื่อ operator และ transformation ที่ไม่รู้จักต้องเป็น issue ตอนโหลด** (`@thisIsNotAnOperator`, `t:lowercse`)
+  ตอนนี้โหลดผ่านเงียบ ๆ transformation ที่ถูกข้ามตอน request = กฎตรวจข้อมูลที่ยังไม่ได้แปลง = หลุด
+- **`@rx` ที่ argument เป็นช่องว่างล้วน** ถูก trim เหลือ pattern ว่าง (แมตช์ทุกอย่าง) — ควรเป็น error
+- **`SecDefaultAction` กับ chain:** T505 ให้ทุก link ใน chain รับ `t:` จาก default; ModSecurity v2 ให้เฉพาะหัว chain
+  ยังไม่ได้ยืนยันกับ v3/Coraza — CRS ไม่กระทบ (default ของ CRS ไม่มี `t:`) แต่ต้องเช็กก่อนถึงประตู verdict-equivalence
+- **MULTILINE ทำให้กฎ anchored ที่ negate อ่อนลง** (`!@rx ^(?:GET|POST)$` ผ่านด้วย `GET\nevil`) — เหมือน ModSecurity ทุกประการ
+  จึงไม่ใช่บั๊ก แต่ variable extraction ต้องไม่ปล่อย `\n` เข้าไปในค่าที่ไม่ควรมี (method, protocol)
+- **`RuleSet::needs` คือชุดที่ถูก "อ่าน"** — การเขียน (`setvar`, `initcol`) ลง collection ที่ไม่มีใครอ่านทิ้งได้ แต่ห้ามสมมติว่า collection นั้นมีอยู่
+- `{,n}` ใน regex ถูกปฏิเสธพร้อมเหตุผลตอนโหลด (PCRE2 ≥ 10.43 อ่านเป็น `{0,n}`, PCRE เก่าและ Go อ่านเป็น literal) — CRS ไม่มีใช้
+

@@ -64,10 +64,15 @@ fn crs_loads_whole_and_matches_the_t504_census() {
         }
     );
     // A reload builds the new ruleset off to the side and swaps it in, so
-    // this is time-to-effect, not time a request waits. Only a release build
-    // says anything about it.
-    #[cfg(not(debug_assertions))]
-    assert!(elapsed.as_secs_f64() < 1.0, "CRS took {elapsed:?} to load");
+    // this is time-to-effect, not time a request waits. The budget is 1 s in a
+    // release build (~0.1 s measured). CI runs debug builds (~0.7 s measured),
+    // so there the bound is loose: it exists to catch a 10x regression, not
+    // to measure.
+    let budget = if cfg!(debug_assertions) { 8.0 } else { 1.0 };
+    assert!(
+        elapsed.as_secs_f64() < budget,
+        "CRS took {elapsed:?} to load"
+    );
 
     assert_eq!(loaded.issues, [], "CRS must load without a single issue");
     let summary = &loaded.summary;
