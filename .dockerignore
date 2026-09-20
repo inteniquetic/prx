@@ -1,7 +1,15 @@
 Makefile
 .DS_Store
 .idea/
-target/
+.git/
+.claude/
+.codegraph/
+**/target/
+**/node_modules/
+bench/results/
+bench/waf/crs/
+bench/waf/corpus/
+spike/
 db/
 Dockerfile/
 .gitignore

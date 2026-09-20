@@ -2,7 +2,7 @@
 
 **สถานะ:** ตัดสินแล้ว (T504)
 **วันที่วัด:** 2026-09-20
-**สิ่งที่วัด:** OWASP CRS **v4.21.0** (commit `8d06076`, checkout ที่ tag)
+**สิ่งที่วัด:** OWASP CRS **v4.21.0** (commit `2ac6c00`, checkout ที่ tag)
 **เครื่องมือ:** `spike/waf/` — reproduce ได้ ดู `spike/waf/README.md`
 
 ---

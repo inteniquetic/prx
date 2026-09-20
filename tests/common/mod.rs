@@ -8,7 +8,7 @@
 use std::{
     fs,
     io::{Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -20,6 +20,19 @@ use std::{
 };
 
 use tempfile::TempDir;
+
+/// Accepts from a non-blocking listener and hands back a *blocking* stream.
+///
+/// macOS and the BSDs make an accepted socket inherit `O_NONBLOCK` from its
+/// listener; Linux does not. Left that way, a mock's first `read` returns
+/// `WouldBlock` whenever the accept wins the race against the request bytes
+/// (`set_read_timeout` does nothing on a non-blocking socket), so the mock
+/// hangs up or answers without having read the request, and prx reports a 502.
+pub fn accept_blocking(listener: &TcpListener) -> std::io::Result<(TcpStream, SocketAddr)> {
+    let (stream, peer) = listener.accept()?;
+    stream.set_nonblocking(false)?;
+    Ok((stream, peer))
+}
 
 pub struct UpstreamServer {
     shutdown: Arc<AtomicBool>,
@@ -39,7 +52,7 @@ impl UpstreamServer {
                 .expect("failed to set nonblocking upstream listener");
 
             while !stop.load(Ordering::Relaxed) {
-                match listener.accept() {
+                match accept_blocking(&listener) {
                     Ok((mut stream, _)) => {
                         let _ = handle_upstream_conn(&mut stream, body);
                     }
@@ -201,7 +214,7 @@ impl EchoHeadersUpstream {
                 .expect("failed to set nonblocking echo listener");
 
             while !stop.load(Ordering::Relaxed) {
-                match listener.accept() {
+                match accept_blocking(&listener) {
                     Ok((mut stream, _)) => {
                         let _ = echo_request_head(&mut stream);
                     }
@@ -290,7 +303,7 @@ impl SlowUpstream {
                 .expect("failed to set nonblocking slow listener");
 
             while !stop.load(Ordering::Relaxed) {
-                match listener.accept() {
+                match accept_blocking(&listener) {
                     Ok((mut stream, _)) => {
                         let stop = stop.clone();
                         thread::spawn(move || {
@@ -364,7 +377,7 @@ impl CountingRefusedUpstream {
                 .expect("failed to set nonblocking counting listener");
 
             while !stop.load(Ordering::Relaxed) {
-                match listener.accept() {
+                match accept_blocking(&listener) {
                     Ok((stream, _)) => {
                         counter.fetch_add(1, Ordering::Relaxed);
                         // Drop without answering: the proxy sees the connection
@@ -447,7 +460,7 @@ impl CountingUpstream {
                 .expect("failed to set nonblocking listener");
 
             while !stop.load(Ordering::Relaxed) {
-                match listener.accept() {
+                match accept_blocking(&listener) {
                     Ok((mut stream, _)) => {
                         let counter = counter.clone();
                         thread::spawn(move || {
@@ -526,7 +539,7 @@ impl HeaderControlledUpstream {
                 .expect("failed to set nonblocking listener");
 
             while !stop.load(Ordering::Relaxed) {
-                match listener.accept() {
+                match accept_blocking(&listener) {
                     Ok((mut stream, _)) => {
                         counter.fetch_add(1, Ordering::Relaxed);
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
@@ -629,7 +642,7 @@ impl BigBodyUpstream {
             let body = "a".repeat(body_len);
 
             while !stop.load(Ordering::Relaxed) {
-                match listener.accept() {
+                match accept_blocking(&listener) {
                     Ok((mut stream, _)) => {
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                         let mut buf = [0u8; 4096];

@@ -35,7 +35,8 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    command: ["-c", "/etc/prx/Prx.toml"]
+    # The config path goes in PRX_CONFIG. `-c` belongs to pingora and names its
+    # own YAML server conf, so passing the TOML there fails at start-up.
     environment:
       PRX_CONFIG: "/etc/prx/Prx.toml"
       PRX_ADMIN_LISTEN: "127.0.0.1:9091"
@@ -45,6 +46,7 @@ services:
       - "18080:8080"
       - "19090:9090"
     cpuset: "${BENCH_PROXY_CPUS:-0,1}"
+    cap_add: ["SYS_PTRACE"]   # lets the sampler read PSS of non-root workers
     ulimits:
       nofile:
         soft: 65535
@@ -55,12 +57,15 @@ services:
   nginx:
     profiles: ["nginx"]
     container_name: bench-nginx
-    image: nginx:1.27-alpine
+    # Same nginx version as the nginx-modsec image, so the twins differ by the
+    # WAF and not by the proxy build.
+    image: nginx:1.30.5-alpine
     volumes:
       - ./configs/nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
       - "18080:8080"
     cpuset: "${BENCH_PROXY_CPUS:-0,1}"
+    cap_add: ["SYS_PTRACE"]   # lets the sampler read PSS of non-root workers
     ulimits:
       nofile:
         soft: 65535
@@ -77,12 +82,72 @@ services:
     ports:
       - "18080:8080"
     cpuset: "${BENCH_PROXY_CPUS:-0,1}"
+    cap_add: ["SYS_PTRACE"]   # lets the sampler read PSS of non-root workers
     ulimits:
       nofile:
         soft: 65535
         hard: 65535
     depends_on: [backend1, backend2]
     networks: [bench]
+
+  # --- WAF comparison targets (docs/WAF-BENCH-PLAN.md) ---------------------
+  # Every WAF target mounts the same ./waf: one SecLang config, one CRS checkout
+  # (run bench/waf/fetch-crs.sh first).
+
+  # The image's entrypoint templates its own nginx + ModSecurity config from env
+  # vars. It is bypassed so this target differs from `nginx` by three lines.
+  nginx-modsec:
+    profiles: ["nginx-modsec"]
+    container_name: bench-nginx-modsec
+    # nginx 1.30.5 + libmodsecurity3, pinned by digest (tag: nginx-alpine, 2026-09-20).
+    image: ${BENCH_MODSEC_IMAGE:-owasp/modsecurity-crs@sha256:3452cc2f52ae0ff5ddfe039afa9320d75da88d1a657252e5a51fc8e0a5f2ef30}
+    entrypoint: ["nginx", "-c", "/bench/nginx-modsec.conf", "-g", "daemon off;"]
+    healthcheck:
+      disable: true   # the image's probe would add its own requests to the run
+    volumes:
+      - ./configs/nginx-modsec.conf:/bench/nginx-modsec.conf:ro
+      - ./waf:/bench/waf:ro
+    ports:
+      - "18080:8080"
+    cpuset: "${BENCH_PROXY_CPUS:-0,1}"
+    cap_add: ["SYS_PTRACE"]   # lets the sampler read PSS of non-root workers
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    depends_on: [backend1, backend2]
+    networks: [bench]
+
+  caddy: &caddy
+    profiles: ["caddy"]
+    container_name: bench-caddy
+    build:
+      context: ./caddy
+      args:
+        CORAZA_CADDY: "${BENCH_CORAZA_CADDY:-v2.6.1}"
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    environment:
+      GOMAXPROCS: "4"
+    volumes:
+      - ./configs/Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "18080:8080"
+    cpuset: "${BENCH_PROXY_CPUS:-0,1}"
+    cap_add: ["SYS_PTRACE"]   # lets the sampler read PSS of non-root workers
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    depends_on: [backend1, backend2]
+    networks: [bench]
+
+  caddy-coraza:
+    <<: *caddy
+    profiles: ["caddy-coraza"]
+    container_name: bench-caddy-coraza
+    volumes:
+      - ./configs/Caddyfile.coraza:/etc/caddy/Caddyfile:ro
+      - ./waf:/bench/waf:ro
 
 networks:
   bench:

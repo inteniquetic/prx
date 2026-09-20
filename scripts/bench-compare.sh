@@ -4,6 +4,7 @@
 # result file for the current commit (or for the sha given as $2).
 #
 # Usage: scripts/bench-compare.sh <scenario> [git-sha]
+#        RATE=<rps> scripts/bench-compare.sh <scenario> [git-sha]   fixed-rate runs
 
 set -euo pipefail
 
@@ -11,16 +12,21 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCENARIO="${1:?scenario required}"
 SHA="${2:-$(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 
-python3 - "${ROOT}/bench/results" "${SCENARIO}" "${SHA}" <<'PY'
+python3 - "${ROOT}/bench/results" "${SCENARIO}" "${SHA}" "${RATE:-}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 results_dir, scenario, sha = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+rate = int(sys.argv[4]) if sys.argv[4] else None
 rows = []
 for path in sorted(results_dir.glob(f"{scenario}-*-{sha}.json")):
     with path.open() as fh:
-        rows.append(json.load(fh))
+        row = json.load(fh)
+    # The glob also matches <scenario>-q<rate>-<target>; a saturation table and
+    # a fixed-rate table must never share rows.
+    if row["scenario"] == scenario and row.get("rate") == rate:
+        rows.append(row)
 
 if not rows:
     print(f"no results for scenario={scenario} sha={sha} in {results_dir}")
@@ -29,8 +35,8 @@ if not rows:
 def fmt(value, digits=2):
     return "-" if value is None else f"{value:,.{digits}f}"
 
-header = f"{'target':<10}{'rps':>14}{'p50 ms':>10}{'p99 ms':>10}{'p999 ms':>10}{'cpu us/req':>12}{'peak RSS MB':>13}{'success':>10}"
-print(f"\nscenario: {scenario}   commit: {sha}")
+header = f"{'target':<14}{'rps':>14}{'p50 ms':>10}{'p99 ms':>10}{'p999 ms':>10}{'cpu us/req':>12}{'cpu busy':>10}{'peak PSS MB':>13}{'success':>10}"
+print(f"\nscenario: {scenario}   commit: {sha}   " + (f"fixed rate: {rate} rps" if rate else "saturation"))
 print(header)
 print("-" * len(header))
 
@@ -39,12 +45,13 @@ for row in rows:
     lat = row["latency_ms"]
     res = row["resources"]
     print(
-        f"{row['target']:<10}"
+        f"{row['target']:<14}"
         f"{fmt(row['throughput']['requests_per_second']):>14}"
         f"{fmt(lat.get('p50')):>10}"
         f"{fmt(lat.get('p99')):>10}"
         f"{fmt(lat.get('p999')):>10}"
         f"{fmt(res.get('cpu_us_per_request'), 3):>12}"
+        f"{('-' if res.get('cpu_utilisation') is None else format(res['cpu_utilisation'] * 100, '.0f') + '%'):>10}"
         f"{fmt((res.get('peak_rss_kb') or 0) / 1024):>13}"
         f"{row['throughput']['success_rate'] * 100:>9.2f}%"
     )
