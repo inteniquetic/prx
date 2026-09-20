@@ -226,6 +226,26 @@ pub fn inc_rate_limited(route: &str, kind: &str) {
     RATE_LIMITED_TOTAL.with_label_values(&[route, kind]).inc();
 }
 
+static PLUGIN_RESPONSES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "prx_plugin_responses_total",
+        "Requests answered by a plugin instead of an upstream, by route and plugin",
+        &["route", "plugin"]
+    )
+    .expect("failed to register prx_plugin_responses_total")
+});
+
+/// A plugin answered a request itself (T501).
+///
+/// Separate from `prx_rate_limited_total` on purpose: a WAF block and a rate
+/// limit are both "the proxy said no", but an operator debugging one does not
+/// want the other mixed into the same number.
+pub fn inc_plugin_response(route: &str, plugin: &str) {
+    PLUGIN_RESPONSES_TOTAL
+        .with_label_values(&[route, plugin])
+        .inc();
+}
+
 pub fn set_limiter_entries(route: &str, entries: usize) {
     LIMITER_ENTRIES
         .with_label_values(&[route])

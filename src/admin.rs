@@ -295,6 +295,33 @@ struct AdminConfigPayload {
     observability: AdminObservabilityPayload,
     services: Vec<AdminServicePayload>,
     routes: Vec<AdminRoutePayload>,
+    /// The [[plugin]] blocks as declared, so the UI can list what a route may
+    /// refer to (T501).
+    plugins: Vec<AdminPluginPayload>,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminPluginPayload {
+    name: String,
+    kind: String,
+    enabled: bool,
+    /// The plugin's own settings, whose shape depends on `kind`. Passed
+    /// through as JSON rather than typed here, for the same reason the config
+    /// keeps it as a raw TOML value.
+    config: serde_json::Value,
+}
+
+impl AdminPluginPayload {
+    fn from_config(plugin: &crate::config::PluginConfig) -> Self {
+        Self {
+            name: plugin.name.clone(),
+            kind: plugin.kind.clone(),
+            enabled: plugin.enabled,
+            // A TOML table converts cleanly; anything that does not is
+            // reported as null rather than failing the whole config read.
+            config: serde_json::to_value(&plugin.config).unwrap_or(serde_json::Value::Null),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -423,6 +450,8 @@ struct AdminRoutePayload {
     rate_limit: RateLimitConfig,
     concurrency_limit: ConcurrencyLimitConfig,
     cache: CacheConfig,
+    /// Names of the [[plugin]] blocks this route runs, in order (T501).
+    plugins: Vec<String>,
 }
 
 impl AdminRoutePayload {
@@ -440,6 +469,7 @@ impl AdminRoutePayload {
             rate_limit: route.rate_limit.clone(),
             concurrency_limit: route.concurrency_limit.clone(),
             cache: route.cache.clone(),
+            plugins: route.plugins.clone(),
         }
     }
 }
@@ -585,6 +615,8 @@ struct RouteRequestPayload {
     pub concurrency_limit: Option<ConcurrencyLimitConfig>,
     #[serde(default)]
     pub cache: Option<CacheConfig>,
+    #[serde(default)]
+    pub plugins: Option<Vec<String>>,
 }
 
 /// Live state of every service, as the running proxy sees it right now.
@@ -813,11 +845,18 @@ impl From<PrxConfig> for AdminConfigPayload {
             .map(AdminRoutePayload::from_config)
             .collect();
 
+        let plugins = config
+            .plugins
+            .iter()
+            .map(AdminPluginPayload::from_config)
+            .collect();
+
         Self {
             server,
             observability,
             services,
             routes,
+            plugins,
         }
     }
 }
@@ -2464,6 +2503,7 @@ async fn create_route(State(state): State<AdminState>, body: Body) -> Response<B
                     .concurrency_limit
                     .unwrap_or(defaults.concurrency_limit),
                 cache: payload.cache.unwrap_or(defaults.cache),
+                plugins: payload.plugins.unwrap_or(defaults.plugins),
             };
 
             config.routes.push(route);
@@ -2605,6 +2645,9 @@ async fn update_route(
                 cache: payload
                     .cache
                     .unwrap_or_else(|| config.routes[index].cache.clone()),
+                plugins: payload
+                    .plugins
+                    .unwrap_or_else(|| config.routes[index].plugins.clone()),
             };
 
             config.routes[index] = route;

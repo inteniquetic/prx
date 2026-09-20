@@ -18,6 +18,9 @@ When the config file is saved, the system auto-reloads without restarting the pr
 [server]
 [observability]
 
+[[plugin]]
+[plugin.config]
+
 [[route]]
 [route.circuit_breaker]
 [[route.upstream]]
@@ -669,6 +672,59 @@ Runtime notes:
 - If `sni` is not set, the system derives it from `addr` when possible; otherwise it uses `"localhost"`.
 - `weight` is clamped to `1..256`.
 - Requests sent upstream rewrite the `Host` header to `upstream.sni`.
+
+### 3.x `[[plugin]]` — extensions a route can opt into (T501)
+
+Plugins are declared once at the top level and referenced by name from the
+routes that want them, the same way a route references a service. A route that
+lists none runs exactly as it did before plugins existed.
+
+```toml
+[[plugin]]
+name = "mark"          # what routes refer to; must be unique
+kind = "echo-header"   # which plugin to build; see the table below
+enabled = true         # default true; false keeps the block but never runs it
+
+[plugin.config]        # settings, whose shape depends on `kind`
+request_header = "X-Mark"
+value = "one"
+
+[[route]]
+name = "api"
+service = "api"
+path_prefix = "/"
+plugins = ["mark"]     # order in this list is the order they run in
+```
+
+| Field | Type | Default | Required | Description |
+|---|---|---|---|---|
+| `name` | `string` | — | Yes | Unique; what `route.plugins` refers to |
+| `kind` | `string` | — | Yes | Which plugin to build |
+| `enabled` | `bool` | `true` | No | `false` leaves the block in the file but out of every chain |
+| `config` | `table` | `{}` | No | The plugin's own settings |
+
+Kinds in this build:
+
+| `kind` | What it does |
+|---|---|
+| `echo-header` | Appends a value to a request and/or response header, and can answer the request itself. It exists to exercise the plugin system; it is not meant for production traffic. |
+
+Runtime notes:
+- Plugins run **after** the rate and concurrency limits and **before** the
+  cache lookup. After the limits, so a flood is turned away by the cheap check
+  rather than by whatever a plugin costs; before the cache, so a request a
+  plugin would reject is never handed a stored `200` instead.
+- A plugin that answers the request stops the rest of the chain, and the
+  request never reaches an upstream. `prx_plugin_responses_total{route,plugin}`
+  counts those.
+- Each `[[plugin]]` block is built **once** and shared by every route that
+  names it. Two routes listing the same plugin share its state rather than
+  getting a copy each.
+- A name listed by a route but not declared, an unknown `kind`, or settings the
+  kind rejects are all validation errors with the line they are on — the config
+  is refused before it is applied, not at boot.
+- A `[[plugin]]` no route uses is a warning, not an error: a plugin waiting to
+  be wired up is work in progress, and the file still applies.
 
 ## 4) Important Behavior to Know
 

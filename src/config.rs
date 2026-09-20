@@ -17,6 +17,30 @@ pub struct PrxConfig {
     pub services: Vec<ServiceConfig>,
     #[serde(rename = "route", default)]
     pub routes: Vec<RouteConfig>,
+    /// Plugins are declared once here and referenced by name from the routes
+    /// that want them, the same way a route references a service (T501).
+    #[serde(rename = "plugin", default)]
+    pub plugins: Vec<PluginConfig>,
+}
+
+/// One `[[plugin]]` block.
+///
+/// `config` is left as a raw TOML value because what belongs in it is decided
+/// by `kind`: the registry checks it, not this struct. Keeping it opaque here
+/// is what stops every new plugin from having to add a field to the core
+/// config type.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PluginConfig {
+    pub name: String,
+    pub kind: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "empty_table")]
+    pub config: toml::Value,
+}
+
+fn empty_table() -> toml::Value {
+    toml::Value::Table(toml::map::Map::new())
 }
 
 impl PrxConfig {
@@ -63,6 +87,7 @@ impl PrxConfig {
         self.check_server(&mut out);
         let service_names = self.check_services(&mut out);
         self.check_routes(&service_names, &mut out);
+        self.check_plugins(&mut out);
         self.check_globals(&mut out);
         out
     }
@@ -579,6 +604,112 @@ impl PrxConfig {
                     format!("service[{index}]"),
                     format!("service '{}' is not used by any route", service.name),
                 ));
+            }
+        }
+    }
+
+    /// Plugin blocks and the routes that reference them (T501).
+    ///
+    /// Everything here is checked without building anything: an unknown kind or
+    /// a bad setting is a config error with a path the editor can point at,
+    /// not a panic at boot.
+    fn check_plugins(&self, out: &mut Vec<ConfigIssue>) {
+        let mut declared: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+
+        for (index, plugin) in self.plugins.iter().enumerate() {
+            let at = |field: &str| format!("plugin[{index}].{field}");
+
+            if plugin.name.trim().is_empty() {
+                out.push(ConfigIssue::error(
+                    "plugin_name_empty",
+                    at("name"),
+                    "every [[plugin]] needs a name for routes to refer to",
+                ));
+            }
+
+            if let Some(first) = declared.insert(plugin.name.as_str(), index) {
+                out.push(
+                    ConfigIssue::error(
+                        "duplicate_plugin",
+                        at("name"),
+                        format!("plugin '{}' is declared more than once", plugin.name),
+                    )
+                    .with_hint(format!("first declared as plugin[{first}]")),
+                );
+            }
+
+            if let Some(problem) = crate::plugin::check_plugin_config(&plugin.kind, &plugin.config)
+            {
+                // An unknown kind is about `kind`; a bad setting is about the
+                // settings table. Pointing at the right one is the difference
+                // between the editor highlighting the mistake and highlighting
+                // its neighbour.
+                let known = crate::plugin::known_kinds().contains(&plugin.kind.as_str());
+                let (code, path) = if known {
+                    ("plugin_config_invalid", at("config"))
+                } else {
+                    ("unknown_plugin_kind", at("kind"))
+                };
+                out.push(
+                    ConfigIssue::error(code, path, format!("plugin '{}': {problem}", plugin.name))
+                        .with_hint(format!(
+                            "plugin kinds in this build: {}",
+                            crate::plugin::known_kinds().join(", ")
+                        )),
+                );
+            }
+        }
+
+        let mut used: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (index, route) in self.routes.iter().enumerate() {
+            let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for (slot, wanted) in route.plugins.iter().enumerate() {
+                used.insert(wanted.as_str());
+
+                if !declared.contains_key(wanted.as_str()) {
+                    let mut known: Vec<&str> =
+                        self.plugins.iter().map(|p| p.name.as_str()).collect();
+                    known.sort_unstable();
+                    out.push(
+                        ConfigIssue::error(
+                            "unknown_plugin",
+                            format!("route[{index}].plugins[{slot}]"),
+                            format!(
+                                "route '{}' references unknown plugin '{wanted}'",
+                                route.name
+                            ),
+                        )
+                        .with_hint(if known.is_empty() {
+                            "no [[plugin]] is defined yet".to_string()
+                        } else {
+                            format!("plugins in this config: {}", known.join(", "))
+                        }),
+                    );
+                } else if !seen.insert(wanted.as_str()) {
+                    // Running the same plugin twice on one route is far more
+                    // likely to be a copy-paste slip than a plan.
+                    out.push(ConfigIssue::warning(
+                        "duplicate_route_plugin",
+                        format!("route[{index}].plugins[{slot}]"),
+                        format!(
+                            "route '{}' lists plugin '{wanted}' more than once",
+                            route.name
+                        ),
+                    ));
+                }
+            }
+        }
+
+        for (index, plugin) in self.plugins.iter().enumerate() {
+            if plugin.enabled && !used.contains(plugin.name.as_str()) {
+                out.push(
+                    ConfigIssue::warning(
+                        "unused_plugin",
+                        format!("plugin[{index}].name"),
+                        format!("plugin '{}' is not used by any route", plugin.name),
+                    )
+                    .with_hint("add it to a route's `plugins` list, or remove the block"),
+                );
             }
         }
     }
@@ -1166,6 +1297,7 @@ impl Default for RouteConfig {
             rate_limit: RateLimitConfig::default(),
             concurrency_limit: ConcurrencyLimitConfig::default(),
             cache: CacheConfig::default(),
+            plugins: Vec::new(),
         }
     }
 }
@@ -1273,6 +1405,10 @@ pub struct RouteConfig {
     pub concurrency_limit: ConcurrencyLimitConfig,
     #[serde(default)]
     pub cache: CacheConfig,
+    /// Plugins to run for this route, in this order (T501). Names refer to
+    /// `[[plugin]]` blocks.
+    #[serde(default)]
+    pub plugins: Vec<String>,
 }
 
 /// Short-lived response cache for a route.
@@ -1633,7 +1769,176 @@ mod tests {
             compression: Default::default(),
             services: vec![valid_service("default")],
             routes: vec![valid_route("default", "default")],
+            plugins: Vec::new(),
         }
+    }
+
+    // --- plugins (T501) ----------------------------------------------------
+
+    fn plugin_block(name: &str, kind: &str, settings: toml::Value) -> PluginConfig {
+        PluginConfig {
+            name: name.to_string(),
+            kind: kind.to_string(),
+            enabled: true,
+            config: settings,
+        }
+    }
+
+    fn echo_settings() -> toml::Value {
+        let mut table = toml::map::Map::new();
+        table.insert(
+            "request_header".into(),
+            toml::Value::String("x-mark".into()),
+        );
+        table.insert("value".into(), toml::Value::String("one".into()));
+        toml::Value::Table(table)
+    }
+
+    fn codes(issues: &[ConfigIssue]) -> Vec<&'static str> {
+        issues.iter().map(|issue| issue.code).collect()
+    }
+
+    #[test]
+    fn a_config_with_no_plugins_reports_nothing_about_them() {
+        let issues = valid_config().check();
+        assert!(
+            !codes(&issues).iter().any(|code| code.contains("plugin")),
+            "an untouched config grew a plugin complaint: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn a_route_can_use_a_declared_plugin() {
+        let mut cfg = valid_config();
+        cfg.plugins
+            .push(plugin_block("mark", "echo-header", echo_settings()));
+        cfg.routes[0].plugins = vec!["mark".to_string()];
+        let issues = cfg.check();
+        assert!(
+            issues
+                .iter()
+                .all(|issue| issue.severity != IssueSeverity::Error),
+            "a valid plugin config was rejected: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_plugin_kind_is_an_error_at_its_own_field() {
+        let mut cfg = valid_config();
+        cfg.plugins
+            .push(plugin_block("mark", "not-a-real-kind", echo_settings()));
+        cfg.routes[0].plugins = vec!["mark".to_string()];
+        let issue = cfg
+            .check()
+            .into_iter()
+            .find(|issue| issue.code == "unknown_plugin_kind")
+            .expect("an unknown kind should be reported");
+        // The path is what the editor highlights; pointing at the block
+        // instead of the field is the difference between a useful error and a
+        // vague one.
+        assert_eq!(issue.path, "plugin[0].kind");
+        assert!(issue.hint.is_some_and(|hint| hint.contains("echo-header")));
+    }
+
+    #[test]
+    fn a_bad_setting_is_reported_against_the_settings_table() {
+        let mut cfg = valid_config();
+        // `value` is required, and nothing else is set either.
+        cfg.plugins.push(plugin_block(
+            "mark",
+            "echo-header",
+            toml::Value::Table(toml::map::Map::new()),
+        ));
+        cfg.routes[0].plugins = vec!["mark".to_string()];
+        let issue = cfg
+            .check()
+            .into_iter()
+            .find(|issue| issue.code == "plugin_config_invalid")
+            .expect("a missing required setting should be reported");
+        assert_eq!(issue.path, "plugin[0].config");
+    }
+
+    #[test]
+    fn a_route_referring_to_a_plugin_that_does_not_exist_is_an_error() {
+        let mut cfg = valid_config();
+        cfg.routes[0].plugins = vec!["ghost".to_string()];
+        let issue = cfg
+            .check()
+            .into_iter()
+            .find(|issue| issue.code == "unknown_plugin")
+            .expect("an unknown plugin name should be reported");
+        assert_eq!(issue.path, "route[0].plugins[0]");
+    }
+
+    #[test]
+    fn declaring_the_same_plugin_twice_is_an_error() {
+        let mut cfg = valid_config();
+        cfg.plugins
+            .push(plugin_block("mark", "echo-header", echo_settings()));
+        cfg.plugins
+            .push(plugin_block("mark", "echo-header", echo_settings()));
+        cfg.routes[0].plugins = vec!["mark".to_string()];
+        assert!(codes(&cfg.check()).contains(&"duplicate_plugin"));
+    }
+
+    #[test]
+    fn a_plugin_no_route_uses_is_a_warning_not_an_error() {
+        let mut cfg = valid_config();
+        cfg.plugins
+            .push(plugin_block("mark", "echo-header", echo_settings()));
+        let issue = cfg
+            .check()
+            .into_iter()
+            .find(|issue| issue.code == "unused_plugin")
+            .expect("an unused plugin should be mentioned");
+        // A plugin waiting to be wired up is a work in progress, not a broken
+        // config: warning, so the file still applies.
+        assert_eq!(issue.severity, IssueSeverity::Warning);
+    }
+
+    #[test]
+    fn listing_a_plugin_twice_on_one_route_is_a_warning() {
+        let mut cfg = valid_config();
+        cfg.plugins
+            .push(plugin_block("mark", "echo-header", echo_settings()));
+        cfg.routes[0].plugins = vec!["mark".to_string(), "mark".to_string()];
+        let issue = cfg
+            .check()
+            .into_iter()
+            .find(|issue| issue.code == "duplicate_route_plugin")
+            .expect("a repeated plugin should be mentioned");
+        assert_eq!(issue.severity, IssueSeverity::Warning);
+    }
+
+    #[test]
+    fn plugins_survive_a_round_trip_through_toml() {
+        let text = r#"
+[[plugin]]
+name = "mark"
+kind = "echo-header"
+
+[plugin.config]
+request_header = "x-mark"
+value = "one"
+
+[[service]]
+name = "api"
+
+[[service.upstream]]
+addr = "127.0.0.1:3000"
+
+[[route]]
+name = "api"
+service = "api"
+path_prefix = "/"
+is_default = true
+plugins = ["mark"]
+"#;
+        let cfg = PrxConfig::from_toml_str(text).expect("config should parse and validate");
+        assert_eq!(cfg.plugins.len(), 1);
+        assert_eq!(cfg.plugins[0].kind, "echo-header");
+        assert!(cfg.plugins[0].enabled, "plugins are on unless turned off");
+        assert_eq!(cfg.routes[0].plugins, vec!["mark".to_string()]);
     }
 
     #[test]

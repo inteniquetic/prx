@@ -6,6 +6,7 @@ import {
   createDefaultRateLimit,
   createDefaultRouteCache,
   type HeaderRules,
+  type PluginConfig,
   type PrxConfig,
   type RouteConfig,
   type ServiceConfig,
@@ -198,6 +199,9 @@ const renderRoute = (route: RouteConfig): string => {
   if (!route.enabled) {
     lines.push('enabled = false');
   }
+  if (route.plugins.length > 0) {
+    lines.push(`plugins = ${formatArray(route.plugins)}`);
+  }
 
   lines.push(...renderHeaderRules(route.request_headers, 'request_headers'));
   lines.push(...renderHeaderRules(route.response_headers, 'response_headers'));
@@ -274,6 +278,52 @@ const renderRoute = (route: RouteConfig): string => {
   return lines.join('\n');
 };
 
+/**
+ * One `[[plugin]]` block (T501).
+ *
+ * `config` is whatever the kind accepts, so it is rendered generically rather
+ * than field by field — this encoder cannot know what a plugin needs, and
+ * guessing is how a key gets dropped.
+ */
+const renderPlugin = (plugin: PluginConfig): string => {
+  const lines = ['[[plugin]]'];
+  lines.push(`name = "${esc(plugin.name)}"`);
+  lines.push(`kind = "${esc(plugin.kind)}"`);
+  if (!plugin.enabled) {
+    lines.push('enabled = false');
+  }
+
+  const entries = Object.entries(plugin.config ?? {});
+  if (entries.length > 0) {
+    lines.push('');
+    lines.push('[plugin.config]');
+    for (const [key, value] of entries) {
+      const rendered = renderTomlValue(value);
+      if (rendered !== null) {
+        lines.push(`${key} = ${rendered}`);
+      }
+    }
+  }
+  return lines.join('\n');
+};
+
+/**
+ * A plugin setting, as TOML.
+ *
+ * Returns `null` for anything this encoder cannot represent, so an unknown
+ * shape is left out loudly rather than written as `[object Object]`.
+ */
+const renderTomlValue = (value: unknown): string | null => {
+  if (typeof value === 'string') return `"${esc(value)}"`;
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (Array.isArray(value)) {
+    const items = value.map(renderTomlValue);
+    return items.every((item) => item !== null) ? `[${items.join(', ')}]` : null;
+  }
+  return null;
+};
+
 export const encodeToml = (config: PrxConfig): string => {
   const lines: string[] = [];
 
@@ -347,6 +397,12 @@ export const encodeToml = (config: PrxConfig): string => {
   lines.push(`access_log = ${toTomlBool(config.observability.access_log)}`);
   if (config.observability.prometheus_listen.trim()) {
     lines.push(`prometheus_listen = "${esc(config.observability.prometheus_listen)}"`);
+  }
+
+  const pluginBlocks = (config.plugins ?? []).map(renderPlugin);
+  if (pluginBlocks.length > 0) {
+    lines.push('');
+    lines.push(pluginBlocks.join('\n\n'));
   }
 
   const serviceBlocks = config.services.map(renderService);
