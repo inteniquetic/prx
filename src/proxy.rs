@@ -812,7 +812,11 @@ impl ProxyHttp for PrxProxy {
             ctx.sticky_cookie = Some(upstream.addr_hash());
         }
 
-        let mut peer = HttpPeer::new(upstream.addr.clone(), upstream.tls, upstream.sni.clone());
+        let mut peer = match upstream.socket_addr() {
+            Some(addr) => HttpPeer::new(addr, upstream.tls, upstream.sni.clone()),
+            // Not resolved yet: look it up inline, as every request used to.
+            None => HttpPeer::new(upstream.addr.clone(), upstream.tls, upstream.sni.clone()),
+        };
         // Without this the peer defaults to HTTP/1.1, which makes gRPC
         // impossible: it needs end-to-end HTTP/2 to carry trailers (T115).
         peer.options.alpn = match service.upstream_h2 {
