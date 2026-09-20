@@ -11,6 +11,7 @@
 | สิ่งที่อยากรู้ | สถานะ |
 |---|---|
 | prx เร็วกว่า nginx/haproxy ไหม | **ยังไม่รู้** — ต้องรัน `scripts/bench.sh --all` บนเครื่องที่มี Docker |
+| prx + WAF เร็วกว่า nginx + ModSecurity / Coraza ไหม | **ยังไม่รู้** — harness และคู่แข่งพร้อมแล้ว ([§7](#7-waf-prx--waf-vs-nginx--modsecurity-vs-caddy--coraza-ยังไม่ได้วัด)) รอ WAF ของ prx (T505–T507) และเครื่องอ้างอิง |
 | route matching แพงแค่ไหน | วัดแล้ว: 55–84 ns ต่อ request ไม่ว่าจะมี 10 หรือ 1000 routes |
 | ปัญหา wildcard ที่เจอตอนแรก | แก้แล้ว — 59.3 µs → 81.9 ns (724×) |
 | reload config แพงแค่ไหน | วัดแล้ว: ~10.8 ms ที่ 1000 routes (ส่วนใหญ่คือ TOML parse) |
@@ -141,3 +142,36 @@ p99 ดีกว่า ≥ 20% ตอน connection reuse สูง, peak RSS �
 ## 6. วิธี reproduce
 
 อ่าน [`bench/README.md`](../bench/README.md) — มีข้อกำหนดเครื่อง, วิธีรัน, และเหตุผลว่าทำไมผลบนแล็ปท็อปเชื่อไม่ได้
+
+## 7. WAF: prx + WAF vs nginx + ModSecurity vs Caddy + Coraza (ยังไม่ได้วัด)
+
+แผน เกณฑ์ชนะ (W1–W6) และวิธีวัดทั้งหมดอยู่ที่ [`WAF-BENCH-PLAN.md`](WAF-BENCH-PLAN.md) — เกณฑ์ถูกเขียนไว้**ก่อน**วัด
+harness พร้อมและรันครบทุก target แล้ว (Phase A) แต่ตัวเลขที่มีตอนนี้มาจากแล็ปท็อป (macOS + OrbStack)
+ซึ่งตามกติกาของหน้านี้**ห้ามเอามาเคลม** จึงไม่ใส่ในตาราง — ดูได้ที่หัวข้อ "Phase A execution log" ของแผน
+
+ทุก target โหลด SecLang config ไฟล์เดียวกัน (`bench/waf/main.conf`) และ CRS **v4.21.0 (`2ac6c00`)** ชุดเดียวกัน
+PL1, anomaly threshold 5, blocking, ไม่ตรวจ response body, ปิด audit log — จุดที่ engine ใดทำตามไม่ได้ต้องจดใน `bench/waf/DEVIATIONS.md` (ตอนนี้ว่าง)
+
+```bash
+bench/waf/fetch-crs.sh
+python3 bench/waf/gen-corpus.py bench/waf/crs bench/waf/corpus 127.0.0.1:18080
+TARGETS="nginx nginx-modsec caddy caddy-coraza prx" scripts/bench.sh --all waf-get          # saturation → RPS, CPU
+RATE=<n> TARGETS="..." scripts/bench.sh --all waf-get                                       # fixed rate → p99
+bench/waf/verdicts.sh <target> && bench/waf/verdicts.sh --diff <a> <b>                      # W1
+```
+
+สิ่งที่ยืนยันแล้วและไม่ขึ้นกับเครื่อง: **ModSecurity กับ Coraza ตัดสิน block/allow ตรงกันทั้ง 1,861 URL ของ corpus**
+(benign 1,000 → 200 ทั้งหมด, attack 861 → บล็อก 580) prx-waf จึงต้องตรงครบทุกข้อก่อนจะมีสิทธิ์ถูกวัดความเร็ว
+
+| Scenario | Metric | nginx-modsec | caddy-coraza | prx-waf |
+|---|---|---|---|---|
+| waf-get | RPS (2 cores) | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่มี_ |
+| waf-get | p99 ที่ rate เดียวกัน | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่มี_ |
+| waf-get | WAF tax: CPU µs/req ที่เพิ่ม | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่มี_ |
+| waf-attack-mix | RPS | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่มี_ |
+| waf-attack-only | RPS | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่มี_ |
+| waf-form | RPS / p99 | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่มี_ |
+| waf-json-16k (970 leaf) | RPS / p99 | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่มี_ |
+| waf-json-128k (7,815 leaf) | วินาทีต่อ request | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่มี_ |
+| — | PSS ที่ CRS โหลดครบ (idle / peak ตอนตรวจ body พร้อมกัน) | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่มี_ |
+

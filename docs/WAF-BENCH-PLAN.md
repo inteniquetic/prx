@@ -669,29 +669,34 @@ Status on 2026-09-20 (branch `bench/waf-comparison`, macOS + OrbStack — harnes
 | 5 `caddy`, `caddy-coraza` | done, verified | Caddy 2.11.4 + `coraza-caddy` v2.6.1 (`http.handlers.waf`). Loads the shared `modsec.conf` unchanged — `DEVIATIONS.md` is still empty. Same 200/403 results as `nginx-modsec`, including SQLi inside a JSON body |
 | 6 workloads | done, verified on `nginx` and `nginx-modsec` | `bench-parse.py` now counts responses rather than attempts (oha's `requestsPerSec` includes requests it aborted at the deadline) and survives a run where nothing completed. PSS needed `cap_add: SYS_PTRACE`: without it root cannot read `smaps_rollup` of the unprivileged workers and memory silently read as ~0 |
 | 7 verdict diff | done | Both engines: 1000/1000 benign → 200; of 861 attack URLs 580 → 403 and 281 pass at PL1. **`--diff nginx-modsec caddy-coraza` is empty: 0 disagreements in 1,861 URLs.** There is no noise floor to hide behind — in Task 10 prx-waf must match all 1,861 |
-| 8 baseline | not started | needs the reference Linux machine. Everything it runs has now been exercised end to end here |
+| 8 baseline | procedure run once here (provisional tables below); **publishable run still owed** | needs the reference Linux machine. `BENCHMARKS.md` §7 holds the empty table; T508 budgets are annotated with the provisional competitor numbers |
 
-### First look at the incumbent (harness-debugging numbers — do not publish)
+### Provisional competitor baseline (laptop — orders of magnitude only, do not publish)
 
-macOS + OrbStack, 10 s runs, 64 connections, proxy on 2 CPUs. Good for orders of magnitude only.
+macOS + OrbStack, proxy on 2 CPUs, `oha` on the same host, git `f2bc3b1`. The full Task 8 procedure was run once to prove it end to end: 5 targets × 6 scenarios at saturation, then 5 scenarios at a fixed rate (half the slower WAF target's saturation rps). 20 s runs at 64 connections; JSON scenarios 45–60 s at 8 and 4 connections. No errors, `DEVIATIONS.md` still empty.
 
-| Scenario | `nginx` rps | `nginx-modsec` rps | CPU µs/req off → on | p99 ms off → on | PSS MB off → on |
-|---|---|---|---|---|---|
-| `waf-get` | 68,097 | 1,438 | 27 → 1,380 | 5.0 → 54.6 | 35 → 85 |
-| `waf-attack-mix` | 68,689 | 1,636 | 27 → 1,212 | 6.1 → 68.0 | 35 → 85 |
-| `waf-form` (20 fields, 2 KB) | 64,468 | 502 | 30 → 3,974 | 4.9 → 216 | 35 → 86 |
-| `waf-json-16k` (970 leaf values) | 56,436 | 4 | 35 → 502,558 | 7.7 → 4,096 | 36 → 112 |
-| `waf-json-128k` (7,815 leaf values) | — | one request alone: **2.6 s** | | | |
+**Saturation — throughput, CPU and memory**
 
-| Scenario | `caddy` rps | `caddy-coraza` rps | CPU µs/req off → on | p99 ms off → on | PSS MB off → on |
-|---|---|---|---|---|---|
-| `waf-get` | 23,370 | 2,109 | 77 → 928 | 13.6 → 95.9 | 63 → 170 |
-| `waf-attack-mix` | 23,261 | 2,110 | 77 → 923 | 14.1 → 102 | 64 → 177 |
-| `waf-form` | 20,610 | 259 | 89 → 7,685 | 15.5 → 778 | 48 → 232 |
-| `waf-json-16k` | 16,813 | **0 completed in 10 s** | 104 → — | 17.3 → — | 67 → **7,841** |
-| `waf-json-128k` | — | one request alone: **1.4 s** | | | |
+| Scenario | nginx → +ModSecurity rps | caddy → +Coraza rps | CPU tax µs/req (ModSec / Coraza) | peak PSS MB (ModSec / Coraza) |
+|---|---|---|---|---|
+| `waf-get` | 70,613 → 1,443 | 23,430 → 2,115 | 1,350 / **851** | 85 / 172 |
+| `waf-attack-mix` | 67,301 → 1,598 | 23,996 → 2,097 | 1,217 / **858** | 85 / 184 |
+| `waf-attack-only` | 66,605 → 1,804 | 23,407 → 2,302 | 1,074 / **770** | 84 / 522 |
+| `waf-form` (20 fields) | 63,779 → 497 | 21,251 → 265 | **3,973** / 7,395 | 87 / 226 |
+| `waf-json-16k` (970 leaves, 8 conns) | 21,598 → 10.6 | 17,082 → 12.2 | 189 ms / **163 ms** | 88 / 1,406 |
+| `waf-json-128k` (7,815 leaves, 4 conns) | 11,505 → 0.62 (+5 × 504) | 7,832 → 1.28 | 3.43 s / **1.56 s** | 105 / 5,528 |
 
-Engine against engine (WAF tax in CPU per benign GET): ModSecurity ≈ 1.35 ms, Coraza ≈ 0.85 ms. Coraza is the faster engine on GETs and the slower one on forms; the absolute `caddy-coraza` numbers are held back by Caddy being ~3× slower than nginx as a bare proxy, which is exactly why the tax column exists. **The number prx-waf has to beat on `waf-get` is therefore ~0.85 ms CPU/request and ~2,100 rps on 2 cores** (to be re-measured on the reference machine). T504's 82 µs for all 312 regexes on one string says there is an order of magnitude of room.
+**Fixed rate — latency added by the WAF (on − off, ms)**
+
+| Scenario @ rate | ModSecurity p50 / p99 | Coraza p50 / p99 |
+|---|---|---|
+| `waf-get` @ 721 rps | +0.54 / **+1.2** | **+0.11** / +9.3 |
+| `waf-attack-mix` @ 798 | +0.75 / **+5.8** | **+0.14** / +8.6 |
+| `waf-attack-only` @ 902 | +0.35 / +25.7 | **+0.21** / **+8.5** |
+| `waf-form` @ 132 | **+3.8** / **+2.5** | +5.6 / +24.2 |
+| `waf-json-16k` @ 5 | +180 / +367 | **+157** / **+270** |
+
+**What prx-waf has to beat** (best competitor per cell, to be re-measured on the reference machine): on `waf-get` more than 2,115 rps (W2 asks 1.2× → ~2,540), a CPU tax under ~850 µs/request, and under +1.2 ms p99 at light load; on `waf-form` under ~4 ms CPU and +2.5 ms p99; on `waf-json-16k` more than 12 rps. Neither incumbent wins everywhere: Coraza is the cheaper engine on GETs and JSON but pays for it in p99 (Go GC) and memory; ModSecurity is cheaper on forms and flat on memory. T504 measured 82 µs for all 312 regexes against one string, so there is an order of magnitude of room on `waf-get`.
 
 What this already says about where to aim:
 
@@ -699,16 +704,29 @@ What this already says about where to aim:
 2. **Body shape is part of the scenario.** "128 KB JSON" means nothing without the leaf count; the corpus is argument-dense (5 short leaves per ~84 bytes), which is realistic for API traffic and close to worst case for a WAF. Report leaf counts next to body sizes, and add one sparse body (few large values) before publishing so both ends are visible.
 3. **A WAF this slow is a DoS lever.** One 128 KB request pins a worker for seconds; 4 of them stall the proxy. prx must bound WAF work per request (a variable-count cap and/or a time budget that fails closed or open by config) — this belongs in T503/T507, not only in T508.
 4. **Coraza's memory is unbounded under concurrent bodies.** 64 concurrent 16 KB JSON posts drove `caddy-coraza` to 7.8 GB PSS (~120 MB per in-flight request) with nothing completed in 10 s. W5 needs a third number besides idle and peak-on-GET: **peak under concurrent body inspection**, and prx should hold it flat by construction (bounded per-request scratch, H7) rather than by luck.
-5. **Slow scenarios need long runs.** With seconds per request, a 10 s window completes almost nothing and requests aborted during warm-up are still being chewed on when measurement starts. Use `DURATION=120 CONNECTIONS=8` for the JSON scenarios on WAF targets.
+5. **A synchronous WAF stalls its whole worker.** `nginx-modsec` returned 504s on `waf-json-128k` although the backend answers instantly: while a worker spends seconds inside libmodsecurity, every other connection on that worker waits, including upstream reads that then hit `proxy_read_timeout`. This is the "synchronous API in an async worker" objection from `PLUGIN-WAF-PLAN.md` §2, observed. prx has the same exposure if rule evaluation runs inline on a pingora runtime thread: evaluation that can exceed ~1 ms must yield or run off the I/O threads. Decide this in T503/T506, before T508.
+6. **Slow scenarios need long runs.** With seconds per request, a 10 s window completes almost nothing and requests aborted during warm-up are still being chewed on when measurement starts. Use `DURATION=120 CONNECTIONS=8` for the JSON scenarios on WAF targets.
+
+**W5 idle memory and W6 cold start** (3 runs each, identical to ±0.05 s / ±2 MB):
+
+| Target | Cold start to first 200 | Idle PSS | CRS cost |
+|---|---|---|---|
+| `nginx` → `nginx-modsec` | 0.5 s → 0.4 s | 34 → 76 MB | **+42 MB** |
+| `caddy` → `caddy-coraza` | 0.4 s → 0.4 s | 48 → 90 MB | **+42 MB** |
+| `prx` | 0.35 s | 17 MB | — |
+
+- **W6 as written does not discriminate.** Both engines parse all of CRS in well under the ~0.3 s it takes Docker to create the container; T504 measured 236 ms for a pure-Rust load. Keep W6 as "not slower than both", and stop treating start-up as a place to win. If load time ever matters it will be on hot reload under traffic, which needs its own measurement.
+- **W5 has a concrete number: CRS costs both incumbents +42 MB idle.** T508's assumed +50 MB budget is therefore not a win condition; tighten it to **< +42 MB**. prx starts 17–31 MB below the others, so it can win W5 in absolute terms even at parity on the delta.
 
 **WAF-off proxies on the same scenarios** (same caveats): the floor each WAF sits on.
 
 | Scenario | `nginx` rps / CPU µs | `caddy` rps / CPU µs | `prx` rps / CPU µs | `prx` PSS MB |
 |---|---|---|---|---|
-| `waf-get` | 68,097 / 27 | 23,370 / 77 | 18,219 / 84 | 28 |
-| `waf-attack-mix` | 68,689 / 27 | 23,261 / 77 | 18,345 / 84 | 22 |
-| `waf-form` | 64,468 / 30 | 20,610 / 89 | 17,170 / 94 | 28 |
-| `waf-json-16k` | 56,436 / 35 | 16,813 / 104 | 16,294 / 102 | 29 |
+| `waf-get` | 70,613 / 27 | 23,430 / 77 | 18,050 / 85 | 28 |
+| `waf-attack-mix` | 67,301 / 28 | 23,996 / 75 | 18,279 / 85 | 29 |
+| `waf-form` | 63,779 / 30 | 21,251 / 86 | 17,109 / 94 | 29 |
+| `waf-json-16k` (8 conns) | 21,598 / 50 | 17,082 / 101 | 15,530 / 100 | 24 |
+| `waf-json-128k` (4 conns) | 11,505 / 81 | 7,832 / 152 | 7,839 / 158 | 23 |
 
 This is the first proxy-vs-proxy run the harness has produced, and bare prx spends ~3× nginx's CPU per request. For the WAF goal it is small change — both incumbents add 850–1,400 µs per benign GET, so prx-waf wins W2–W4 as long as its WAF tax stays under roughly 750 µs, and T504 suggests far less. But it caps how large the win can look in absolute terms, it is a miss against the repo's own "RPS per core equal or better" goal, and it must be confirmed on the reference machine and profiled (`docs/PROFILING.md`) as its own task — not inside this plan.
 
