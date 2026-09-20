@@ -2228,6 +2228,7 @@ dependencies = [
  "pingora-prometheus",
  "prometheus",
  "rand 0.9.2",
+ "regex",
  "rustc-hash",
  "serde",
  "serde_json",
