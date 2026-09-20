@@ -1,0 +1,16 @@
+[package]
+name = "rxprobe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aho-corasick = "1.1.5"
+regex = "1"
+regex-syntax = "0.8.11"
+serde_json = "1"
+
+[[bin]]
+name = "rxprobe"
+path = "src/main.rs"
+
+[workspace]

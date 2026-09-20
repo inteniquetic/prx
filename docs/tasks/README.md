@@ -116,13 +116,13 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T501](T501-plugin-core.md) | Plugin trait, registry, chain ที่คอมไพล์ตอน reload | L | — | ✅ done (route ที่ไม่มี plugin จ่าย 1 bit test; 5 phase ครบรวม response ที่บล็อกได้) |
 | [T502](T502-builtins-as-plugins.md) | ย้าย header/rate limit/concurrency/cache/compression มาเป็น plugin | M | T501 | ✅ done (ย้าย 4; compression มีเหตุผลว่าทำไมไม่ควรย้าย; API ต้องขยาย 2 จุด) |
 | [T503](T503-body-inspection.md) | `request_body_filter` + buffering แบบมีเพดานสองชั้น | L | T501 (เฉพาะส่วนต่อ plugin) | todo |
-| [T504](T504-waf-engine-spike.md) | **Spike: วัด CRS compat แล้วเลือก engine** — ประตูตัดสินของเฟส | M | — | todo · **หยิบได้ทันที** |
-| [T505](T505-seclang-parser.md) | SecLang parser → rule model ที่คอมไพล์แล้ว | L | T504 | รอผล T504 |
-| [T506](T506-waf-operators.md) | Operators, transformations, variable extraction | L | T505 | รอผล T504 |
-| [T507](T507-crs-anomaly-scoring.md) | CRS: anomaly scoring, paranoia level, exclusion | L | T506 | รอผล T504 |
-| [T508](T508-waf-performance.md) | Prefilter, RegexSet, perf gate พร้อมตัวเลข | M | T507 | รอผล T504 |
-| [T509](T509-waf-webui-audit.md) | หน้า WAF ใน Web UI + audit + ปรับ false positive | M | T507 | รอผล T504 |
-| [T510](T510-proxy-wasm-tier.md) | proxy-wasm ABI — ทางให้คนนอกเขียน plugin และแผนสำรองของ WAF | L | T501 | todo (ทางเลือก) |
+| [T504](T504-waf-engine-spike.md) | **Spike: วัด CRS compat แล้วเลือก engine** — ประตูตัดสินของเฟส | M | — | ✅ done → [เขียนเอง](../decisions/0001-waf-engine.md) (CRS 100% หลังชั้นแปลง; ไม่มีกฎไหนต้อง backreference) |
+| [T505](T505-seclang-parser.md) | SecLang parser → rule model ที่คอมไพล์แล้ว | L | T504 | todo (ไฟเขียวจาก T504) |
+| [T506](T506-waf-operators.md) | Operators, transformations, variable extraction | L | T505 | todo (ไฟเขียวจาก T504) |
+| [T507](T507-crs-anomaly-scoring.md) | CRS: anomaly scoring, paranoia level, exclusion | L | T506 | todo (ไฟเขียวจาก T504) |
+| [T508](T508-waf-performance.md) | Prefilter, perf gate พร้อมตัวเลข | M | T507 | todo · **แผนต้องแก้**: T504 วัดแล้วว่า RegexSet ช้ากว่า naive 18× |
+| [T509](T509-waf-webui-audit.md) | หน้า WAF ใน Web UI + audit + ปรับ false positive | M | T507 | todo (ไฟเขียวจาก T504) |
+| [T510](T510-proxy-wasm-tier.md) | proxy-wasm ABI — ทางให้คนนอกเขียน plugin | L | T501 | todo (ทางเลือก · ไม่ต้องเป็นแผนสำรองของ WAF แล้ว) |
 
 ## ผลจาก Phase 0 (วัดแล้ว)
 
