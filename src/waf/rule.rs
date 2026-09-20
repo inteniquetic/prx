@@ -516,7 +516,11 @@ pub struct RuleSet {
     /// "this variable, transformed this way" within a request.
     pub transform_chains: Vec<Vec<String>>,
     /// Collections some enabled rule reads, as a target or through a macro.
-    /// A collection that is not in here never has to be built.
+    /// A collection that is not in here never has to be built for a rule to
+    /// read. Writes are not listed: `setvar:tx.x=1` or `initcol:ip=...` into
+    /// a collection nothing reads has no effect on any verdict, so the
+    /// evaluator may drop such a write, but it must not assume the collection
+    /// exists.
     pub needs: BTreeSet<String>,
     pub component_signatures: Vec<String>,
     pub collection_timeout: Option<u64>,

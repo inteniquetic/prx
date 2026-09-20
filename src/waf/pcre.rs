@@ -51,6 +51,9 @@ pub(super) fn compile(pattern: &str, case_insensitive: bool) -> Result<Rx, Strin
     // prefilter (aho-corasick over literals pulled from these patterns) at 2x;
     // T508 owns it, and this is where the literals would be extracted.
     let as_written = build(pattern);
+    if as_written.is_err() && has_open_lower_bound(pattern) {
+        return Err("`{,n}` is `{0,n}` to PCRE2 10.43 and later but a literal to older PCRE and to Go; write `{0,n}` or `\\{,n\\}`".to_string());
+    }
     let (rewritten, byte_escapes) = repair(pattern);
     match as_written {
         // A pattern that compiles but holds `\x{e2}` compiles to the wrong
@@ -79,34 +82,9 @@ pub(super) fn compile(pattern: &str, case_insensitive: bool) -> Result<Rx, Strin
     }
 }
 
-/// Characters that keep their meaning when escaped inside a character class.
+/// Punctuation that keeps its meaning when escaped inside a character class.
 fn meaningful_in_class(c: char) -> bool {
-    matches!(
-        c,
-        '\\' | ']'
-            | '['
-            | '^'
-            | '-'
-            | 'd'
-            | 'D'
-            | 'w'
-            | 'W'
-            | 's'
-            | 'S'
-            | 'n'
-            | 'r'
-            | 't'
-            | 'f'
-            | 'v'
-            | '0'
-            | 'x'
-            | 'u'
-            | 'p'
-            | 'P'
-            | 'b'
-            | 'a'
-            | 'e'
-    )
+    matches!(c, '\\' | ']' | '[' | '^' | '-')
 }
 
 /// If `{` at `start` opens a valid counted repetition — `{n}`, `{n,}` or
@@ -132,6 +110,16 @@ fn counted_repetition_end(chars: &[char], start: usize) -> Option<usize> {
         }
     }
     (i < chars.len() && chars[i] == '}').then_some(i + 1)
+}
+
+/// Whether the pattern holds `{,n}`. The engines prx is compared against
+/// disagree on it, so there is no rewrite that is right for both.
+fn has_open_lower_bound(pattern: &str) -> bool {
+    pattern.match_indices("{,").any(|(at, _)| {
+        let rest = &pattern[at + 2..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        digits > 0 && rest.as_bytes().get(digits) == Some(&b'}')
+    })
 }
 
 /// Rewrites a PCRE pattern into one `regex` reads the same way. Also says
@@ -175,8 +163,11 @@ fn repair(pattern: &str) -> (String, bool) {
             '\\' if i + 1 < chars.len() => {
                 let next = chars[i + 1];
                 // `[\&]` is just `[&]`. Dropping the backslash is what PCRE
-                // does; keeping it is what `regex` refuses.
-                if !in_class || meaningful_in_class(next) {
+                // does; keeping it is what `regex` refuses. PCRE only does
+                // that for punctuation: an escaped letter or digit is a class
+                // or an escape sequence (`\h`, `\101`), so its backslash stays
+                // and an escape `regex` does not know fails the rule loudly.
+                if !in_class || next.is_ascii_alphanumeric() || meaningful_in_class(next) {
                     out.push('\\');
                 }
                 out.push(next);
@@ -249,7 +240,7 @@ mod tests {
     fn pcre_leniency_is_repaired_and_marked() {
         for (pattern, hit, miss) in [
             (r"\${jndi:", &b"${jndi:ldap"[..], &b"$jndi:"[..]),
-            (r"^a{,3}b{2}$", b"a{,3}bb", b"aab"),
+            (r"^a{x}b{2}$", b"a{x}bb", b"axbb"),
             (r"x[^\<\&]y", b"x-y", b"x<y"),
         ] {
             let rx = compile(pattern, false).unwrap();
@@ -320,6 +311,28 @@ mod tests {
         );
         assert!(rx.regex.is_match(b"a;b;c"));
         assert!(!rx.regex.is_match(b"a;bc"));
+    }
+
+    #[test]
+    fn an_unknown_class_escape_is_an_error_not_a_literal() {
+        // PCRE only ignores the backslash before punctuation. `\h` is
+        // horizontal whitespace and `\101` is an octal `A`; dropping their
+        // backslash would load a rule that matches the letter h, or 0-1.
+        for pattern in [r"^[\h]+$", r"[\101]", r"[\cA]"] {
+            assert!(compile(pattern, false).is_err(), "{pattern} must not load");
+        }
+        // Escaped punctuation still loads; the pinned CRS repair list in
+        // tests/waf_crs.rs is what proves the repairs CRS needs are intact.
+        assert!(compile(r"[^\&\|\!]", false).is_ok());
+    }
+
+    #[test]
+    fn an_open_lower_bound_is_refused_not_guessed() {
+        let error = compile("^a{,3}$", false).unwrap_err();
+        assert!(error.contains("{0,n}"), "{error}");
+        // A real quantifier and a literal brace are not caught by it.
+        assert!(compile("^a{0,3}$", false).is_ok());
+        assert!(compile("a{,b}", false).unwrap().repaired);
     }
 
     #[test]
