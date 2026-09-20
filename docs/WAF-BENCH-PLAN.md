@@ -666,9 +666,9 @@ Status on 2026-09-20 (branch `bench/waf-comparison`, macOS + OrbStack — harnes
 | 2 backend bodies | done, verified | 2000 × 128 KB POST over keep-alive through nginx → 100 % 200 |
 | 3 shared ruleset | done | The T504 decision record named commit `8d06076`; that is CRS `main`. The `v4.21.0` tag is `2ac6c00` and has the 678 `SecRule`s T504 counted, so T504 measured the tag and only the hash was mislabelled. Pin and record corrected |
 | 4 `nginx-modsec` | done, verified | nginx 1.30.5 + ModSecurity-nginx 1.0.4 + libmodsecurity 3.0.16, 826 rules loaded, pinned by digest. Benign → 200; SQLi/XSS in query and in a JSON body → 403. The plain `nginx` twin was moved from 1.27 to 1.30.5 so the pair differs by the WAF only. The image's healthcheck is disabled (it would add requests to the run) |
-| 5 `caddy`, `caddy-coraza` | files written, **not run** | `coraza-caddy` pinned to v2.6.1 (`BENCH_CORAZA_CADDY`). Image build fails: no space left to pull `caddy:2-builder` |
+| 5 `caddy`, `caddy-coraza` | done, verified | Caddy 2.11.4 + `coraza-caddy` v2.6.1 (`http.handlers.waf`). Loads the shared `modsec.conf` unchanged — `DEVIATIONS.md` is still empty. Same 200/403 results as `nginx-modsec`, including SQLi inside a JSON body |
 | 6 workloads | done, verified on `nginx` and `nginx-modsec` | `bench-parse.py` now counts responses rather than attempts (oha's `requestsPerSec` includes requests it aborted at the deadline) and survives a run where nothing completed. PSS needed `cap_add: SYS_PTRACE`: without it root cannot read `smaps_rollup` of the unprivileged workers and memory silently read as ~0 |
-| 7 verdict diff | run on `nginx-modsec` | 1000/1000 benign → 200; of 861 attack URLs 580 → 403 and 281 pass at PL1. Diff against Coraza waits for Task 5 |
+| 7 verdict diff | done | Both engines: 1000/1000 benign → 200; of 861 attack URLs 580 → 403 and 281 pass at PL1. **`--diff nginx-modsec caddy-coraza` is empty: 0 disagreements in 1,861 URLs.** There is no noise floor to hide behind — in Task 10 prx-waf must match all 1,861 |
 | 8 baseline | not started | needs the reference Linux machine |
 
 ### First look at the incumbent (harness-debugging numbers — do not publish)
@@ -683,12 +683,23 @@ macOS + OrbStack, 10 s runs, 64 connections, proxy on 2 CPUs. Good for orders of
 | `waf-json-16k` (970 leaf values) | 56,436 | 4 | 35 → 502,558 | 7.7 → 4,096 | 36 → 112 |
 | `waf-json-128k` (7,815 leaf values) | — | one request alone: **2.6 s** | | | |
 
+| Scenario | `caddy` rps | `caddy-coraza` rps | CPU µs/req off → on | p99 ms off → on | PSS MB off → on |
+|---|---|---|---|---|---|
+| `waf-get` | 23,370 | 2,109 | 77 → 928 | 13.6 → 95.9 | 63 → 170 |
+| `waf-attack-mix` | 23,261 | 2,110 | 77 → 923 | 14.1 → 102 | 64 → 177 |
+| `waf-form` | 20,610 | 259 | 89 → 7,685 | 15.5 → 778 | 48 → 232 |
+| `waf-json-16k` | 16,813 | **0 completed in 10 s** | 104 → — | 17.3 → — | 67 → **7,841** |
+| `waf-json-128k` | — | one request alone: **1.4 s** | | | |
+
+Engine against engine (WAF tax in CPU per benign GET): ModSecurity ≈ 1.35 ms, Coraza ≈ 0.85 ms. Coraza is the faster engine on GETs and the slower one on forms; the absolute `caddy-coraza` numbers are held back by Caddy being ~3× slower than nginx as a bare proxy, which is exactly why the tax column exists. **The number prx-waf has to beat on `waf-get` is therefore ~0.85 ms CPU/request and ~2,100 rps on 2 cores** (to be re-measured on the reference machine). T504's 82 µs for all 312 regexes on one string says there is an order of magnitude of room.
+
 What this already says about where to aim:
 
 1. **ModSecurity's cost is per variable, not per byte.** 20 form fields cost ~3× a bare GET; 970 JSON leaves cost ~360×; 7,815 leaves take seconds and grow faster than linearly (8× the leaves, 14× the time). This is the `82 µs × number of variables` warning from T504 at full size. The T508 budget of +5 ms at 128 KB is ~500× tighter than the incumbent on this body shape — prx does not need heroics to win here, it needs to not repeat the per-variable × per-rule loop. H2 (transformation memo), H3 (lazy extraction) and H6 (one Aho-Corasick pass per value before any regex) are the hypotheses that attack exactly this.
 2. **Body shape is part of the scenario.** "128 KB JSON" means nothing without the leaf count; the corpus is argument-dense (5 short leaves per ~84 bytes), which is realistic for API traffic and close to worst case for a WAF. Report leaf counts next to body sizes, and add one sparse body (few large values) before publishing so both ends are visible.
 3. **A WAF this slow is a DoS lever.** One 128 KB request pins a worker for seconds; 4 of them stall the proxy. prx must bound WAF work per request (a variable-count cap and/or a time budget that fails closed or open by config) — this belongs in T503/T507, not only in T508.
-4. **Slow scenarios need long runs.** With seconds per request, a 10 s window completes almost nothing and requests aborted during warm-up are still being chewed on when measurement starts. Use `DURATION=120 CONNECTIONS=8` for the JSON scenarios on WAF targets.
+4. **Coraza's memory is unbounded under concurrent bodies.** 64 concurrent 16 KB JSON posts drove `caddy-coraza` to 7.8 GB PSS (~120 MB per in-flight request) with nothing completed in 10 s. W5 needs a third number besides idle and peak-on-GET: **peak under concurrent body inspection**, and prx should hold it flat by construction (bounded per-request scratch, H7) rather than by luck.
+5. **Slow scenarios need long runs.** With seconds per request, a 10 s window completes almost nothing and requests aborted during warm-up are still being chewed on when measurement starts. Use `DURATION=120 CONNECTIONS=8` for the JSON scenarios on WAF targets.
 
 **Blocker:** the Docker VM disk is full. `Dockerfile` does `COPY . .` and `.dockerignore` only excluded the top-level `target/`, so a prx image build copied `.claude/worktrees/*/target` (2.8 GB) into the build cache. `.dockerignore` is fixed; the space already consumed needs `docker builder prune`, and the host has ~3 GB free. Separately, the prx `Dockerfile` pinned `rust:1.85` while `rcgen`/`time` need ≥ 1.88 — bumped to 1.93, build not yet confirmed because of the disk.
 
