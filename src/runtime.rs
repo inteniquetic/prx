@@ -20,7 +20,7 @@ use crate::{
     },
     headers::CompiledHeaderRules,
     limiter::{ConcurrencyLimiter, RateLimiter},
-    plugin::{Plugin, PluginChain},
+    plugin::{Plugin, PluginChain, builtin},
     router::{IndexedRoute, RouteIndex, RouteMatch, method_mask},
 };
 
@@ -190,14 +190,18 @@ pub struct RouteRuntime {
     pub enabled: bool,
     pub service_idx: usize,
     /// Global rules merged with the route's own, compiled once per reload.
-    pub request_headers: CompiledHeaderRules,
-    pub response_headers: CompiledHeaderRules,
+    ///
+    /// Shared with the plugins that apply them (T502): the chain does the work,
+    /// these stay reachable so the admin API and the tests can still ask what a
+    /// route is configured with.
+    pub request_headers: Arc<CompiledHeaderRules>,
+    pub response_headers: Arc<CompiledHeaderRules>,
     /// `None` when caching is off for this route.
-    pub cache: Option<RouteCache>,
+    pub cache: Option<Arc<RouteCache>>,
     /// `None` when rate limiting is off for this route.
-    pub rate_limit: Option<RouteRateLimit>,
+    pub rate_limit: Option<Arc<RouteRateLimit>>,
     pub concurrency_limit: ConcurrencyLimitConfig,
-    pub concurrency: ConcurrencyLimiter,
+    pub concurrency: Arc<ConcurrencyLimiter>,
     /// Compiled once per reload (T501). Empty for every route that does not
     /// list any, which is the case the whole design is built around.
     pub plugins: PluginChain,
@@ -290,19 +294,64 @@ impl RouteRuntime {
             }
         });
 
+        let request_headers = Arc::new(request_headers);
+        let response_headers = Arc::new(response_headers);
+        let cache = cache.map(Arc::new);
+        let rate_limit = rate_limit.map(Arc::new);
+        let concurrency = Arc::new(ConcurrencyLimiter::default());
+
+        // The chain, in the order everything runs (T502).
+        //
+        // The built-ins come from the route's own config rather than from a
+        // `[[plugin]]` block, so a file written before plugins existed keeps
+        // working exactly as it did. Their positions are fixed, and chosen to
+        // reproduce the order the hand-written version had:
+        //
+        //   request headers · rate limit · concurrency · <route's plugins> · cache · response headers
+        //
+        // Limits first, so a flood is turned away by the cheap check. The
+        // route's own plugins before the cache, so a request one of them would
+        // reject is never handed a stored 200 instead. Response headers after
+        // the cache, because the cache stores what the upstream sent — putting
+        // them first would bake them into every later hit.
+        let mut chain: Vec<Arc<dyn Plugin>> = Vec::new();
+        if !request_headers.is_empty() {
+            chain.push(Arc::new(builtin::headers::RequestHeaders::new(Arc::clone(
+                &request_headers,
+            ))));
+        }
+        if let Some(limit) = &rate_limit {
+            chain.push(Arc::new(builtin::rate_limit::RateLimit::new(Arc::clone(
+                limit,
+            ))));
+        }
+        if config.concurrency_limit.max_concurrent > 0 {
+            chain.push(Arc::new(builtin::concurrency::Concurrency::new(
+                Arc::clone(&concurrency),
+                config.concurrency_limit.clone(),
+            )));
+        }
         // A name that is not in the map was either unknown or disabled, and
         // both were reported by `check_plugins` before this ran. Skipping it
         // here keeps a bad name from taking the whole reload down.
-        let plugins = if config.plugins.is_empty() {
+        for wanted in &config.plugins {
+            if let Some(plugin) = built_plugins.get(wanted) {
+                chain.push(Arc::clone(plugin));
+            }
+        }
+        if let Some(cache) = &cache {
+            chain.push(Arc::new(builtin::cache::Cache::new(Arc::clone(cache))));
+        }
+        if !response_headers.is_empty() {
+            chain.push(Arc::new(builtin::headers::ResponseHeaders::new(
+                Arc::clone(&response_headers),
+            )));
+        }
+
+        let plugins = if chain.is_empty() {
             PluginChain::empty()
         } else {
-            PluginChain::new(
-                config
-                    .plugins
-                    .iter()
-                    .filter_map(|wanted| built_plugins.get(wanted).map(Arc::clone))
-                    .collect(),
-            )
+            PluginChain::new(chain)
         };
 
         Self {
@@ -318,7 +367,7 @@ impl RouteRuntime {
             cache,
             rate_limit,
             concurrency_limit: config.concurrency_limit,
-            concurrency: ConcurrencyLimiter::default(),
+            concurrency,
             plugins,
         }
     }

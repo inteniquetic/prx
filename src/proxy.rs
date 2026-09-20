@@ -14,10 +14,7 @@ use pingora::upstreams::peer::ALPN;
 use tracing::{debug, error, info, warn};
 
 use crate::acme::{CHALLENGE_PREFIX, ChallengeStore};
-use crate::cache::{Lookup, is_cacheable_response, storable_headers};
-use crate::config::{LbStrategy, RateLimitKey, StickyMode, UpstreamH2};
-use crate::headers::HeaderContext;
-use crate::limiter::Decision as LimitDecision;
+use crate::config::{LbStrategy, StickyMode, UpstreamH2};
 use crate::metrics;
 use crate::plugin::{
     LogInfo, NeedsMask, PhaseMask, PluginChain, PluginCtx, PluginDecision, PluginResponse,
@@ -164,32 +161,6 @@ impl PrxProxy {
         true
     }
 
-    /// Answers a limited request, optionally telling the client when to come
-    /// back.
-    async fn serve_cached(
-        session: &mut Session,
-        entry: &crate::cache::CachedResponse,
-        add_status_header: bool,
-    ) -> Result<bool> {
-        serve_cached_response(session, entry, add_status_header).await
-    }
-
-    async fn respond_limited(
-        session: &mut Session,
-        status: u16,
-        retry_after_s: Option<u64>,
-    ) -> Result<bool> {
-        let mut header = ResponseHeader::build(status, Some(3))?;
-        header.insert_header("content-length", "0")?;
-        if let Some(seconds) = retry_after_s {
-            header.insert_header("retry-after", seconds.to_string())?;
-        }
-        session
-            .write_response_header(Box::new(header), true)
-            .await?;
-        Ok(true)
-    }
-
     /// Works out the facts a chain declared it needs, and nothing else.
     ///
     /// The declaration is the point: rendering the client address allocates and
@@ -223,7 +194,7 @@ impl PrxProxy {
     ) -> Result<Option<PluginResponse>> {
         Self::resolve_facts(chain, session, ctx);
 
-        let (facts, plugin_state) = ctx.plugin_parts(route_idx, "http");
+        let (facts, plugin_state) = ctx.plugin_parts(route_idx, "http", None);
         let mut slots = StateSlots::new(chain, plugin_state);
         for (index, plugin) in chain.iter().enumerate() {
             if !plugin.phases().contains(PhaseMask::REQUEST_HEAD) {
@@ -371,119 +342,6 @@ impl PrxProxy {
     }
 }
 
-/// Only safe, unauthenticated reads are eligible for a shared cache.
-fn is_cacheable_request(session: &Session) -> bool {
-    let request = session.req_header();
-    if !matches!(request.method, Method::GET | Method::HEAD) {
-        return false;
-    }
-    // An authenticated response belongs to one client.
-    if request.headers.contains_key("authorization") {
-        return false;
-    }
-    request
-        .headers
-        .get("cache-control")
-        .and_then(|value| value.to_str().ok())
-        .map(|value| {
-            let value = value.to_ascii_lowercase();
-            !value.contains("no-store") && !value.contains("no-cache")
-        })
-        .unwrap_or(true)
-}
-
-/// Builds the cache key from the route, host, path, optionally the query, and
-/// the headers the route varies on.
-fn cache_key(session: &Session, vary_headers: &[String], route_idx: usize) -> u64 {
-    let request = session.req_header();
-    let host = request
-        .headers
-        .get("host")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-    let path = request.uri.path();
-    let query = request.uri.query().unwrap_or("");
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    use std::hash::{Hash, Hasher};
-    route_idx.hash(&mut hasher);
-    host.hash(&mut hasher);
-    path.hash(&mut hasher);
-    query.hash(&mut hasher);
-    request.method.as_str().hash(&mut hasher);
-    for name in vary_headers {
-        name.hash(&mut hasher);
-        request
-            .headers
-            .get(name.as_str())
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("")
-            .hash(&mut hasher);
-    }
-    hasher.finish()
-}
-
-/// Writes a stored response straight back to the client.
-async fn serve_cached_response(
-    session: &mut Session,
-    entry: &crate::cache::CachedResponse,
-    add_status_header: bool,
-) -> Result<bool> {
-    let mut header = ResponseHeader::build(entry.status, Some(entry.headers.len() + 2))?;
-    for (name, value) in &entry.headers {
-        header.insert_header(name.clone(), value.clone())?;
-    }
-    if add_status_header {
-        header.insert_header("x-cache", "HIT")?;
-        header.insert_header("age", (entry.age_ms(now_epoch_ms()) / 1000).to_string())?;
-    }
-
-    session
-        .write_response_header(Box::new(header), false)
-        .await?;
-    session
-        .write_response_body(Some(entry.body.clone()), true)
-        .await?;
-    Ok(true)
-}
-
-fn now_epoch_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-/// Builds the bucket key for a rate-limited request. Nothing is allocated for
-/// the common `client_ip` and `route` cases.
-fn rate_limit_key(session: &Session, key: &RateLimitKey, route_idx: usize) -> u64 {
-    match key {
-        RateLimitKey::Route => hash_key(&["route"]) ^ route_idx as u64,
-        RateLimitKey::ClientIp => match session.client_addr() {
-            Some(addr) => match addr.as_inet() {
-                // Bucket per address, ignoring the source port: a client opening
-                // new connections must not get a fresh allowance each time.
-                Some(inet) => {
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    std::hash::Hash::hash(&inet.ip(), &mut hasher);
-                    std::hash::Hasher::finish(&hasher)
-                }
-                None => hash_key(&[addr.to_string().as_str()]),
-            },
-            None => 0,
-        },
-        RateLimitKey::Header(name) => session
-            .req_header()
-            .headers
-            .get(name.as_str())
-            .and_then(|value| value.to_str().ok())
-            .map(|value| hash_key(&[value]))
-            // Requests without the header share one bucket, so a missing header
-            // cannot be used to bypass the limit.
-            .unwrap_or_else(|| hash_key(&["__missing__"])),
-    }
-}
-
 /// Reads the affinity key for this request: the cookie value in cookie mode,
 /// or a hash of the client address or header value in the other modes.
 fn sticky_key(session: &Session, sticky: &crate::config::StickyConfig) -> Option<u64> {
@@ -523,17 +381,6 @@ fn clamp_to_budget(timeout: Duration, remaining: Option<Duration>) -> Duration {
         Some(remaining) => timeout.min(remaining),
         None => timeout,
     }
-}
-
-/// A response being collected on its way to the cache.
-#[derive(Debug)]
-struct PendingCacheEntry {
-    status: u16,
-    headers: Vec<(http::HeaderName, http::HeaderValue)>,
-    body: bytes::BytesMut,
-    /// Set when the body outgrew `max_body_bytes`, so it is streamed through
-    /// but never stored.
-    too_large: bool,
 }
 
 /// Where a failure happened, which decides whether a replay is safe.
@@ -591,16 +438,6 @@ pub struct RequestCtx {
     /// Set when a sticky cookie should be written on the way back, holding the
     /// upstream identifier to store.
     sticky_cookie: Option<u64>,
-    /// True when this request holds a concurrency slot that must be released.
-    holds_concurrency_slot: bool,
-    /// Cache key for this request, when the route caches and the request is
-    /// eligible.
-    cache_key: Option<u64>,
-    /// Set when this request owns the upstream fetch for `cache_key` and has to
-    /// wake the requests waiting behind it.
-    cache_leader: bool,
-    /// Response being assembled for the cache: status, headers and body so far.
-    cache_pending: Option<PendingCacheEntry>,
     upstream_addr: Option<String>,
     /// Per-plugin state for this request (T501). Stays `None` for every route
     /// that lists no plugins, and for chains where no plugin asks for state —
@@ -622,11 +459,12 @@ impl RequestCtx {
     /// They come from one exclusive borrow of different fields, which is what
     /// lets a plugin read the client address while writing its own state — two
     /// things the borrow checker will not allow through `ctx` twice (T502).
-    fn plugin_parts(
-        &mut self,
+    fn plugin_parts<'a>(
+        &'a mut self,
         route_idx: usize,
-        scheme: &'static str,
-    ) -> (RequestFacts<'_>, &mut Option<Box<PluginState>>) {
+        scheme: &'a str,
+        host: Option<&'a str>,
+    ) -> (RequestFacts<'a>, &'a mut Option<Box<PluginState>>) {
         let Self {
             client_ip,
             client_port,
@@ -643,6 +481,7 @@ impl RequestCtx {
                 client_ip: client_ip.as_deref(),
                 client_port: *client_port,
                 request_id: request_id.as_deref(),
+                host,
                 upstream_addr: upstream_addr.as_deref(),
                 scheme,
             },
@@ -668,10 +507,6 @@ impl Default for RequestCtx {
             is_idempotent: true,
             counted_inflight: false,
             sticky_cookie: None,
-            holds_concurrency_slot: false,
-            cache_key: None,
-            cache_leader: false,
-            cache_pending: None,
             upstream_addr: None,
             plugin_state: None,
             peer_addr: None,
@@ -693,6 +528,15 @@ impl ProxyHttp for PrxProxy {
     /// present but inactive, which is what the default does; a configured level
     /// turns it on for every response the client is willing to accept
     /// compressed.
+    ///
+    /// The fifth built-in, and the one T502 deliberately did **not** turn into
+    /// a plugin. It is not a step in handling a request: it is a pingora module
+    /// installed on the connection before any request arrives, and it works by
+    /// wrapping the body stream rather than by being called at a phase.
+    /// Reshaping the plugin API to accommodate that would mean inventing a
+    /// hook that exists for exactly one implementation — and it is configured
+    /// globally in `[compression]`, not per route, so a per-route chain is the
+    /// wrong place for it regardless.
     fn init_downstream_modules(&self, modules: &mut HttpModules) {
         let level = if self.compression.enabled {
             self.compression.level
@@ -800,31 +644,9 @@ impl ProxyHttp for PrxProxy {
                     ctx.route_name = Some(route.name.clone());
                     debug!(route = %route.name, "matched route");
 
-                    // Limits are enforced before the upstream is chosen, so a
-                    // rejected request costs nothing beyond the hash.
-                    if let Some(limit) = &route.rate_limit {
-                        let key = rate_limit_key(session, &limit.key, route_idx);
-                        if let LimitDecision::Deny { retry_after_s } = limit.limiter.check(key) {
-                            metrics::inc_rate_limited(route.name.as_ref(), "rate");
-                            let status = limit.response_status;
-                            let retry_after = limit.retry_after.then_some(retry_after_s);
-                            return Self::respond_limited(session, status, retry_after).await;
-                        }
-                    }
-
-                    let max_concurrent = route.concurrency_limit.max_concurrent;
-                    if !route.concurrency.try_acquire(max_concurrent) {
-                        metrics::inc_rate_limited(route.name.as_ref(), "concurrency");
-                        let status = route.concurrency_limit.response_status;
-                        return Self::respond_limited(session, status, None).await;
-                    }
-                    ctx.holds_concurrency_slot = max_concurrent > 0;
-
-                    // Plugins run after the limits and before the cache (T501).
-                    // After the limits, because a flood should be turned away
-                    // by the cheap check rather than by whatever a plugin
-                    // costs; before the cache, because a request a plugin would
-                    // reject must not be handed a stored 200 instead.
+                    // Rate limit, concurrency, the route's own plugins and
+                    // the cache lookup are all links in one chain now, in the
+                    // order `RouteRuntime::from_config` built it (T502).
                     if route.plugins.handles(PhaseMask::REQUEST_HEAD) {
                         let name = Arc::clone(&route.name);
                         if let Some(response) =
@@ -832,31 +654,6 @@ impl ProxyHttp for PrxProxy {
                                 .await?
                         {
                             return Self::respond_from_plugin(session, response).await;
-                        }
-                    }
-
-                    // Caching happens after the limits so a cached response
-                    // still counts against a client's allowance.
-                    if let Some(cache) = &route.cache
-                        && is_cacheable_request(session)
-                    {
-                        let key = cache_key(session, &cache.vary_headers, route_idx);
-                        ctx.cache_key = Some(key);
-                        match cache.store.lookup(key).await {
-                            Lookup::Hit(entry) => {
-                                metrics::inc_cache(route.name.as_ref(), "hit");
-                                let add_header = cache.config.add_status_header;
-                                return Self::serve_cached(session, &entry, add_header).await;
-                            }
-                            Lookup::MissLeader => {
-                                metrics::inc_cache(route.name.as_ref(), "miss");
-                                ctx.cache_leader = true;
-                            }
-                            Lookup::MissFollower => {
-                                // The leader did not finish in time; this
-                                // request fetches on its own rather than wait.
-                                metrics::inc_cache(route.name.as_ref(), "miss_follower");
-                            }
                         }
                     }
                 }
@@ -1059,9 +856,10 @@ impl ProxyHttp for PrxProxy {
         upstream_request: &mut RequestHeader,
         ctx: &mut Self::CTX,
     ) -> Result<()> {
-        // Phase 1: everything that needs the snapshot, ending with Copy values
-        // so ctx can be written to afterwards without cloning the rule set.
-        let needs = {
+        // Keep Host aligned with SNI when proxying to strict virtual hosts.
+        // The header rules run after this as part of the chain, so a rule can
+        // still override Host.
+        let scheme = {
             let Some(snapshot) = &ctx.snapshot else {
                 return Ok(());
             };
@@ -1080,65 +878,10 @@ impl ProxyHttp for PrxProxy {
                 return Ok(());
             };
 
-            // Keep Host aligned with SNI when proxying to strict virtual hosts.
-            // Route rules run after this, so a rule can still override Host.
             upstream_request.insert_header("host", upstream.sni.as_str())?;
-            if route.request_headers.is_empty() {
-                None
-            } else {
-                Some((
-                    route.request_headers.needs_client_addr(),
-                    route.request_headers.needs_request_id(),
-                ))
-            }
+            if upstream.tls { "https" } else { "http" }
         };
 
-        // Phase 2: fill in what the rules ask for, and only that.
-        if let Some((needs_client_addr, needs_request_id)) = needs {
-            if needs_client_addr {
-                Self::fill_client_addr(session, ctx);
-            }
-            if needs_request_id && ctx.request_id.is_none() {
-                ctx.request_id = Some(Self::request_id(upstream_request));
-            }
-
-            // Phase 3: apply. Only immutable borrows of ctx from here.
-            let host = session
-                .req_header()
-                .headers
-                .get("host")
-                .and_then(|value| value.to_str().ok());
-            if let Some(snapshot) = &ctx.snapshot
-                && let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx))
-            {
-                {
-                    let scheme = snapshot
-                        .service(route.service_idx)
-                        .and_then(|service| {
-                            ctx.attempted_upstreams
-                                .last()
-                                .copied()
-                                .and_then(|idx| service.upstreams.get(idx))
-                        })
-                        .map(|upstream| if upstream.tls { "https" } else { "http" })
-                        .unwrap_or("http");
-
-                    let header_ctx = HeaderContext {
-                        client_ip: ctx.client_ip.as_deref(),
-                        client_port: ctx.client_port,
-                        scheme,
-                        host,
-                        route_name: Some(route.name.as_ref()),
-                        upstream_addr: ctx.upstream_addr.as_deref(),
-                        request_id: ctx.request_id.as_deref(),
-                    };
-                    route.request_headers.apply(upstream_request, &header_ctx);
-                }
-            }
-        }
-
-        // Plugins see the upstream request after the route's header rules, so
-        // a plugin can act on the headers that will actually be sent (T501).
         let chain = ctx
             .snapshot
             .as_ref()
@@ -1149,7 +892,14 @@ impl ProxyHttp for PrxProxy {
             .map(|((chain, name), idx)| (chain, name, idx));
         if let Some((chain, route_name, route_idx)) = chain {
             Self::resolve_facts(&chain, session, ctx);
-            let (facts, plugin_state) = ctx.plugin_parts(route_idx, "http");
+            // The `Host` a rule means is the one the client asked for, not the
+            // SNI that just replaced it on the upstream request.
+            let host = session
+                .req_header()
+                .headers
+                .get("host")
+                .and_then(|value| value.to_str().ok());
+            let (facts, plugin_state) = ctx.plugin_parts(route_idx, scheme, host);
             let mut slots = StateSlots::new(&chain, plugin_state);
             for (index, plugin) in chain.iter().enumerate() {
                 if !plugin.phases().contains(PhaseMask::UPSTREAM_REQUEST) {
@@ -1190,7 +940,7 @@ impl ProxyHttp for PrxProxy {
         if let Some((chain, route_name, route_idx)) = chain {
             let mut answered = None;
             {
-                let (facts, plugin_state) = ctx.plugin_parts(route_idx, "http");
+                let (facts, plugin_state) = ctx.plugin_parts(route_idx, "http", None);
                 let mut slots = StateSlots::new(&chain, plugin_state);
                 for (index, plugin) in chain.iter().enumerate() {
                     if !plugin.phases().contains(PhaseMask::RESPONSE_HEAD) {
@@ -1233,9 +983,9 @@ impl ProxyHttp for PrxProxy {
                 upstream_response.remove_header("content-encoding");
                 ctx.plugin_body = Some(response.body);
                 ctx.plugin_body_sent = false;
-                // A response the upstream did not produce must not be stored
-                // as though it had.
-                ctx.cache_pending = None;
+                // Nothing needs to un-cache this: the cache plugin sits after
+                // the route's own plugins in the chain, so breaking here means
+                // it never saw the response and never started storing it.
             }
         }
 
@@ -1247,6 +997,8 @@ impl ProxyHttp for PrxProxy {
         };
 
         // Hand out the affinity cookie for the upstream this request landed on.
+        // This one stays here: it belongs to the service's load balancing, not
+        // to anything a route can switch on.
         if let Some(addr_hash) = ctx.sticky_cookie.filter(|hash| *hash != 0)
             && let Some(service) = snapshot.service(route.service_idx)
             && service.sticky.enabled
@@ -1259,43 +1011,6 @@ impl ProxyHttp for PrxProxy {
             let _ = upstream_response.append_header("set-cookie", cookie);
         }
 
-        if let Some(cache) = &route.cache
-            && ctx.cache_key.is_some()
-        {
-            let status = upstream_response.status.as_u16();
-            let headers = || {
-                upstream_response
-                    .headers
-                    .iter()
-                    .map(|(name, value)| (name.clone(), value.clone()))
-            };
-            if is_cacheable_response(status, &cache.config.cache_status_codes, headers()) {
-                ctx.cache_pending = Some(PendingCacheEntry {
-                    status,
-                    headers: storable_headers(headers()),
-                    body: bytes::BytesMut::new(),
-                    too_large: false,
-                });
-            }
-            if cache.config.add_status_header {
-                let _ = upstream_response.insert_header("x-cache", "MISS");
-            }
-        }
-
-        if route.response_headers.is_empty() {
-            return Ok(());
-        }
-
-        let header_ctx = HeaderContext {
-            client_ip: ctx.client_ip.as_deref(),
-            client_port: ctx.client_port,
-            scheme: "http",
-            host: None,
-            route_name: Some(route.name.as_ref()),
-            upstream_addr: ctx.upstream_addr.as_deref(),
-            request_id: ctx.request_id.as_deref(),
-        };
-        route.response_headers.apply(upstream_response, &header_ctx);
         Ok(())
     }
 
@@ -1333,7 +1048,7 @@ impl ProxyHttp for PrxProxy {
             .zip(ctx.route_idx)
             .map(|((chain, name), idx)| (chain, name, idx));
         if let Some((chain, route_name, route_idx)) = chain {
-            let (facts, plugin_state) = ctx.plugin_parts(route_idx, "http");
+            let (facts, plugin_state) = ctx.plugin_parts(route_idx, "http", None);
             let mut slots = StateSlots::new(&chain, plugin_state);
             for (index, plugin) in chain.iter().enumerate() {
                 if !plugin.phases().contains(PhaseMask::RESPONSE_BODY) {
@@ -1345,51 +1060,6 @@ impl ProxyHttp for PrxProxy {
                     facts,
                 };
                 plugin.on_response_body(body, end_of_stream, &mut pctx)?;
-            }
-        }
-
-        let Some(pending) = ctx.cache_pending.as_mut() else {
-            return Ok(None);
-        };
-        let Some(key) = ctx.cache_key else {
-            return Ok(None);
-        };
-
-        let max_body_bytes = ctx
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| ctx.route_idx.and_then(|idx| snapshot.route(idx)))
-            .and_then(|route| route.cache.as_ref())
-            .map(|cache| cache.config.max_body_bytes)
-            .unwrap_or(0);
-
-        if let Some(chunk) = body.as_ref()
-            && !pending.too_large
-        {
-            if pending.body.len() + chunk.len() > max_body_bytes {
-                // Streaming a large response is fine; storing it is not. Drop
-                // what was collected so the memory goes back immediately.
-                pending.too_large = true;
-                pending.body = bytes::BytesMut::new();
-            } else {
-                pending.body.extend_from_slice(chunk);
-            }
-        }
-
-        if end_of_stream && !pending.too_large {
-            let entry = ctx.cache_pending.take().expect("checked above");
-            if let Some(snapshot) = &ctx.snapshot
-                && let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx))
-                && let Some(cache) = &route.cache
-            {
-                cache
-                    .store
-                    .insert(key, entry.status, entry.headers, entry.body.freeze());
-                metrics::set_cache_size(
-                    route.name.as_ref(),
-                    cache.store.entries(),
-                    cache.store.bytes(),
-                );
             }
         }
 
@@ -1444,27 +1114,6 @@ impl ProxyHttp for PrxProxy {
         // Every attempt took a slot; give them all back exactly once, and feed
         // the latency of the attempt that actually served the request into the
         // moving average used by p2c_ewma.
-        if let Some(snapshot) = &ctx.snapshot
-            && let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx))
-        {
-            if ctx.holds_concurrency_slot {
-                route.concurrency.release();
-                ctx.holds_concurrency_slot = false;
-            }
-            // Waiters must be woken whether the fetch succeeded, failed or was
-            // never cacheable; otherwise they sit until their timeout.
-            if ctx.cache_leader
-                && let Some(key) = ctx.cache_key
-                && let Some(cache) = &route.cache
-            {
-                cache.store.finish(key);
-                ctx.cache_leader = false;
-            }
-            if let Some(limit) = &route.rate_limit {
-                metrics::set_limiter_entries(route.name.as_ref(), limit.limiter.entries());
-            }
-        }
-
         if let Some(snapshot) = &ctx.snapshot
             && let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx))
             && let Some(service) = snapshot.service(route.service_idx)
@@ -1522,7 +1171,7 @@ impl ProxyHttp for PrxProxy {
                 latency_ms: latency_ms as u64,
                 failed: e.is_some(),
             };
-            let (facts, plugin_state) = ctx.plugin_parts(route_idx, "http");
+            let (facts, plugin_state) = ctx.plugin_parts(route_idx, "http", None);
             let mut slots = StateSlots::new(&chain, plugin_state);
             for (index, plugin) in chain.iter().enumerate() {
                 if !plugin.phases().contains(PhaseMask::LOG) {

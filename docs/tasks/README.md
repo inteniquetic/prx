@@ -114,7 +114,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | ID | Task | Size | Depends | สถานะ |
 |---|---|---|---|---|
 | [T501](T501-plugin-core.md) | Plugin trait, registry, chain ที่คอมไพล์ตอน reload | L | — | ✅ done (route ที่ไม่มี plugin จ่าย 1 bit test; 5 phase ครบรวม response ที่บล็อกได้) |
-| [T502](T502-builtins-as-plugins.md) | ย้าย header/rate limit/concurrency/cache/compression มาเป็น plugin | M | T501 | todo |
+| [T502](T502-builtins-as-plugins.md) | ย้าย header/rate limit/concurrency/cache/compression มาเป็น plugin | M | T501 | ✅ done (ย้าย 4; compression มีเหตุผลว่าทำไมไม่ควรย้าย; API ต้องขยาย 2 จุด) |
 | [T503](T503-body-inspection.md) | `request_body_filter` + buffering แบบมีเพดานสองชั้น | L | T501 (เฉพาะส่วนต่อ plugin) | todo |
 | [T504](T504-waf-engine-spike.md) | **Spike: วัด CRS compat แล้วเลือก engine** — ประตูตัดสินของเฟส | M | — | todo · **หยิบได้ทันที** |
 | [T505](T505-seclang-parser.md) | SecLang parser → rule model ที่คอมไพล์แล้ว | L | T504 | รอผล T504 |

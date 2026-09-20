@@ -188,6 +188,9 @@ pub struct RequestFacts<'a> {
     pub client_port: Option<u16>,
     /// Needs [`NeedsMask::REQUEST_ID`].
     pub request_id: Option<&'a str>,
+    /// The `Host` the client asked for, which is not the same as the `Host`
+    /// sent upstream once SNI has rewritten it.
+    pub host: Option<&'a str>,
     /// Where this request went, once it has gone somewhere.
     pub upstream_addr: Option<&'a str>,
     /// `http` or `https`, as seen from prx to the upstream.
