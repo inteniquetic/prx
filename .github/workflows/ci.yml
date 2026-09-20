@@ -29,10 +29,18 @@ jobs:
       - name: Lint
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Fetch OWASP CRS
+        # The pinned release T504 measured. tests/waf_crs.rs loads all of it.
+        run: bash bench/waf/fetch-crs.sh
+
       - name: Test
         # Benches are excluded: criterion has its own harness and rejects
         # libtest flags. Benchmarks run in .github/workflows/perf.yml.
         run: cargo test --lib --bins --tests -- --test-threads=1
+        env:
+          # Without this the CRS test skips when the checkout is missing; here
+          # a missing checkout has to be a failure.
+          PRX_REQUIRE_CRS: "1"
 
       - name: Build benches
         run: cargo build --benches
