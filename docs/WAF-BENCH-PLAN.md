@@ -669,7 +669,7 @@ Status on 2026-09-20 (branch `bench/waf-comparison`, macOS + OrbStack — harnes
 | 5 `caddy`, `caddy-coraza` | done, verified | Caddy 2.11.4 + `coraza-caddy` v2.6.1 (`http.handlers.waf`). Loads the shared `modsec.conf` unchanged — `DEVIATIONS.md` is still empty. Same 200/403 results as `nginx-modsec`, including SQLi inside a JSON body |
 | 6 workloads | done, verified on `nginx` and `nginx-modsec` | `bench-parse.py` now counts responses rather than attempts (oha's `requestsPerSec` includes requests it aborted at the deadline) and survives a run where nothing completed. PSS needed `cap_add: SYS_PTRACE`: without it root cannot read `smaps_rollup` of the unprivileged workers and memory silently read as ~0 |
 | 7 verdict diff | done | Both engines: 1000/1000 benign → 200; of 861 attack URLs 580 → 403 and 281 pass at PL1. **`--diff nginx-modsec caddy-coraza` is empty: 0 disagreements in 1,861 URLs.** There is no noise floor to hide behind — in Task 10 prx-waf must match all 1,861 |
-| 8 baseline | not started | needs the reference Linux machine |
+| 8 baseline | not started | needs the reference Linux machine. Everything it runs has now been exercised end to end here |
 
 ### First look at the incumbent (harness-debugging numbers — do not publish)
 
@@ -701,7 +701,18 @@ What this already says about where to aim:
 4. **Coraza's memory is unbounded under concurrent bodies.** 64 concurrent 16 KB JSON posts drove `caddy-coraza` to 7.8 GB PSS (~120 MB per in-flight request) with nothing completed in 10 s. W5 needs a third number besides idle and peak-on-GET: **peak under concurrent body inspection**, and prx should hold it flat by construction (bounded per-request scratch, H7) rather than by luck.
 5. **Slow scenarios need long runs.** With seconds per request, a 10 s window completes almost nothing and requests aborted during warm-up are still being chewed on when measurement starts. Use `DURATION=120 CONNECTIONS=8` for the JSON scenarios on WAF targets.
 
-**Blocker:** the Docker VM disk is full. `Dockerfile` does `COPY . .` and `.dockerignore` only excluded the top-level `target/`, so a prx image build copied `.claude/worktrees/*/target` (2.8 GB) into the build cache. `.dockerignore` is fixed; the space already consumed needs `docker builder prune`, and the host has ~3 GB free. Separately, the prx `Dockerfile` pinned `rust:1.85` while `rcgen`/`time` need ≥ 1.88 — bumped to 1.93, build not yet confirmed because of the disk.
+**WAF-off proxies on the same scenarios** (same caveats): the floor each WAF sits on.
+
+| Scenario | `nginx` rps / CPU µs | `caddy` rps / CPU µs | `prx` rps / CPU µs | `prx` PSS MB |
+|---|---|---|---|---|
+| `waf-get` | 68,097 / 27 | 23,370 / 77 | 18,219 / 84 | 28 |
+| `waf-attack-mix` | 68,689 / 27 | 23,261 / 77 | 18,345 / 84 | 22 |
+| `waf-form` | 64,468 / 30 | 20,610 / 89 | 17,170 / 94 | 28 |
+| `waf-json-16k` | 56,436 / 35 | 16,813 / 104 | 16,294 / 102 | 29 |
+
+This is the first proxy-vs-proxy run the harness has produced, and bare prx spends ~3× nginx's CPU per request. For the WAF goal it is small change — both incumbents add 850–1,400 µs per benign GET, so prx-waf wins W2–W4 as long as its WAF tax stays under roughly 750 µs, and T504 suggests far less. But it caps how large the win can look in absolute terms, it is a miss against the repo's own "RPS per core equal or better" goal, and it must be confirmed on the reference machine and profiled (`docs/PROFILING.md`) as its own task — not inside this plan.
+
+**Resolved blockers.** (1) The Docker disk filled because `Dockerfile` does `COPY . .` and `.dockerignore` only excluded the top-level `target/`, so an image build copied `.claude/worktrees/*/target` (2.8 GB) into the build cache; `.dockerignore` fixed, cache pruned. (2) The prx `Dockerfile` pinned `rust:1.85` while `rcgen`/`time` need ≥ 1.88; now 1.93 and the image builds. (3) The `prx` compose service passed `-c <toml>`, which pingora reads as its own YAML server conf, so the bench prx had never started; the path goes in `PRX_CONFIG` only.
 
 ## Threats to validity (say these out loud in `BENCHMARKS.md`)
 

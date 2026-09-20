@@ -35,7 +35,8 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    command: ["-c", "/etc/prx/Prx.toml"]
+    # The config path goes in PRX_CONFIG. `-c` belongs to pingora and names its
+    # own YAML server conf, so passing the TOML there fails at start-up.
     environment:
       PRX_CONFIG: "/etc/prx/Prx.toml"
       PRX_ADMIN_LISTEN: "127.0.0.1:9091"
