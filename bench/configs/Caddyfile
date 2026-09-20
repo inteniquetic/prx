@@ -17,8 +17,8 @@
 		transport http {
 			keepalive 60s
 			keepalive_idle_conns 256
-			# Without this Go's transport keeps 2 idle conns per upstream and
-			# redials the rest on every request; nginx pools 256 per worker.
+			# Explicit so the pool matches nginx's `keepalive 256`. Measured: no
+			# effect at 64 connections (23.1k vs 23.7k rps), so it is parity, not a fix.
 			keepalive_idle_conns_per_host 256
 			dial_timeout 1s
 			response_header_timeout 5s
