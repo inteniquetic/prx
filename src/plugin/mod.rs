@@ -19,8 +19,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use http::{HeaderName, HeaderValue};
 use pingora::http::{RequestHeader, ResponseHeader};
 use pingora::prelude::Result;
+
+/// The peer address type pingora hands out, re-exported so a plugin does not
+/// have to name the module path to read one.
+pub use pingora::protocols::l4::socket::SocketAddr as PeerAddr;
 
 pub mod builtin;
 pub mod registry;
@@ -68,6 +73,46 @@ impl PhaseMask {
 // What a plugin can decide
 // ---------------------------------------------------------------------------
 
+/// A response a plugin wants sent instead of going to an upstream.
+///
+/// It carries headers because the first two plugins to need one both did: a
+/// rate limit has to say `Retry-After`, and a cache hit has to give back the
+/// headers it stored (T502). A status and a body alone would have forced both
+/// of them to reach around the API.
+#[derive(Debug, Clone, Default)]
+pub struct PluginResponse {
+    pub status: u16,
+    pub headers: Vec<(HeaderName, HeaderValue)>,
+    pub body: Bytes,
+}
+
+impl PluginResponse {
+    pub fn new(status: u16) -> Self {
+        Self {
+            status,
+            headers: Vec::new(),
+            body: Bytes::new(),
+        }
+    }
+
+    pub fn with_body(mut self, body: impl Into<Bytes>) -> Self {
+        self.body = body.into();
+        self
+    }
+
+    /// Adds a header, ignoring one that cannot be encoded rather than failing
+    /// the response — a malformed header is not a reason to drop a rejection.
+    pub fn with_header(mut self, name: &str, value: impl AsRef<str>) -> Self {
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::try_from(name),
+            HeaderValue::from_str(value.as_ref()),
+        ) {
+            self.headers.push((name, value));
+        }
+        self
+    }
+}
+
 /// What the chain should do after a plugin has had its turn.
 #[derive(Debug, Clone)]
 pub enum PluginDecision {
@@ -76,17 +121,77 @@ pub enum PluginDecision {
     /// Answer this request here. The rest of the chain does not run and the
     /// request never reaches an upstream — or, from a response phase, the
     /// upstream's answer is replaced by this one.
-    Respond { status: u16, body: Bytes },
+    Respond(PluginResponse),
 }
 
 impl PluginDecision {
     /// A plain status with no body, which is what most rejections are.
     pub fn deny(status: u16) -> Self {
-        Self::Respond {
-            status,
-            body: Bytes::new(),
-        }
+        Self::Respond(PluginResponse::new(status))
     }
+}
+
+// ---------------------------------------------------------------------------
+// What a plugin needs resolving before it runs
+// ---------------------------------------------------------------------------
+
+/// Facts about a request that cost something to work out.
+///
+/// Declared rather than fetched, for the same reason the header rules already
+/// declare them (T101): rendering the client address allocates, and a route
+/// whose plugins never ask about it must not pay for one. The proxy fills in
+/// only what the chain said it wanted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NeedsMask(u8);
+
+impl NeedsMask {
+    pub const NONE: Self = Self(0);
+    /// `client_ip` and `client_port`, rendered as text. Costs an allocation,
+    /// which is why it is asked for rather than always supplied.
+    pub const CLIENT_ADDR: Self = Self(1 << 0);
+    /// `request_id`, generated if the request did not carry one.
+    pub const REQUEST_ID: Self = Self(1 << 1);
+    /// `peer_addr`, the address as the connection has it. A plugin that keys
+    /// off the client — a rate limit — wants this rather than
+    /// [`Self::CLIENT_ADDR`]: it buckets by address without rendering one.
+    pub const PEER_ADDR: Self = Self(1 << 2);
+
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+}
+
+impl Default for NeedsMask {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+/// The request-scoped facts a plugin can read, beside the thing it is given.
+///
+/// Anything here that costs work is `None` unless some plugin in the chain
+/// declared it in [`Plugin::needs`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RequestFacts<'a> {
+    /// Index of the matched route, for keys that must differ per route.
+    pub route_idx: usize,
+    /// The peer address as the connection has it, for keys that bucket by it
+    /// without rendering it. Needs [`NeedsMask::PEER_ADDR`].
+    pub peer_addr: Option<&'a PeerAddr>,
+    /// The peer address as text. Needs [`NeedsMask::CLIENT_ADDR`].
+    pub client_ip: Option<&'a str>,
+    /// Needs [`NeedsMask::CLIENT_ADDR`].
+    pub client_port: Option<u16>,
+    /// Needs [`NeedsMask::REQUEST_ID`].
+    pub request_id: Option<&'a str>,
+    /// Where this request went, once it has gone somewhere.
+    pub upstream_addr: Option<&'a str>,
+    /// `http` or `https`, as seen from prx to the upstream.
+    pub scheme: &'a str,
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +235,8 @@ pub struct PluginCtx<'a> {
     /// This plugin's own state for this request. `None` until it puts
     /// something there, and dropped with the request.
     pub state: &'a mut Option<Box<dyn Any + Send + Sync>>,
+    /// Request-scoped facts, filled in as far as the chain asked for them.
+    pub facts: RequestFacts<'a>,
 }
 
 /// What `on_log` gets to see. Read-only: logging is the phase for recording
@@ -170,6 +277,12 @@ pub trait Plugin: Send + Sync + 'static {
     /// where nobody does never allocates the slot array.
     fn uses_state(&self) -> bool {
         false
+    }
+
+    /// Request facts this plugin reads. Anything not declared here arrives as
+    /// `None`, however much the plugin would have liked it.
+    fn needs(&self) -> NeedsMask {
+        NeedsMask::NONE
     }
 
     async fn on_request_head(
@@ -223,6 +336,7 @@ pub trait Plugin: Send + Sync + 'static {
 pub struct PluginChain {
     plugins: Arc<[Arc<dyn Plugin>]>,
     mask: PhaseMask,
+    needs: NeedsMask,
     needs_state: bool,
 }
 
@@ -231,10 +345,14 @@ impl PluginChain {
         let mask = plugins
             .iter()
             .fold(PhaseMask::NONE, |acc, plugin| acc.union(plugin.phases()));
+        let needs = plugins
+            .iter()
+            .fold(NeedsMask::NONE, |acc, plugin| acc.union(plugin.needs()));
         let needs_state = plugins.iter().any(|plugin| plugin.uses_state());
         Self {
             plugins: plugins.into(),
             mask,
+            needs,
             needs_state,
         }
     }
@@ -260,6 +378,12 @@ impl PluginChain {
 
     pub fn needs_state(&self) -> bool {
         self.needs_state
+    }
+
+    /// What the proxy should resolve before running this chain.
+    #[inline]
+    pub fn needs(&self) -> NeedsMask {
+        self.needs
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn Plugin>> {
@@ -455,11 +579,64 @@ mod tests {
     #[test]
     fn deny_is_a_response_with_no_body() {
         match PluginDecision::deny(403) {
-            PluginDecision::Respond { status, body } => {
-                assert_eq!(status, 403);
-                assert!(body.is_empty());
+            PluginDecision::Respond(response) => {
+                assert_eq!(response.status, 403);
+                assert!(response.body.is_empty());
+                assert!(response.headers.is_empty());
             }
             PluginDecision::Continue => panic!("deny should not continue"),
         }
+    }
+
+    #[test]
+    fn a_response_carries_the_headers_a_rejection_needs() {
+        // The rate limit's `Retry-After` is the reason `Respond` grew headers
+        // at all (T502).
+        let response = PluginResponse::new(429)
+            .with_header("retry-after", "3")
+            .with_body("slow down\n");
+        assert_eq!(response.status, 429);
+        assert_eq!(response.headers.len(), 1);
+        assert_eq!(response.headers[0].0.as_str(), "retry-after");
+        assert_eq!(response.headers[0].1.as_bytes(), b"3");
+    }
+
+    #[test]
+    fn a_header_that_cannot_be_encoded_is_dropped_not_fatal() {
+        // A malformed header is not a reason to lose the rejection itself.
+        let response = PluginResponse::new(403).with_header("bad header", "x");
+        assert!(response.headers.is_empty());
+        assert_eq!(response.status, 403);
+    }
+
+    #[test]
+    fn a_chain_asks_for_only_what_its_plugins_declare() {
+        struct Needy;
+        #[async_trait]
+        impl Plugin for Needy {
+            fn name(&self) -> &str {
+                "needy"
+            }
+            fn kind(&self) -> &'static str {
+                "needy"
+            }
+            fn phases(&self) -> PhaseMask {
+                PhaseMask::REQUEST_HEAD
+            }
+            fn needs(&self) -> NeedsMask {
+                NeedsMask::PEER_ADDR
+            }
+        }
+
+        let plain = PluginChain::new(vec![marker("a", PhaseMask::REQUEST_HEAD, false)]);
+        assert_eq!(plain.needs(), NeedsMask::NONE);
+
+        let chain = PluginChain::new(vec![
+            marker("a", PhaseMask::REQUEST_HEAD, false),
+            Arc::new(Needy),
+        ]);
+        assert!(chain.needs().contains(NeedsMask::PEER_ADDR));
+        // Nobody asked for the rendered address, so nothing should render one.
+        assert!(!chain.needs().contains(NeedsMask::CLIENT_ADDR));
     }
 }

@@ -13,7 +13,7 @@ use bytes::Bytes;
 use pingora::http::{RequestHeader, ResponseHeader};
 use pingora::prelude::Result as PingoraResult;
 
-use crate::plugin::{PhaseMask, Plugin, PluginCtx, PluginDecision};
+use crate::plugin::{PhaseMask, Plugin, PluginCtx, PluginDecision, PluginResponse};
 
 #[derive(Debug)]
 pub struct EchoHeader {
@@ -146,10 +146,9 @@ impl Plugin for EchoHeader {
             Self::append(head, name, &self.value);
         }
         match self.respond_status {
-            Some(status) => Ok(PluginDecision::Respond {
-                status,
-                body: Bytes::from(self.respond_body.clone()),
-            }),
+            Some(status) => Ok(PluginDecision::Respond(
+                PluginResponse::new(status).with_body(Bytes::from(self.respond_body.clone())),
+            )),
             None => Ok(PluginDecision::Continue),
         }
     }
