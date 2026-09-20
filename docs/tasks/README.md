@@ -117,7 +117,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T502](T502-builtins-as-plugins.md) | ย้าย header/rate limit/concurrency/cache/compression มาเป็น plugin | M | T501 | ✅ done (ย้าย 4; compression มีเหตุผลว่าทำไมไม่ควรย้าย; API ต้องขยาย 2 จุด) |
 | [T503](T503-body-inspection.md) | `request_body_filter` + buffering แบบมีเพดานสองชั้น | L | T501 (เฉพาะส่วนต่อ plugin) | todo |
 | [T504](T504-waf-engine-spike.md) | **Spike: วัด CRS compat แล้วเลือก engine** — ประตูตัดสินของเฟส | M | — | ✅ done → [เขียนเอง](../decisions/0001-waf-engine.md) (CRS 100% หลังชั้นแปลง; ไม่มีกฎไหนต้อง backreference) |
-| [T505](T505-seclang-parser.md) | SecLang parser → rule model ที่คอมไพล์แล้ว | L | T504 | todo (ไฟเขียวจาก T504) |
+| [T505](T505-seclang-parser.md) | SecLang parser → rule model ที่คอมไพล์แล้ว | L | T504 | ✅ done — CRS v4.21.0 โหลดครบ 615 กฎ / 0 issue ใน ~0.1 s · **ต้องคอมไพล์ regex แบบ byte ไม่ใช่ Unicode แบบที่ T504 วัด** (ซ่อม 13 pattern ไม่ใช่ 7) |
 | [T506](T506-waf-operators.md) | Operators, transformations, variable extraction | L | T505 | todo (ไฟเขียวจาก T504) |
 | [T507](T507-crs-anomaly-scoring.md) | CRS: anomaly scoring, paranoia level, exclusion | L | T506 | todo (ไฟเขียวจาก T504) |
 | [T508](T508-waf-performance.md) | Prefilter, perf gate พร้อมตัวเลข | M | T507 | todo · **แผนต้องแก้**: T504 วัดแล้วว่า RegexSet ช้ากว่า naive 18× |
