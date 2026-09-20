@@ -665,11 +665,30 @@ Status on 2026-09-20 (branch `bench/waf-comparison`, macOS + OrbStack — harnes
 | 1 sampling | done, verified on `nginx` | Also fixed three bugs that meant the harness had never produced a valid run: `oha -j` no longer exists (→ `--output-format json`); the sampler was started inside `$(...)`, which blocks until the background job ends, so it sampled an **idle** proxy before the load began; the `RETURN` trap fired again in `main` with `tmp` unbound. nginx now reports 27 µs CPU/request instead of 0.03 |
 | 2 backend bodies | done, verified | 2000 × 128 KB POST over keep-alive through nginx → 100 % 200 |
 | 3 shared ruleset | done | The T504 decision record named commit `8d06076`; that is CRS `main`. The `v4.21.0` tag is `2ac6c00` and has the 678 `SecRule`s T504 counted, so T504 measured the tag and only the hash was mislabelled. Pin and record corrected |
-| 4 `nginx-modsec` | files written, **not run** | blocked, see below. Image still referenced by tag (`BENCH_MODSEC_IMAGE`); pin the digest at first pull |
-| 5 `caddy`, `caddy-coraza` | files written, **not run** | `coraza-caddy` pinned to v2.6.1 (`BENCH_CORAZA_CADDY`) |
-| 6 workloads | done; corpus deterministic | scenarios not yet exercised against a WAF target |
-| 7 verdict diff | script written; diff logic self-checked | not yet run against a target |
+| 4 `nginx-modsec` | done, verified | nginx 1.30.5 + ModSecurity-nginx 1.0.4 + libmodsecurity 3.0.16, 826 rules loaded, pinned by digest. Benign → 200; SQLi/XSS in query and in a JSON body → 403. The plain `nginx` twin was moved from 1.27 to 1.30.5 so the pair differs by the WAF only. The image's healthcheck is disabled (it would add requests to the run) |
+| 5 `caddy`, `caddy-coraza` | files written, **not run** | `coraza-caddy` pinned to v2.6.1 (`BENCH_CORAZA_CADDY`). Image build fails: no space left to pull `caddy:2-builder` |
+| 6 workloads | done, verified on `nginx` and `nginx-modsec` | `bench-parse.py` now counts responses rather than attempts (oha's `requestsPerSec` includes requests it aborted at the deadline) and survives a run where nothing completed. PSS needed `cap_add: SYS_PTRACE`: without it root cannot read `smaps_rollup` of the unprivileged workers and memory silently read as ~0 |
+| 7 verdict diff | run on `nginx-modsec` | 1000/1000 benign → 200; of 861 attack URLs 580 → 403 and 281 pass at PL1. Diff against Coraza waits for Task 5 |
 | 8 baseline | not started | needs the reference Linux machine |
+
+### First look at the incumbent (harness-debugging numbers — do not publish)
+
+macOS + OrbStack, 10 s runs, 64 connections, proxy on 2 CPUs. Good for orders of magnitude only.
+
+| Scenario | `nginx` rps | `nginx-modsec` rps | CPU µs/req off → on | p99 ms off → on | PSS MB off → on |
+|---|---|---|---|---|---|
+| `waf-get` | 68,097 | 1,438 | 27 → 1,380 | 5.0 → 54.6 | 35 → 85 |
+| `waf-attack-mix` | 68,689 | 1,636 | 27 → 1,212 | 6.1 → 68.0 | 35 → 85 |
+| `waf-form` (20 fields, 2 KB) | 64,468 | 502 | 30 → 3,974 | 4.9 → 216 | 35 → 86 |
+| `waf-json-16k` (970 leaf values) | 56,436 | 4 | 35 → 502,558 | 7.7 → 4,096 | 36 → 112 |
+| `waf-json-128k` (7,815 leaf values) | — | one request alone: **2.6 s** | | | |
+
+What this already says about where to aim:
+
+1. **ModSecurity's cost is per variable, not per byte.** 20 form fields cost ~3× a bare GET; 970 JSON leaves cost ~360×; 7,815 leaves take seconds and grow faster than linearly (8× the leaves, 14× the time). This is the `82 µs × number of variables` warning from T504 at full size. The T508 budget of +5 ms at 128 KB is ~500× tighter than the incumbent on this body shape — prx does not need heroics to win here, it needs to not repeat the per-variable × per-rule loop. H2 (transformation memo), H3 (lazy extraction) and H6 (one Aho-Corasick pass per value before any regex) are the hypotheses that attack exactly this.
+2. **Body shape is part of the scenario.** "128 KB JSON" means nothing without the leaf count; the corpus is argument-dense (5 short leaves per ~84 bytes), which is realistic for API traffic and close to worst case for a WAF. Report leaf counts next to body sizes, and add one sparse body (few large values) before publishing so both ends are visible.
+3. **A WAF this slow is a DoS lever.** One 128 KB request pins a worker for seconds; 4 of them stall the proxy. prx must bound WAF work per request (a variable-count cap and/or a time budget that fails closed or open by config) — this belongs in T503/T507, not only in T508.
+4. **Slow scenarios need long runs.** With seconds per request, a 10 s window completes almost nothing and requests aborted during warm-up are still being chewed on when measurement starts. Use `DURATION=120 CONNECTIONS=8` for the JSON scenarios on WAF targets.
 
 **Blocker:** the Docker VM disk is full. `Dockerfile` does `COPY . .` and `.dockerignore` only excluded the top-level `target/`, so a prx image build copied `.claude/worktrees/*/target` (2.8 GB) into the build cache. `.dockerignore` is fixed; the space already consumed needs `docker builder prune`, and the host has ~3 GB free. Separately, the prx `Dockerfile` pinned `rust:1.85` while `rcgen`/`time` need ≥ 1.88 — bumped to 1.93, build not yet confirmed because of the disk.
 

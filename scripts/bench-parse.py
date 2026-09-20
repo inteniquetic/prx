@@ -22,15 +22,19 @@ def parse_oha(text: str) -> dict:
     data = json.loads(text)
     summary = data.get("summary", {})
     latency = data.get("latencyPercentiles", {})
-    total = summary.get("total", 0.0)
-    success = summary.get("successRate", 0.0)
+    total = summary.get("total") or 0.0
+    # null when nothing completed (a WAF can take seconds per request).
+    success = summary.get("successRate") or 0.0
     # oha reports successRate as a fraction in recent versions and as a
     # percentage in older ones; normalize to a fraction.
     if success > 1.0:
         success = success / 100.0
+    # Count responses, not attempts: oha's requestsPerSec includes requests it
+    # aborted at the deadline, which flatters a target that answered nothing.
+    completed = sum((data.get("statusCodeDistribution") or {}).values())
     return {
-        "requests_per_second": summary.get("requestsPerSec", 0.0),
-        "requests_total": int(round(summary.get("requestsPerSec", 0.0) * total)),
+        "requests_per_second": round(completed / total, 2) if total else 0.0,
+        "requests_total": completed,
         "success_rate": success,
         "latency_ms": {
             "p50": _sec_to_ms(latency.get("p50")),
