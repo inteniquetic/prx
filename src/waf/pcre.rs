@@ -25,8 +25,11 @@ use regex::bytes::RegexBuilder;
 use super::rule::Rx;
 
 /// Compiles a pattern the way ModSecurity v3 and Coraza read it: `.` matches a
-/// newline and `^`/`$` match at line ends (PCRE_DOTALL | PCRE_MULTILINE,
-/// `(?sm)` in Coraza), and the pattern works on bytes, not code points.
+/// newline and `^`/`$` match at line ends (`PCRE2_DOTALL | PCRE2_MULTILINE`
+/// with no UTF flag in libmodsecurity's `utils/regex.cc`, `(?sm)` in Coraza's
+/// `operators/rx.go`), and the pattern works on bytes, not code points.
+/// Coraza means to drop the `m` in v4 (corazawaf/coraza#876); when the
+/// engines the bench compares against move, this is the line that follows.
 ///
 /// Bytes are not a detail. With `regex`'s Unicode mode on, `.` and `[^x]` step
 /// over whole UTF-8 sequences and stop dead at a byte that is not one, so
