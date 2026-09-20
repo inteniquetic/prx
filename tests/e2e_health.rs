@@ -47,7 +47,7 @@ impl ToggleUpstream {
                 .expect("failed to set nonblocking toggle listener");
 
             while !stop.load(Ordering::Relaxed) {
-                match listener.accept() {
+                match common::accept_blocking(&listener) {
                     Ok((mut stream, _)) => {
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                         let mut buf = [0u8; 2048];
