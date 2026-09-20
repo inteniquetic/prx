@@ -2,7 +2,8 @@
 //!
 //! The backend must never be the bottleneck, so it does the least work that is
 //! still a correct HTTP/1.1 keep-alive server: it reads until the end of the
-//! request head, picks a canned response by path, and writes it back.
+//! request head, picks a canned response by path, drops any request body, and
+//! writes the response back.
 //!
 //! Routes:
 //!   /            -> 1 KiB body
@@ -72,8 +73,8 @@ async fn serve(mut stream: TcpStream, bodies: Arc<Bodies>) -> io::Result<()> {
     let mut filled = 0usize;
 
     loop {
-        // Read until the request head is complete. Bodies are not consumed:
-        // the harness only issues GETs.
+        // Read until the request head is complete. The body, if any, is
+        // dropped below once the response has been picked.
         let head_end = loop {
             if let Some(pos) = find_head_end(&buf[..filled]) {
                 break pos;
@@ -102,12 +103,42 @@ async fn serve(mut stream: TcpStream, bodies: Arc<Bodies>) -> io::Result<()> {
             "/healthz" => Arc::new(response(b"ok\n")),
             _ => bodies.small.clone(),
         };
-        stream.write_all(&body).await?;
+        let body_len = content_length(&buf[..head_end]);
 
-        // Carry over any pipelined bytes that arrived with this request.
-        buf.copy_within(head_end..filled, 0);
-        filled -= head_end;
+        // Drop the request body: what is already buffered, then the rest off
+        // the wire. Anything past it is a pipelined request and is carried over.
+        let buffered = (filled - head_end).min(body_len);
+        buf.copy_within(head_end + buffered..filled, 0);
+        filled -= head_end + buffered;
+        let mut remaining = body_len - buffered;
+        while remaining > 0 {
+            let want = remaining.min(buf.len());
+            let n = stream.read(&mut buf[..want]).await?;
+            if n == 0 {
+                return Ok(());
+            }
+            remaining -= n;
+        }
+
+        stream.write_all(&body).await?;
     }
+}
+
+// ponytail: Content-Length only. Every proxy under test forwards a length for
+// the fixed-size bodies oha sends; add chunked decoding if a scenario needs it.
+fn content_length(head: &[u8]) -> usize {
+    for line in head.split(|b| *b == b'\n') {
+        let Some(colon) = line.iter().position(|b| *b == b':') else {
+            continue;
+        };
+        if line[..colon].eq_ignore_ascii_case(b"content-length") {
+            return std::str::from_utf8(&line[colon + 1..])
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+        }
+    }
+    0
 }
 
 /// Returns the index just past the `\r\n\r\n` that ends the request head.
@@ -121,4 +152,22 @@ fn request_path(head: &[u8]) -> &str {
     let _method = parts.next();
     let path = parts.next().unwrap_or(b"/");
     std::str::from_utf8(path).unwrap_or("/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::content_length;
+
+    #[test]
+    fn reads_content_length_case_insensitively() {
+        assert_eq!(
+            content_length(b"POST / HTTP/1.1\r\ncontent-LENGTH: 42\r\n\r\n"),
+            42
+        );
+    }
+
+    #[test]
+    fn no_header_means_no_body() {
+        assert_eq!(content_length(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"), 0);
+    }
 }
