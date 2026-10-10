@@ -3,11 +3,14 @@
 //! Provides lazy extraction of request collections (ARGS, HEADERS, COOKIES, etc.)
 //! and memoization of transformation results.
 
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::cell::RefCell;
+#![allow(clippy::type_complexity)]
+#![allow(clippy::collapsible_if)]
+
 use crate::waf::rule::Key;
 use pingora::http::RequestHeader;
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 /// Holds the per-request state, including transformation cache.
 pub struct Transaction<'a> {
@@ -15,6 +18,10 @@ pub struct Transaction<'a> {
     pub body: &'a [u8],
     /// Cache: (VariableCollection, SelectorKey, TransformChainIndex) -> TransformedValue
     pub transform_cache: RefCell<HashMap<(String, String, usize), Cow<'a, [u8]>>>,
+    /// Anomaly Scores per phase (0-4 for phase 1-5)
+    pub anomaly_scores: RefCell<[u32; 5]>,
+    /// TX collection variables
+    pub tx: RefCell<HashMap<String, String>>,
 }
 
 impl<'a> Transaction<'a> {
@@ -23,7 +30,24 @@ impl<'a> Transaction<'a> {
             head,
             body,
             transform_cache: RefCell::new(HashMap::new()),
+            anomaly_scores: RefCell::new([0; 5]),
+            tx: RefCell::new(HashMap::new()),
         }
+    }
+
+    pub fn update_score(&self, phase: usize, score: u32) {
+        if phase < 5 {
+            let mut scores = self.anomaly_scores.borrow_mut();
+            scores[phase] += score;
+        }
+    }
+
+    pub fn set_var(&self, name: &str, value: String) {
+        self.tx.borrow_mut().insert(name.to_ascii_uppercase(), value);
+    }
+
+    pub fn get_var(&self, name: &str) -> Option<String> {
+        self.tx.borrow().get(&name.to_ascii_uppercase()).cloned()
     }
 }
 
@@ -33,6 +57,15 @@ pub fn get_variable<'a>(
     collection: &str,
     key: &Key,
 ) -> Cow<'a, [u8]> {
+    // If collection is TX, check the tx map first.
+    if collection.eq_ignore_ascii_case("TX") {
+        if let Key::Name(name) = key {
+            if let Some(val) = trx.get_var(name) {
+                return Cow::Owned(val.into_bytes());
+            }
+        }
+    }
+
     let key_str = format!("{:?}", key);
     let cache_key = (collection.to_string(), key_str, 0); // Using 0 as a placeholder for raw
     
@@ -56,6 +89,14 @@ pub fn extract_variable<'a>(
     key: &Key,
 ) -> Cow<'a, [u8]> {
     match collection.to_ascii_uppercase().as_str() {
+        "TX" => {
+            if let Key::Name(name) = key {
+                if let Some(val) = trx.get_var(name) {
+                    return Cow::Owned(val.into_bytes());
+                }
+            }
+            Cow::Borrowed(b"")
+        }
         "REQUEST_HEADERS" => extract_headers(trx, key),
         "REQUEST_BODY" => {
             if matches!(key, Key::All) {
