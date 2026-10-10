@@ -11,13 +11,14 @@
 //! whether the [`Loaded::issues`] are acceptable, and should log the
 //! [`Loaded`] (it implements `Display`) either way.
 
+pub mod evaluator;
+pub mod operator;
 pub mod parse;
 mod pcre;
 pub mod rule;
 pub mod transform;
-pub mod operator;
 pub mod vars;
-pub mod evaluator;
+pub mod prefilter;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -27,6 +28,7 @@ use std::{fmt, fs};
 use serde::Serialize;
 
 use crate::config::IssueSeverity;
+use crate::waf::prefilter::Prefilter;
 use rule::{
     Action, Directive, DirectiveKind, Disruptive, Key, Link, Operator, Rule, RuleLink, RuleSet,
     Selector, Target, Variable,
@@ -522,6 +524,15 @@ impl Builder {
 
         let ruleset = &mut self.loaded.ruleset;
         let summary = &mut self.loaded.summary;
+        
+        let mut literals = Vec::new();
+        for link in ruleset.phases.iter().flatten().flat_map(|rule| &rule.links) {
+            if link.operator.name.eq_ignore_ascii_case("pm") {
+                literals.extend(link.operator.argument.split_whitespace().map(|s| s.to_string()));
+            }
+        }
+        ruleset.prefilter = Some(Arc::new(Prefilter::new(literals)));
+
         for link in ruleset.phases.iter().flatten().flat_map(|rule| &rule.links) {
             summary.rx += usize::from(link.rx.is_some());
             summary.rx_repaired += usize::from(link.rx.as_ref().is_some_and(|rx| rx.repaired));

@@ -13,6 +13,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
+use crate::waf::prefilter::Prefilter;
 
 // ---------------------------------------------------------------------------
 // What the file says
@@ -524,6 +525,7 @@ pub struct RuleSet {
     pub needs: BTreeSet<String>,
     pub component_signatures: Vec<String>,
     pub collection_timeout: Option<u64>,
+    pub prefilter: Option<Arc<Prefilter>>,
 }
 
 /// One rule with its whole chain, defaults applied.
