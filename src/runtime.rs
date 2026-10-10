@@ -22,6 +22,7 @@ use crate::{
     limiter::{ConcurrencyLimiter, RateLimiter},
     plugin::{Plugin, PluginChain, builtin},
     router::{IndexedRoute, RouteIndex, RouteMatch, method_mask},
+    waf::rule::RuleSet,
 };
 
 #[derive(Debug)]
@@ -29,6 +30,7 @@ pub struct RuntimeConfig {
     routes: Vec<RouteRuntime>,
     services: Vec<ServiceRuntime>,
     index: RouteIndex,
+    pub ruleset: Arc<RuleSet>,
 }
 
 impl RuntimeConfig {
@@ -107,6 +109,7 @@ impl RuntimeConfig {
             routes,
             services,
             index,
+            ruleset: Arc::new(crate::waf::rule::RuleSet::default()),
         }
     }
 

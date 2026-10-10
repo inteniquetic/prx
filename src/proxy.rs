@@ -689,33 +689,33 @@ impl ProxyHttp for PrxProxy {
         body: &mut Option<Bytes>,
         end_of_stream: bool,
         ctx: &mut Self::CTX,
-    ) -> Result<Option<Duration>> {
+    ) -> Result<()> {
         let Some(snapshot) = &ctx.snapshot else {
-            return Ok(None);
+            return Ok(());
         };
         let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx)) else {
-            return Ok(None);
+            return Ok(());
         };
 
         if !route.plugins.handles(PhaseMask::REQUEST_BODY) {
-            return Ok(None);
+            return Ok(());
         }
 
         // Handle upgrades and streaming (simplified for now)
         if ctx.is_upgrade || body.is_none() {
             // Log as per T503 requirements.
-            return Ok(None);
+            return Ok(());
         }
 
         let access = snapshot.ruleset.settings.request_body_access.unwrap_or(false);
         let limit = snapshot.ruleset.settings.request_body_limit.unwrap_or(0);
 
         if !access || limit == 0 {
-            return Ok(None);
+            return Ok(());
         }
 
         if ctx.body_too_large {
-            return Ok(None);
+            return Ok(());
         }
 
         if let Some(chunk) = body {
@@ -735,7 +735,7 @@ impl ProxyHttp for PrxProxy {
              }
         }
         
-        Ok(None)
+        Ok(())
     }
 
     async fn upstream_peer(
