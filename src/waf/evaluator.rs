@@ -1,4 +1,5 @@
-use crate::waf::rule::{Operator, Rule, RuleLink, RuleSet, Rx};
+use crate::waf::prefilter::Prefilter;
+use crate::waf::rule::{RuleSet, Rule, RuleLink, Key, Operator, Rx};
 use crate::waf::vars::Transaction;
 use std::borrow::Cow;
 use std::sync::Arc;
