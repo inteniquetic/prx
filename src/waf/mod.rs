@@ -16,6 +16,7 @@ mod pcre;
 pub mod rule;
 pub mod transform;
 pub mod operator;
+pub mod vars;
 pub mod evaluator;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};

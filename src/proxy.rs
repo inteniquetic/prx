@@ -21,6 +21,7 @@ use crate::plugin::{
     LogInfo, NeedsMask, PhaseMask, PluginChain, PluginCtx, PluginDecision, PluginResponse,
     PluginState, RequestFacts, StateSlots,
 };
+use crate::waf::vars::Transaction;
 use crate::router::RouteMatch;
 use crate::runtime::{RuntimeConfig, hash_key, normalize_host};
 
@@ -685,7 +686,7 @@ impl ProxyHttp for PrxProxy {
 
     async fn request_body_filter(
         &self,
-        _session: &mut Session,
+        session: &mut Session,
         body: &mut Option<Bytes>,
         end_of_stream: bool,
         ctx: &mut Self::CTX,
@@ -726,11 +727,11 @@ impl ProxyHttp for PrxProxy {
                 // Log and maybe block
             }
         }
-
+        
         if end_of_stream {
              let evaluator = Evaluator::new(snapshot.ruleset.clone());
-             let req_header = _session.req_header();
-             if let Some(reason) = evaluator.evaluate_request_head(req_header, &ctx.buffered_body) {
+             let mut trx = Transaction::new(session.req_header(), &ctx.buffered_body);
+             if let Some(reason) = evaluator.evaluate_request_head(&trx) {
                  warn!("WAF matched: {}", reason);
              }
         }
