@@ -84,12 +84,14 @@ name = "api-v1-route"
 service = "api-v1"
 host = "api.local"
 path_prefix = "/v1"
+plugins = ["global-echo"]
 
 [[route]]
 name = "api-v2-route"
 service = "api-v2"
 host = "api.local"
 path_prefix = "/v2"
+plugins = ["global-echo"]
 
 [[route]]
 name = "default-route"
@@ -97,6 +99,15 @@ service = "api-v1"
 host = ""
 path_prefix = "/"
 is_default = true
+plugins = ["global-echo"]
+
+[[plugin]]
+name = "global-echo"
+kind = "echo-header"
+enabled = true
+[plugin.config]
+request_header = "X-Global-Processed"
+value = "true"
 
 # ── Plugins (T501) ──
 #
