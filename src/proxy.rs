@@ -5,8 +5,9 @@ use std::{
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use http::Method;
+use crate::waf::evaluator::Evaluator;
 use pingora::modules::http::HttpModules;
 use pingora::modules::http::compression::ResponseCompressionBuilder;
 use pingora::prelude::*;
@@ -447,10 +448,14 @@ pub struct RequestCtx {
     peer_addr: Option<crate::plugin::PeerAddr>,
     /// Set when a plugin answered from a response phase: the upstream's body is
     /// dropped and this is sent instead.
-    plugin_body: Option<Bytes>,
+    pub plugin_body: Option<Bytes>,
     /// True once `plugin_body` has gone out, so the rest of the upstream body
     /// can be discarded rather than appended to it.
-    plugin_body_sent: bool,
+    pub plugin_body_sent: bool,
+    /// Buffers the request body for WAF inspection.
+    pub buffered_body: BytesMut,
+    /// Whether the buffering has reached the limit or was rejected.
+    pub body_too_large: bool,
 }
 
 impl RequestCtx {
@@ -512,6 +517,8 @@ impl Default for RequestCtx {
             peer_addr: None,
             plugin_body: None,
             plugin_body_sent: false,
+            buffered_body: BytesMut::new(),
+            body_too_large: false,
         }
     }
 }
@@ -674,6 +681,61 @@ impl ProxyHttp for PrxProxy {
                 Ok(true)
             }
         }
+    }
+
+    async fn request_body_filter(
+        &self,
+        _session: &mut Session,
+        body: &mut Option<Bytes>,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<Option<Duration>> {
+        let Some(snapshot) = &ctx.snapshot else {
+            return Ok(None);
+        };
+        let Some(route) = ctx.route_idx.and_then(|idx| snapshot.route(idx)) else {
+            return Ok(None);
+        };
+
+        if !route.plugins.handles(PhaseMask::REQUEST_BODY) {
+            return Ok(None);
+        }
+
+        // Handle upgrades and streaming (simplified for now)
+        if ctx.is_upgrade || body.is_none() {
+            // Log as per T503 requirements.
+            return Ok(None);
+        }
+
+        let access = snapshot.ruleset.settings.request_body_access.unwrap_or(false);
+        let limit = snapshot.ruleset.settings.request_body_limit.unwrap_or(0);
+
+        if !access || limit == 0 {
+            return Ok(None);
+        }
+
+        if ctx.body_too_large {
+            return Ok(None);
+        }
+
+        if let Some(chunk) = body {
+            if ctx.buffered_body.len() + chunk.len() <= limit as usize {
+                ctx.buffered_body.extend_from_slice(chunk);
+            } else {
+                ctx.body_too_large = true;
+                // Log and maybe block
+            }
+        }
+
+        if end_of_stream {
+             let evaluator = Evaluator::new(snapshot.ruleset.clone());
+             let req_header = _session.req_header();
+             if let Some(reason) = evaluator.evaluate_request_head(req_header, &ctx.buffered_body) {
+                 warn!("WAF matched: {}", reason);
+             }
+        }
+        
+        Ok(None)
     }
 
     async fn upstream_peer(

@@ -14,6 +14,9 @@
 pub mod parse;
 mod pcre;
 pub mod rule;
+pub mod transform;
+pub mod operator;
+pub mod evaluator;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};

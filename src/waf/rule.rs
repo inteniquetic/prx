@@ -505,7 +505,7 @@ impl Settings {
 }
 
 /// An immutable, fully resolved ruleset.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RuleSet {
     pub settings: Settings,
     /// Rules by phase (index 0 is phase 1), in file order within a phase.
