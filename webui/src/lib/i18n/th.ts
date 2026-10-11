@@ -357,6 +357,7 @@ export const th: Record<string, string> = {
   'banner.detail.error': 'ตัวเลขพวกนี้หยุดอัปเดตแล้ว: {error}',
   'banner.detail.stale': 'ตัวเลขที่เห็นคือชุดสุดท้ายที่ส่งมาถึง ไม่ใช่สิ่งที่เกิดขึ้นตอนนี้',
   'banner.detail.polling': 'stream แบบสดใช้ไม่ได้ หน้านี้จึงถามทุกสองสามวินาทีแทน',
+  'banner.problem.routesDown': '{routes} route มีปัญหา, upstream เข้าไม่ถึง {upstreams} ตัว',
   'banner.problem.allDown': 'upstream ทั้งหมดของ “{service}” ถูกเอาออกจาก pool แล้ว',
   'banner.problem.someDown': '“{service}” เหลือ upstream ที่ใช้ได้ {healthy} จาก {total}',
   'banner.problem.errors': 'คำขอ {percent} กำลังตอบ 5xx',

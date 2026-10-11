@@ -358,6 +358,7 @@ export const en: Record<string, string> = {
   'banner.detail.error': 'These numbers stopped updating: {error}',
   'banner.detail.stale': 'These numbers are the last ones that arrived, not what is happening now.',
   'banner.detail.polling': 'The live stream is unavailable, so this page is asking every couple of seconds instead.',
+  'banner.problem.routesDown': '{routes} routes unhealthy, {upstreams} upstreams unreachable.',
   'banner.problem.allDown': 'Every upstream in “{service}” is out of the pool.',
   'banner.problem.someDown': '“{service}” is down to {healthy} of {total} upstreams.',
   'banner.problem.errors': '{percent} of requests are answering 5xx.',

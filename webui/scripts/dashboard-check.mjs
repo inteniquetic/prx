@@ -292,6 +292,15 @@ const streamBody = (ticks) => {
 /** Switched mid-run to test the fallbacks. */
 let streamMode = 'ok'; // 'ok' | 'refused' | 'down'
 let statsMode = 'ok'; // 'ok' | 'down'
+/** What `/web/health/routes` reports: 'empty' (no probe yet) or 'backends-down'. */
+let routeHealthMode = 'empty';
+
+/** Three routes unhealthy, five upstreams down: the sidebar's numbers. */
+const routeHealthBackendsDown = () => [
+  { route_index: 0, name: 'checkout-api', service: 'checkout', host: 'shop.example.com', path_prefix: '/api', healthy: false, reachable_upstreams: 0, total_upstreams: 2, upstreams: [] },
+  { route_index: 1, name: 'checkout-web', service: 'checkout', host: 'shop.example.com', path_prefix: '/', healthy: false, reachable_upstreams: 0, total_upstreams: 2, upstreams: [] },
+  { route_index: 2, name: 'checkout-admin', service: 'checkout', host: 'admin.example.com', path_prefix: '/', healthy: false, reachable_upstreams: 0, total_upstreams: 1, upstreams: [] }
+];
 
 const failures = [];
 const check = (ok, what) => {
@@ -311,7 +320,11 @@ await context.route('**/web/config*', (route) =>
 await context.route('**/web/health/routes*', (route) =>
   route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify({ checked_at_epoch_ms: Date.now(), timeout_ms: 1200, routes: [] })
+    body: JSON.stringify({
+      checked_at_epoch_ms: Date.now(),
+      timeout_ms: 1200,
+      routes: routeHealthMode === 'backends-down' ? routeHealthBackendsDown() : []
+    })
   })
 );
 await context.route('**/web/services/status', (route) =>
@@ -519,6 +532,29 @@ check(
   'the last known chart stays on screen behind the warning'
 );
 
+// --- 9. the sidebar and the banner agree on what is unhealthy --------------
+// The sidebar badge is computed from /web/health/routes; the banner from the
+// stats stream. With the backends gone, both must say so.
+degraded = false;
+streamMode = 'ok';
+statsMode = 'ok';
+routeHealthMode = 'backends-down';
+await page.goto(`${ORIGIN}/`, { waitUntil: 'networkidle' });
+await settle(1500);
+const sidebarText = await page.locator('nav').first().innerText();
+const sidebarSaysDown = /3\s+routes unhealthy/.test(sidebarText);
+check(sidebarSaysDown, `the sidebar reports 3 routes unhealthy (nav text: ${JSON.stringify(sidebarText.slice(0, 200))})`);
+check(
+  (await banner.getAttribute('data-system-state')) !== 'ok',
+  `the dashboard banner must not say healthy while the sidebar says 3 routes are unhealthy (banner: ${await banner.getAttribute('data-system-state')})`
+);
+check(
+  /route|upstream/i.test(await banner.innerText()),
+  'the banner names the routes or upstreams that are down'
+);
+routeHealthMode = 'empty';
+
+
 await browser.close();
 stop();
 
@@ -533,6 +569,7 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`  ${failure}`);
   process.exit(1);
 }
+
 
 console.log('Dashboard check passed — live tiles, charts, leaderboards, degradation, fallbacks.');
 process.exit(0);

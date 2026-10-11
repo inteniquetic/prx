@@ -296,6 +296,7 @@
          cache. -->
     <DashboardPage
       config={$configStore}
+      routeHealth={routeHealthResponse}
       onnavigate={(page) => navigate(page)}
       onselectRoute={openRoute}
       onselectService={openService}

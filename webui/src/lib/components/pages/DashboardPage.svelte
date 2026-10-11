@@ -18,6 +18,7 @@
   import TimeseriesChart, { type ChartSeries } from '../dashboard/TimeseriesChart.svelte';
   import UpstreamGrid from '../dashboard/UpstreamGrid.svelte';
 
+  import type { RouteHealthResponse } from '$lib/api/admin';
   import type { StatsSample } from '$lib/api/stats';
   import { formatCount, formatLatency, formatPercent, formatThroughput } from '$lib/format';
   import { liveStats, startLiveStats } from '$lib/stores/stats';
@@ -26,6 +27,11 @@
 
   let {
     config,
+    /**
+     * The same `/web/health/routes` result the sidebar badges are counted from.
+     * The banner and the sidebar must agree, so both read this one answer.
+     */
+    routeHealth = null,
     onnavigate,
     onselectRoute,
     onselectService,
@@ -34,6 +40,7 @@
     onsetup
   }: {
     config: PrxConfig;
+    routeHealth?: RouteHealthResponse | null;
     onnavigate?: (page: 'routes' | 'services' | 'settings') => void;
     onselectRoute?: (name: string) => void;
     onselectService?: (name: string) => void;
@@ -135,12 +142,31 @@
 
   // --- is anything wrong ------------------------------------------------------
 
+  // Route health from the admin API, counted exactly as the sidebar counts it:
+  // the sidebar badge and this banner must never disagree about what is down.
+  const routeProblems = $derived.by(() => {
+    const routes = routeHealth?.routes ?? [];
+    const down = routes.filter((route) => !route.healthy);
+    return {
+      routes: down.length,
+      total: routes.length,
+      upstreams: down.reduce(
+        (total, route) => total + Math.max(0, route.total_upstreams - route.reachable_upstreams),
+        0
+      ),
+      names: down.map((route) => route.name)
+    };
+  });
+
   const systemState = $derived<SystemState>(
     !live.loaded || !sample
       ? 'unknown'
-      : sample.upstreams_total > 0 && sample.upstreams_healthy === 0
+      : (sample.upstreams_total > 0 && sample.upstreams_healthy === 0) ||
+          (routeProblems.total > 0 && routeProblems.routes === routeProblems.total)
         ? 'down'
-        : sample.upstreams_healthy < sample.upstreams_total || sample.error_ratio_5xx >= 0.05
+        : sample.upstreams_healthy < sample.upstreams_total ||
+            sample.error_ratio_5xx >= 0.05 ||
+            routeProblems.routes > 0
           ? 'degraded'
           : 'ok'
   );
@@ -166,6 +192,19 @@
           action: { label: $t('banner.action.service'), go: () => onselectService?.(service.name) }
         });
       }
+    }
+
+    if (routeProblems.routes > 0) {
+      const first = routeProblems.names[0];
+      found.push({
+        text: $t('banner.problem.routesDown', {
+          routes: routeProblems.routes,
+          upstreams: routeProblems.upstreams
+        }),
+        action: first
+          ? { label: $t('banner.action.route'), go: () => onselectRoute?.(first) }
+          : undefined
+      });
     }
 
     if (sample.error_ratio_5xx >= 0.05) {
