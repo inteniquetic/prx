@@ -17,6 +17,7 @@
     type RouteHealthResponse
   } from './lib/api/admin';
   import { configStore, tomlPreview } from './lib/stores/config';
+  import { liveStats, startLiveStats } from './lib/stores/stats';
   import { draftConfig, isDirty, loadBase, watchExternalChanges } from './lib/stores/configDraft';
   import { isUnconfigured } from './lib/configTemplates';
   import {
@@ -190,19 +191,24 @@
     wizardOpen = true;
   }
 
-  $: unhealthyRoutes = routeHealthResponse
-    ? routeHealthResponse.routes.filter((route) => !route.healthy).length
+  // The sidebar reads the same live stream as the dashboard banner and tiles,
+  // so the two cannot disagree. Counts only appear once the stream has
+  // reported services: a silent zero and "we never checked" are not the same.
+  $: serviceHealth = new Map($liveStats.services.map((service) => [service.name, service]));
+
+  $: downUpstreams = $liveStats.services.reduce(
+    (total, service) => total + Math.max(0, service.total - service.healthy),
+    0
+  );
+
+  // A route is unhealthy when its service has no upstream taking traffic.
+  $: unhealthyRoutes = $liveStats.loaded
+    ? ($configStore.routes ?? []).filter((route) => {
+        const service = serviceHealth.get(route.service);
+        return service !== undefined && service.total > 0 && service.healthy === 0;
+      }).length
     : 0;
 
-  $: downUpstreams = routeHealthResponse
-    ? routeHealthResponse.routes.reduce(
-        (total, route) => total + (route.total_upstreams - route.reachable_upstreams),
-        0
-      )
-    : 0;
-
-  // Counts only appear once a probe has actually run: a silent zero and "we
-  // never checked" are not the same thing.
   $: navBadges = {
     ...(unhealthyRoutes > 0
       ? {
@@ -246,6 +252,9 @@
   };
 
   onMount(() => {
+    // The stream lives with the shell: the sidebar badges need it on every page,
+    // not just the dashboard. Stopping it on teardown leaves nothing running.
+    const stopLive = startLiveStats();
     // index.html already set the class before paint; this keeps `system`
     // following the OS while the page stays open.
     const stopTheme = initTheme();
@@ -262,6 +271,7 @@
     const stopHeartbeat = startHeartbeat(() => loadConfigFromAdmin());
 
     return () => {
+      stopLive();
       stopWatching();
       stopHeartbeat();
       stopRouter();

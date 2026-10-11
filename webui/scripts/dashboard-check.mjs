@@ -260,6 +260,24 @@ const snapshot = () => ({
   max_stream_clients: 16
 });
 
+/** What /web/health/routes says when both backends are unreachable. */
+const healthDownRoutes = () => [
+  {
+    route_index: 0,
+    name: 'checkout-api',
+    service: 'checkout',
+    host: 'shop.example.com',
+    path_prefix: '/api',
+    healthy: false,
+    reachable_upstreams: 0,
+    total_upstreams: 2,
+    upstreams: [
+      { addr: '10.0.0.1:8080', timeout_ms: 1200, healthy: false, latency_ms: null, error: 'connection refused', source: 'tcp_connect', last_probe_ms_ago: null },
+      { addr: '10.0.0.2:8080', timeout_ms: 1200, healthy: false, latency_ms: null, error: 'connection refused', source: 'tcp_connect', last_probe_ms_ago: null }
+    ]
+  }
+];
+
 /** One SSE response body: a retry hint and a burst of ticks. */
 const streamBody = (ticks) => {
   let body = 'retry: 60\n\n';
@@ -308,10 +326,17 @@ await mockDraftEndpoints(context, { toml: DRAFT_TOML, config });
 await context.route('**/web/config*', (route) =>
   route.fulfill({ contentType: 'application/json', body: JSON.stringify(config()) })
 );
+// The admin health endpoint is what the sidebar badges used to read. It can be
+// switched to report the backends down, so the page has to agree with the stream.
+let healthMode = 'none'; // 'none' | 'down'
 await context.route('**/web/health/routes*', (route) =>
   route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify({ checked_at_epoch_ms: Date.now(), timeout_ms: 1200, routes: [] })
+    body: JSON.stringify({
+      checked_at_epoch_ms: Date.now(),
+      timeout_ms: 1200,
+      routes: healthMode === 'down' ? healthDownRoutes() : []
+    })
   })
 );
 await context.route('**/web/services/status', (route) =>
@@ -489,6 +514,39 @@ check(
   later.nodes <= early.nodes + 40,
   `the DOM does not grow with time (${early.nodes} → ${later.nodes} nodes)`
 );
+
+// --- 6b. the sidebar and the banner must tell the same story ----------------
+// The stream says both upstreams are fine, while the admin health endpoint
+// says the backends are unreachable. Whatever the page shows, the sidebar
+// badges and the banner have to come from one source, so they cannot disagree.
+degraded = false;
+healthMode = 'down';
+await page.goto(`${ORIGIN}/`, { waitUntil: 'networkidle' });
+await settle(2500);
+const sidebar = page.locator('nav[aria-label]').first();
+const sidebarText = await sidebar.innerText();
+const bannerNow = await banner.getAttribute('data-system-state');
+const bannerAgreementText = await banner.innerText();
+const sidebarSaysDown = /upstream|route/i.test(sidebarText) && /down|unhealthy/i.test(sidebarText);
+const bannerSaysHealthy = bannerNow === 'ok' && /Everything is healthy/.test(bannerAgreementText);
+check(
+  !(sidebarSaysDown && bannerSaysHealthy),
+  `the sidebar and the banner agree (sidebar ${sidebarSaysDown ? 'reports problems' : 'reports none'}, banner says ${bannerNow})`
+);
+
+// Same source, degraded: the sidebar must now carry the badge the banner implies.
+degraded = true;
+await settle(2500);
+const degradedSidebar = await sidebar.innerText();
+const degradedBanner = await banner.getAttribute('data-system-state');
+check(
+  degradedBanner === 'degraded' && /upstream down/.test(degradedSidebar),
+  `a degraded stream puts the upstream badge in the sidebar (banner ${degradedBanner}, sidebar says "${degradedSidebar.match(/\d+\s*upstreams? down/)?.[0] ?? 'nothing'}")`
+);
+degraded = false;
+healthMode = 'none';
+await page.goto(`${ORIGIN}/`, { waitUntil: 'networkidle' });
+await settle(900);
 
 // --- 7. a refused stream falls back rather than freezing --------------------
 streamMode = 'refused';

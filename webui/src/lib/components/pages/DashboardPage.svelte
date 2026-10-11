@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-
   import ActivityIcon from '@lucide/svelte/icons/activity';
   import DatabaseZapIcon from '@lucide/svelte/icons/database-zap';
   import GaugeIcon from '@lucide/svelte/icons/gauge';
@@ -20,7 +18,7 @@
 
   import type { StatsSample } from '$lib/api/stats';
   import { formatCount, formatLatency, formatPercent, formatThroughput } from '$lib/format';
-  import { liveStats, startLiveStats } from '$lib/stores/stats';
+  import { liveStats } from '$lib/stores/stats';
   import type { PrxConfig } from '$lib/types/config';
   import { plural, t } from '$lib/i18n';
 
@@ -41,10 +39,8 @@
     onsetup?: () => void;
   } = $props();
 
-  // The stream lives exactly as long as this page is on screen: leaving the
-  // dashboard closes it, which is what keeps the server's 16 slots free for
-  // tabs that are actually looking.
-  onMount(() => startLiveStats());
+  // The stream is started by the shell (App.svelte) so the sidebar and the
+  // dashboard read the same live state. The dashboard only reads it.
 
   const live = $derived($liveStats);
   const sample = $derived(live.sample);
