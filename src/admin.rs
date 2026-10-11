@@ -142,6 +142,90 @@ impl ConfigAdmin {
         }
     }
 
+    /// Saves one route by changing only the keys that differ, so comments and
+    /// every other section of the file stay byte-identical (T308 defect fix).
+    ///
+    /// `modify_config` re-renders the whole file from the struct, which drops
+    /// comments and writes default blocks back in. Here the old and new route
+    /// are compared key by key and each changed key becomes one `config_edit`
+    /// `Set` op, applied to the file text. The result is verified (must parse
+    /// and validate) before the atomic write, with the same rollback guarantee
+    /// as `modify_config`.
+    pub fn modify_route_text(
+        &self,
+        active_config: &Arc<ArcSwap<RuntimeConfig>>,
+        route_name: &str,
+        mutate: impl FnOnce(&mut PrxConfig, usize) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| anyhow::anyhow!("config write lock is poisoned"))?;
+
+        let current_text = self.read_config_text()?;
+        let before = PrxConfig::from_toml_str(&current_text).with_context(|| {
+            format!(
+                "failed to read config at {}",
+                self.config_path.to_string_lossy()
+            )
+        })?;
+        let route_index = before
+            .routes
+            .iter()
+            .position(|r| r.name == route_name)
+            .ok_or_else(|| anyhow::anyhow!("route '{}' not found", route_name))?;
+
+        let mut after = before.clone();
+        mutate(&mut after, route_index)?;
+        after.validate().with_context(|| {
+            format!(
+                "modified config at {} failed validation",
+                self.config_path.to_string_lossy()
+            )
+        })?;
+
+        let before_json = serde_json::to_value(&before.routes[route_index])?;
+        let after_json = serde_json::to_value(&after.routes[route_index])?;
+        let (Some(before_map), Some(after_map)) = (before_json.as_object(), after_json.as_object())
+        else {
+            bail!("route did not serialize as a table");
+        };
+
+        let ops: Vec<EditOp> = after_map
+            .iter()
+            .filter(|(key, value)| before_map.get(key.as_str()) != Some(value))
+            .map(|(key, value)| EditOp {
+                path: format!("route[{route_index}].{key}"),
+                action: config_edit::EditAction::Set,
+                value: Some(value.clone()),
+            })
+            .collect();
+
+        if ops.is_empty() {
+            return Ok(());
+        }
+
+        let edited = config_edit::apply_edits(&current_text, &ops)?;
+        // The edited text must be the config we validated, not something
+        // that merely looks similar.
+        let verified = PrxConfig::from_toml_str(&edited).context("edited config is invalid")?;
+        if verified.routes[route_index].path_prefix != after.routes[route_index].path_prefix
+            || verified.routes[route_index].is_default != after.routes[route_index].is_default
+        {
+            bail!("edited config does not match the requested route");
+        }
+
+        Self::atomic_replace(&self.config_path, edited.as_bytes()).with_context(|| {
+            format!(
+                "failed to atomically write config to {}",
+                self.config_path.to_string_lossy()
+            )
+        })?;
+
+        active_config.store(Arc::new(RuntimeConfig::from_config(verified)));
+        Ok(())
+    }
+
     pub fn modify_config<F>(
         &self,
         active_config: &Arc<ArcSwap<RuntimeConfig>>,
@@ -2593,13 +2677,7 @@ async fn update_route(
 
     match state
         .config_admin
-        .modify_config(&state.active_config, |config| {
-            let index = config
-                .routes
-                .iter()
-                .position(|r| r.name == name)
-                .ok_or_else(|| anyhow::anyhow!("route '{}' not found", name))?;
-
+        .modify_route_text(&state.active_config, &name, |config, index| {
             // Check if service exists
             if !config.services.iter().any(|s| s.name == payload.service) {
                 return Err(anyhow::anyhow!("service '{}' not found", payload.service));
@@ -3364,6 +3442,62 @@ is_default = true
 
         let content = fs::read_to_string(&config_path).expect("config should be readable");
         assert_eq!(content, next);
+    }
+
+    #[tokio::test]
+    async fn route_save_keeps_comments_and_untouched_sections_byte_for_byte() {
+        // A hand-written file: comments above sections and keys, and sections
+        // (headers, compression, retry_budget, health_check) that the struct
+        // would only write back with defaults if the file were re-rendered.
+        const COMMENTED: &str = r#"# The proxy everything else hangs off.
+[server]
+# Two ports, because the load balancer in front needs both.
+listen = ["127.0.0.1:18080"]
+
+[observability]
+# Info keeps the access log readable.
+log_level = "info"
+access_log = true
+
+[[service]]
+name = "api"
+
+[[service.upstream]]
+addr = "127.0.0.1:9000"
+weight = 1
+
+[[route]]
+# Everything under the root goes to the api service.
+name = "api"
+service = "api"
+path_prefix = "/"
+is_default = true
+"#;
+        let (_dir, config_path) = seeded(COMMENTED);
+        let state = admin_state(&config_path);
+
+        let body = serde_json::json!({
+            "name": "api",
+            "service": "api",
+            "path_prefix": "/v2",
+            "is_default": true,
+        })
+        .to_string();
+        let response =
+            update_route(State(state), AxumPath("api".to_string()), Body::from(body)).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{}",
+            response_text(response).await
+        );
+
+        let after = fs::read_to_string(&config_path).expect("config should be readable");
+        assert_eq!(
+            after,
+            COMMENTED.replace("path_prefix = \"/\"", "path_prefix = \"/v2\""),
+            "a route save must change only the key it was asked to change"
+        );
     }
 
     // ---- validate, ETag and If-Match (T203/T204, for the editor in T307) ----
