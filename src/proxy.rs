@@ -3,11 +3,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::waf::evaluator::Evaluator;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use http::Method;
-use crate::waf::evaluator::Evaluator;
 use pingora::modules::http::HttpModules;
 use pingora::modules::http::compression::ResponseCompressionBuilder;
 use pingora::prelude::*;
@@ -21,9 +21,9 @@ use crate::plugin::{
     LogInfo, NeedsMask, PhaseMask, PluginChain, PluginCtx, PluginDecision, PluginResponse,
     PluginState, RequestFacts, StateSlots,
 };
-use crate::waf::vars::Transaction;
 use crate::router::RouteMatch;
 use crate::runtime::{RuntimeConfig, hash_key, normalize_host};
+use crate::waf::vars::Transaction;
 
 /// Names used for requests that never reach a configured route. Pre-built so
 /// the request path never allocates one (T101).
@@ -708,7 +708,11 @@ impl ProxyHttp for PrxProxy {
             return Ok(());
         }
 
-        let access = snapshot.ruleset.settings.request_body_access.unwrap_or(false);
+        let access = snapshot
+            .ruleset
+            .settings
+            .request_body_access
+            .unwrap_or(false);
         let limit = snapshot.ruleset.settings.request_body_limit.unwrap_or(0);
 
         if !access || limit == 0 {
@@ -727,15 +731,15 @@ impl ProxyHttp for PrxProxy {
                 // Log and maybe block
             }
         }
-        
+
         if end_of_stream {
-             let evaluator = Evaluator::new(snapshot.ruleset.clone());
-             let mut trx = Transaction::new(session.req_header(), &ctx.buffered_body);
-             if let Some(reason) = evaluator.evaluate_request_head(&trx) {
-                 warn!("WAF matched: {}", reason);
-             }
+            let evaluator = Evaluator::new(snapshot.ruleset.clone());
+            let trx = Transaction::new(session.req_header(), &ctx.buffered_body);
+            if let Some(reason) = evaluator.evaluate_request_head(&trx) {
+                warn!("WAF matched: {}", reason);
+            }
         }
-        
+
         Ok(())
     }
 

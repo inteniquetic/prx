@@ -43,7 +43,9 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn set_var(&self, name: &str, value: String) {
-        self.tx.borrow_mut().insert(name.to_ascii_uppercase(), value);
+        self.tx
+            .borrow_mut()
+            .insert(name.to_ascii_uppercase(), value);
     }
 
     pub fn get_var(&self, name: &str) -> Option<String> {
@@ -52,11 +54,7 @@ impl<'a> Transaction<'a> {
 }
 
 /// Mimics extraction, but caches the raw variable value.
-pub fn get_variable<'a>(
-    trx: &'a Transaction<'a>,
-    collection: &str,
-    key: &Key,
-) -> Cow<'a, [u8]> {
+pub fn get_variable<'a>(trx: &'a Transaction<'a>, collection: &str, key: &Key) -> Cow<'a, [u8]> {
     // If collection is TX, check the tx map first.
     if collection.eq_ignore_ascii_case("TX") {
         if let Key::Name(name) = key {
@@ -68,13 +66,13 @@ pub fn get_variable<'a>(
 
     let key_str = format!("{:?}", key);
     let cache_key = (collection.to_string(), key_str, 0); // Using 0 as a placeholder for raw
-    
+
     if let Ok(cache) = trx.transform_cache.try_borrow() {
         if let Some(cached) = cache.get(&cache_key) {
             return cached.clone();
         }
     }
-    
+
     let raw = extract_variable(trx, collection, key);
     if let Ok(mut cache) = trx.transform_cache.try_borrow_mut() {
         cache.insert(cache_key, raw.clone());
@@ -127,8 +125,10 @@ fn extract_headers<'a>(trx: &'a Transaction<'a>, key: &Key) -> Cow<'a, [u8]> {
 
 fn extract_args<'a>(trx: &'a Transaction<'a>, key: &Key, post: bool) -> Cow<'a, [u8]> {
     // Basic implementation: for now, only support GET query string
-    if post { return Cow::Borrowed(b""); }
-    
+    if post {
+        return Cow::Borrowed(b"");
+    }
+
     let query = trx.head.uri.query().unwrap_or("");
     match key {
         Key::Name(name) => {

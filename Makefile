@@ -46,6 +46,8 @@ audit: ## Run cargo audit (installs cargo-audit if missing)
 
 gate: ## Run full release gate
 	bash scripts/release-gate.sh
+	bash scripts/perf-gate.sh micro
+	bash scripts/perf-gate.sh macro h1-keepalive
 
 ci: gate ## Alias for gate
 

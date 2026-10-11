@@ -15,10 +15,10 @@ pub mod evaluator;
 pub mod operator;
 pub mod parse;
 mod pcre;
+pub mod prefilter;
 pub mod rule;
 pub mod transform;
 pub mod vars;
-pub mod prefilter;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -524,11 +524,16 @@ impl Builder {
 
         let ruleset = &mut self.loaded.ruleset;
         let summary = &mut self.loaded.summary;
-        
+
         let mut literals = Vec::new();
         for link in ruleset.phases.iter().flatten().flat_map(|rule| &rule.links) {
             if link.operator.name.eq_ignore_ascii_case("pm") {
-                literals.extend(link.operator.argument.split_whitespace().map(|s| s.to_string()));
+                literals.extend(
+                    link.operator
+                        .argument
+                        .split_whitespace()
+                        .map(|s| s.to_string()),
+                );
             }
         }
         ruleset.prefilter = Some(Arc::new(Prefilter::new(literals)));

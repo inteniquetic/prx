@@ -1,5 +1,4 @@
-use crate::waf::prefilter::Prefilter;
-use crate::waf::rule::{RuleSet, Rule, RuleLink, Key, Operator, Rx};
+use crate::waf::rule::{Operator, Rule, RuleLink, RuleSet, Rx};
 use crate::waf::vars::Transaction;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -17,7 +16,11 @@ impl Evaluator {
         self.evaluate_phase(0, trx)
     }
 
-    fn evaluate_phase<'a>(&'a self, phase_index: usize, trx: &'a Transaction<'a>) -> Option<String> {
+    fn evaluate_phase<'a>(
+        &'a self,
+        phase_index: usize,
+        trx: &'a Transaction<'a>,
+    ) -> Option<String> {
         for rule in &self.ruleset.phases[phase_index] {
             if self.evaluate_rule(rule, trx) {
                 // Rule matched, trigger actions
