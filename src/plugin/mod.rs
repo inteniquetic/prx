@@ -288,6 +288,7 @@ pub trait Plugin: Send + Sync + 'static {
         NeedsMask::NONE
     }
 
+    #[must_use = "plugin hook futures must be awaited to execute"]
     async fn on_request_head(
         &self,
         _head: &mut RequestHeader,
@@ -296,6 +297,7 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(PluginDecision::Continue)
     }
 
+    #[must_use = "plugin hook futures must be awaited to execute"]
     async fn on_upstream_request(
         &self,
         _head: &mut RequestHeader,
@@ -304,6 +306,7 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(())
     }
 
+    #[must_use = "plugin hook futures must be awaited to execute"]
     async fn on_response_head(
         &self,
         _head: &mut ResponseHeader,

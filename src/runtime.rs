@@ -820,12 +820,18 @@ impl UpstreamRuntime {
         // saturating: a decrement without a matching increment must not wrap
         // the counter around to usize::MAX and take the upstream out of
         // consideration forever.
-        let _ = self
-            .state
-            .inflight
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                Some(current.saturating_sub(1))
-            });
+        let mut current = self.state.inflight.load(Ordering::Relaxed);
+        loop {
+            match self.state.inflight.compare_exchange_weak(
+                current,
+                current.saturating_sub(1),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     /// Moving average latency in microseconds; 0 when nothing was measured yet.
@@ -837,16 +843,23 @@ impl UpstreamRuntime {
     pub fn record_latency(&self, sample_us: u64) {
         const ALPHA_NUM: u64 = 2;
         const ALPHA_DEN: u64 = 10;
-        let _ = self
-            .state
-            .ewma_us
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                Some(if current == 0 {
-                    sample_us
-                } else {
-                    (current * (ALPHA_DEN - ALPHA_NUM) + sample_us * ALPHA_NUM) / ALPHA_DEN
-                })
-            });
+        let mut current = self.state.ewma_us.load(Ordering::Relaxed);
+        loop {
+            let next = if current == 0 {
+                sample_us
+            } else {
+                (current * (ALPHA_DEN - ALPHA_NUM) + sample_us * ALPHA_NUM) / ALPHA_DEN
+            };
+            match self.state.ewma_us.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     /// Cost used by `p2c_ewma`: in-flight requests scaled by observed latency.

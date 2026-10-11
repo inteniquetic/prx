@@ -34,14 +34,11 @@ impl Evaluator {
     fn process_actions(&self, rule: &Rule, trx: &Transaction) {
         // Actions are on the first link
         for action in &rule.links[0].actions {
-            match action {
-                crate::waf::rule::Action::SetVar(set_var) => {
-                    if set_var.target.to_ascii_uppercase().starts_with("TX.") {
-                        let name = &set_var.target[3..];
-                        trx.set_var(name, set_var.value.clone());
-                    }
-                }
-                _ => {}
+            if let crate::waf::rule::Action::SetVar(set_var) = action
+                && set_var.target.to_ascii_uppercase().starts_with("TX.")
+            {
+                let name = &set_var.target[3..];
+                trx.set_var(name, set_var.value.clone());
             }
         }
     }
@@ -92,5 +89,28 @@ impl Evaluator {
             &mut [None, None, None, None, None, None, None, None, None, None],
             None,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pingora::http::RequestHeader;
+
+    #[test]
+    fn setvar_only_updates_tx_and_accepts_mixed_case_prefixes() {
+        let loaded = crate::waf::load_text(&[(
+            "test.conf",
+            r#"SecAction "id:1,phase:1,pass,nolog,setvar:TX.upper=one,setvar:tx.lower=two,setvar:Tx.mixed=three,setvar:IP.other=ignored""#,
+        )]);
+        assert_eq!(loaded.summary.rules, 1, "{loaded}");
+        let evaluator = Evaluator::new(Arc::new(loaded.ruleset));
+        let head = RequestHeader::build("GET", b"/", None).unwrap();
+        let trx = Transaction::new(&head, b"");
+        evaluator.process_actions(&evaluator.ruleset.phases[0][0], &trx);
+        assert_eq!(trx.get_var("upper").as_deref(), Some("one"));
+        assert_eq!(trx.get_var("lower").as_deref(), Some("two"));
+        assert_eq!(trx.get_var("mixed").as_deref(), Some("three"));
+        assert_eq!(trx.tx.borrow().len(), 3);
     }
 }

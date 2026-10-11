@@ -187,11 +187,18 @@ impl ConcurrencyLimiter {
     }
 
     pub fn release(&self) {
-        let _ = self
-            .inflight
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                Some(current.saturating_sub(1))
-            });
+        let mut current = self.inflight.load(Ordering::Relaxed);
+        loop {
+            match self.inflight.compare_exchange_weak(
+                current,
+                current.saturating_sub(1),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     pub fn inflight(&self) -> usize {

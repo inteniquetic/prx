@@ -270,16 +270,14 @@ fn ip_match(input: &[u8], cidr_list: &str) -> bool {
                             }
                         }
                     }
-                    (IpAddr::V6(addr), IpAddr::V6(net)) => {
-                        if prefix <= 128 {
-                            let mask = if prefix == 0 {
-                                0
-                            } else {
-                                !0u128 << (128 - prefix)
-                            };
-                            if (u128::from(addr) & mask) == (u128::from(net) & mask) {
-                                return true;
-                            }
+                    (IpAddr::V6(addr), IpAddr::V6(net)) if prefix <= 128 => {
+                        let mask = if prefix == 0 {
+                            0
+                        } else {
+                            !0u128 << (128 - prefix)
+                        };
+                        if (u128::from(addr) & mask) == (u128::from(net) & mask) {
+                            return true;
                         }
                     }
                     _ => {}
@@ -511,6 +509,17 @@ mod tests {
             captures,
             None
         ));
+    }
+
+    #[test]
+    fn ipv6_prefix_boundaries_are_checked_before_shifting() {
+        assert!(ip_match(b"2001:db8::1", "::/0"));
+        assert!(ip_match(b"2001:db8::1", "2001:db8::/32"));
+        assert!(ip_match(b"2001:db8::1", "2001:db8::1/128"));
+        assert!(!ip_match(b"2001:db8::2", "2001:db8::1/128"));
+        assert!(!ip_match(b"2001:db8::1", "2001:db8::1/129"));
+        assert!(!ip_match(b"2001:db8::1", "2001:db8::1/255"));
+        assert!(!ip_match(b"192.0.2.1", "::/0"));
     }
 
     #[test]
