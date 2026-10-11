@@ -156,8 +156,8 @@ impl ConfigAdmin {
             .map_err(|_| anyhow::anyhow!("config write lock is poisoned"))?;
 
         // Fail early when the current config is unreadable, before anything is
-        // modified. Keeping the bytes around for rollback is T204's job.
-        fs::read(&self.config_path).with_context(|| {
+        // modified. The bytes are kept for the targeted edit below.
+        let previous_bytes = fs::read(&self.config_path).with_context(|| {
             format!(
                 "failed to read previous config at {}",
                 self.config_path.to_string_lossy()
@@ -171,6 +171,7 @@ impl ConfigAdmin {
                 self.config_path.to_string_lossy()
             )
         })?;
+        let before = config.clone();
 
         f(&mut config)?;
 
@@ -181,8 +182,19 @@ impl ConfigAdmin {
             )
         })?;
 
-        // Serialize to TOML
-        let toml_text = toml::to_string(&config).context("failed to serialize config to TOML")?;
+        // Prefer a targeted edit, so comments and layout survive. Re-rendering
+        // the whole model is the fallback for a change no edit can express.
+        let previous_text =
+            String::from_utf8(previous_bytes).context("config file is not valid UTF-8")?;
+        let toml_text = match targeted_render(&previous_text, &before, &config) {
+            Some(text) => text,
+            None => {
+                tracing::warn!(
+                    "config change could not be applied as a targeted edit; re-rendering the whole file"
+                );
+                toml::to_string(&config).context("failed to serialize config to TOML")?
+            }
+        };
 
         // Atomically write the new config
         Self::atomic_replace(&self.config_path, toml_text.as_bytes()).with_context(|| {
@@ -248,6 +260,23 @@ impl ConfigAdmin {
 
         Ok(())
     }
+}
+
+/// Renders `after` as a targeted edit of `previous`, or returns `None` when no
+/// such edit exists. The result is only returned if it parses back to exactly
+/// `after`, so a change never lands in the file in a form we did not check.
+fn targeted_render(previous: &str, before: &PrxConfig, after: &PrxConfig) -> Option<String> {
+    let before_json = serde_json::to_value(before).ok()?;
+    let after_json = serde_json::to_value(after).ok()?;
+    let ops = config_edit::diff_configs(&before_json, &after_json).ok()?;
+    if ops.is_empty() {
+        return Some(previous.to_string());
+    }
+
+    let edited = config_edit::apply_edits(previous, &ops).ok()?;
+    let reparsed = PrxConfig::from_toml_str(&edited).ok()?;
+    let reparsed_json = serde_json::to_value(&reparsed).ok()?;
+    (reparsed_json == after_json).then_some(edited)
 }
 
 #[derive(Clone)]
@@ -3620,6 +3649,65 @@ is_default = true
             fs::read_to_string(&config_path).unwrap(),
             original,
             "editing a draft writes nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn saving_a_route_changes_only_its_own_key_in_the_file() {
+        let original = r#"# The proxy everything else hangs off.
+[server]
+# Two ports, because the load balancer in front needs both.
+listen = ["127.0.0.1:8080"]
+health_path = "/healthz"
+ready_path = "/readyz"
+
+# Upstream pool for the API.
+[[service]]
+name = "default"
+lb = "round_robin"
+max_retries = 0
+retry_backoff_ms = 0
+
+[[service.upstream]]
+addr = "127.0.0.1:9000"
+
+# The catch-all route.
+[[route]]
+name = "default"
+service = "default"
+path_prefix = "/"
+is_default = true
+
+# Logs stay quiet in production.
+[observability]
+log_level = "info"
+"#;
+        let expected = original.replacen("path_prefix = \"/\"", "path_prefix = \"/api\"", 1);
+        let (_dir, config_path) = seeded(original);
+        let state = admin_state(&config_path);
+
+        let payload = serde_json::json!({
+            "name": "default",
+            "service": "default",
+            "path_prefix": "/api"
+        });
+        let response = update_route(
+            State(state.clone()),
+            AxumPath("default".to_string()),
+            Body::from(payload.to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        assert_eq!(
+            fs::read_to_string(&config_path).unwrap(),
+            expected,
+            "a route save must rewrite only the changed key"
+        );
+        let runtime = state.active_config.load();
+        assert!(
+            runtime.route(0).is_some(),
+            "the active config must pick up the saved route"
         );
     }
 

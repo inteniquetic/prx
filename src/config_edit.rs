@@ -289,6 +289,105 @@ fn value_from_json(payload: &serde_json::Value) -> anyhow::Result<Value> {
     })
 }
 
+/// The edits that turn one config into another, both given in their JSON form.
+///
+/// Only the leaves that differ become edits, so applying them to the file
+/// leaves every other byte, comment and section where it was. A list of tables
+/// is edited element by element when its length is unchanged, and grows or
+/// shrinks at the tail; anything else is refused, and the caller falls back.
+pub fn diff_configs(
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+) -> anyhow::Result<Vec<EditOp>> {
+    let mut ops = Vec::new();
+    diff_value("", before, after, &mut ops)?;
+    Ok(ops)
+}
+
+fn diff_value(
+    path: &str,
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+    ops: &mut Vec<EditOp>,
+) -> anyhow::Result<()> {
+    use serde_json::Value as Json;
+
+    if before == after {
+        return Ok(());
+    }
+
+    match (before, after) {
+        // A field the model leaves unset is written as null; in the file it
+        // is simply absent, so clearing it removes the key.
+        (_, Json::Null) => ops.push(EditOp {
+            path: path.to_string(),
+            action: EditAction::Remove,
+            value: None,
+        }),
+        (Json::Object(old), Json::Object(new)) => {
+            // Keys in both are diffed in place. Keys only on one side become a
+            // set or a remove, so the table's own comments and order survive.
+            for key in old.keys().chain(new.keys()) {
+                check_key(key)?;
+            }
+            let child = |key: &str| {
+                if path.is_empty() {
+                    key.to_string()
+                } else {
+                    format!("{path}.{key}")
+                }
+            };
+            for (key, old_entry) in old {
+                let new_entry = new.get(key).unwrap_or(&Json::Null);
+                diff_value(&child(key), old_entry, new_entry, ops)?;
+            }
+            for (key, new_entry) in new {
+                if !old.contains_key(key) {
+                    diff_value(&child(key), &Json::Null, new_entry, ops)?;
+                }
+            }
+        }
+        (Json::Array(old), Json::Array(new)) if all_tables(old) && all_tables(new) => {
+            let common = old.len().min(new.len());
+            for index in 0..common {
+                diff_value(&format!("{path}[{index}]"), &old[index], &new[index], ops)?;
+            }
+            for item in &new[common..] {
+                ops.push(EditOp {
+                    path: path.to_string(),
+                    action: EditAction::Append,
+                    value: Some(item.clone()),
+                });
+            }
+            for index in (common..old.len()).rev() {
+                ops.push(EditOp {
+                    path: format!("{path}[{index}]"),
+                    action: EditAction::Remove,
+                    value: None,
+                });
+            }
+        }
+        _ => ops.push(EditOp {
+            path: path.to_string(),
+            action: EditAction::Set,
+            value: Some(after.clone()),
+        }),
+    }
+    Ok(())
+}
+
+fn all_tables(items: &[serde_json::Value]) -> bool {
+    items.iter().all(serde_json::Value::is_object)
+}
+
+/// Keys with a dot or a bracket in them cannot be addressed by a path.
+fn check_key(key: &str) -> anyhow::Result<()> {
+    if key.is_empty() || key.contains(['.', '[', ']']) {
+        bail!("key '{key}' cannot be addressed by a path");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
