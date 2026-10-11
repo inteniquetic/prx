@@ -136,15 +136,23 @@ cpu_ticks() {
 # Peak PSS until the stop file appears. PSS, not RSS: workers share pages, and
 # summing RSS would count them once each. Every 2 s: smaps_rollup walks the whole
 # address space inside the proxy's own cpuset, which is not free on a large heap.
+# Writes "<samples> <peak_kb>". A sample counts only if awk saw at least one Pss:
+# line, i.e. docker exec actually returned data. A failed exec is NOT a 0 kB
+# sample: that is how a silent 0 used to reach the result file. The caller treats
+# samples=0 as an invalid run. (The exit status of cat is not used: it fails
+# whenever a process exits mid-scan, which is normal.)
 sample_peak_pss() {
-  local container="$1" out="$2" stop="$3" peak=0 pss
+  local container="$1" out="$2" stop="$3" peak=0 taken=0 n s
   while [ ! -e "${stop}" ]; do
-    pss="$(docker exec -u 0 "${container}" sh -c 'cat /proc/[0-9]*/smaps_rollup 2>/dev/null' 2>/dev/null \
-      | awk '/^Pss:/{s+=$2} END{print s+0}')"
-    [ "${pss:-0}" -gt "${peak}" ] && peak="${pss}"
+    read -r n s <<< "$(docker exec -u 0 "${container}" sh -c 'cat /proc/[0-9]*/smaps_rollup 2>/dev/null' 2>/dev/null \
+      | awk '/^Pss:/{n++; s+=$2} END{print n+0, s+0}')" || true
+    if [ "${n:-0}" -gt 0 ]; then
+      taken=$(( taken + 1 ))
+      [ "${s:-0}" -gt "${peak}" ] && peak="${s}"
+    fi
     sleep 2
   done
-  echo "${peak}" > "${out}"
+  echo "${taken} ${peak}" > "${out}"
 }
 
 # One waf-* load run. "$@" is what varies: the URL list, or the body and URL.
@@ -232,14 +240,26 @@ run_one() {
   sample_peak_pss "${container}" "${tmp}/pss" "${tmp}/stop" &
   pss_pid=$!
   cpu_start="$(cpu_ticks "${container}")"; t_start="$(date +%s)"
-  run_load "${scenario}" "${url}" "${conns}" "${DURATION}" "${tmp}/load.out"
+  # `|| load_rc=$?`: under set -e a nonzero load exit (oha reports aborted-at-
+  # deadline requests this way) would kill the script here, before the sampler
+  # is stopped and before the output is parsed. The parser still rejects a load
+  # whose output is not valid JSON, so a broken run cannot become a result.
+  local load_rc=0
+  run_load "${scenario}" "${url}" "${conns}" "${DURATION}" "${tmp}/load.out" || load_rc=$?
+  [ "${load_rc}" -eq 0 ] || echo "    warning: load tool exited ${load_rc}; checking its output" >&2
   cpu_end="$(cpu_ticks "${container}")"; t_end="$(date +%s)"
   touch "${tmp}/stop"; wait "${pss_pid}" 2>/dev/null || true
   # A worker that died mid-run takes its ticks with it; never report negative CPU.
   cpu_delta=$(( cpu_end - cpu_start )); [ "${cpu_delta}" -ge 0 ] || cpu_delta=0
+  local pss_samples=0 peak_pss=0
+  read -r pss_samples peak_pss < "${tmp}/pss" 2>/dev/null || true
+  if [ "${pss_samples:-0}" -eq 0 ]; then
+    stop_target "${target}"
+    die "${target}/${scenario}: no PSS sample was taken from ${container}; run is INVALID (docker exec failed). No result written."
+  fi
   local cpus="${BENCH_PROXY_CPUS:-0,1}"
-  printf '{"peak_rss_kb":%s,"cpu_ticks":%s,"cpu_window_s":%s,"proxy_cpus":%s}\n' \
-    "$(cat "${tmp}/pss" 2>/dev/null || echo 0)" "${cpu_delta}" "$(( t_end - t_start ))" \
+  printf '{"peak_rss_kb":%s,"pss_samples":%s,"cpu_ticks":%s,"cpu_window_s":%s,"proxy_cpus":%s}\n' \
+    "${peak_pss}" "${pss_samples}" "${cpu_delta}" "$(( t_end - t_start ))" \
     "$(echo "${cpus}" | tr ',' '\n' | wc -l | tr -d ' ')" > "${tmp}/stats.json"
 
   local out="${RESULT_DIR}/${scenario}${RATE:+-q${RATE}}-${target}-${sha}.json"
@@ -277,4 +297,6 @@ main() {
   run_one "${target}" "${scenario}"
 }
 
-main "$@"
+if [ "${BENCH_SOURCE_ONLY:-0}" != 1 ]; then
+  main "$@"
+fi
