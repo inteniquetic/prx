@@ -10,10 +10,10 @@
 //! indices. It is immutable after that, so a reload is an `Arc` swap and the
 //! request path never parses, compiles or resolves anything.
 
+use crate::waf::prefilter::Prefilter;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
-use crate::waf::prefilter::Prefilter;
 
 // ---------------------------------------------------------------------------
 // What the file says

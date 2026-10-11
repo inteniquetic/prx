@@ -41,6 +41,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 rustc-hash = "2.1.3"
 instant-acme = "0.8.5"
+libinjectionrs = "0.1.1"
+aho-corasick = "1.1.5"
 
 [dev-dependencies]
 bytes = "1"

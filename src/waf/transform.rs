@@ -4,6 +4,9 @@
 //! Transformations can be chained: `t:lowercase,t:urlDecodeUni`.
 //! In SecLang, multiple transformations run in the order declared.
 
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::needless_character_iteration)]
+
 use std::borrow::Cow;
 
 /// Applies a single named transformation to input bytes.
@@ -80,10 +83,8 @@ fn transform_url_decode<'a>(input: Cow<'a, [u8]>, unicode: bool) -> Cow<'a, [u8]
                     hex_val(s[i + 4]),
                     hex_val(s[i + 5]),
                 ) {
-                    let cp = ((h1 as u32) << 12)
-                        | ((h2 as u32) << 8)
-                        | ((h3 as u32) << 4)
-                        | (h4 as u32);
+                    let cp =
+                        ((h1 as u32) << 12) | ((h2 as u32) << 8) | ((h3 as u32) << 4) | (h4 as u32);
                     if let Some(ch) = char::from_u32(cp) {
                         let mut buf = [0u8; 4];
                         out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
@@ -241,7 +242,13 @@ fn transform_replace_comments<'a>(input: Cow<'a, [u8]>) -> Cow<'a, [u8]> {
 fn transform_remove_comments_char<'a>(input: Cow<'a, [u8]>) -> Cow<'a, [u8]> {
     let is_comment_char = |b: u8| matches!(b, b'/' | b'*' | b'#' | b'-');
     if input.iter().any(|&b| is_comment_char(b)) {
-        Cow::Owned(input.iter().copied().filter(|&b| !is_comment_char(b)).collect())
+        Cow::Owned(
+            input
+                .iter()
+                .copied()
+                .filter(|&b| !is_comment_char(b))
+                .collect(),
+        )
     } else {
         input
     }
@@ -297,7 +304,11 @@ fn transform_base64_decode<'a>(input: Cow<'a, [u8]>) -> Cow<'a, [u8]> {
         b'/' | b'_' => Some(63),
         _ => None,
     };
-    let clean: Vec<u8> = input.iter().copied().filter(|&b| b64_val(b).is_some() || b == b'=').collect();
+    let clean: Vec<u8> = input
+        .iter()
+        .copied()
+        .filter(|&b| b64_val(b).is_some() || b == b'=')
+        .collect();
     let mut out = Vec::new();
     let mut i = 0;
     while i + 3 < clean.len() {
@@ -400,9 +411,18 @@ fn transform_js_decode<'a>(input: Cow<'a, [u8]>) -> Cow<'a, [u8]> {
     while i < s.len() {
         if s[i] == b'\\' && i + 1 < s.len() {
             match s[i + 1] {
-                b'n' => { out.push(b'\n'); i += 2; }
-                b'r' => { out.push(b'\r'); i += 2; }
-                b't' => { out.push(9); i += 2; }
+                b'n' => {
+                    out.push(b'\n');
+                    i += 2;
+                }
+                b'r' => {
+                    out.push(b'\r');
+                    i += 2;
+                }
+                b't' => {
+                    out.push(9);
+                    i += 2;
+                }
                 b'x' if i + 3 < s.len() => {
                     if let (Some(h1), Some(h2)) = (hex_val(s[i + 2]), hex_val(s[i + 3])) {
                         out.push((h1 << 4) | h2);
@@ -414,9 +434,15 @@ fn transform_js_decode<'a>(input: Cow<'a, [u8]>) -> Cow<'a, [u8]> {
                 }
                 b'u' if i + 5 < s.len() => {
                     if let (Some(h1), Some(h2), Some(h3), Some(h4)) = (
-                        hex_val(s[i + 2]), hex_val(s[i + 3]), hex_val(s[i + 4]), hex_val(s[i + 5]),
+                        hex_val(s[i + 2]),
+                        hex_val(s[i + 3]),
+                        hex_val(s[i + 4]),
+                        hex_val(s[i + 5]),
                     ) {
-                        let cp = ((h1 as u32) << 12) | ((h2 as u32) << 8) | ((h3 as u32) << 4) | (h4 as u32);
+                        let cp = ((h1 as u32) << 12)
+                            | ((h2 as u32) << 8)
+                            | ((h3 as u32) << 4)
+                            | (h4 as u32);
                         if let Some(ch) = char::from_u32(cp) {
                             let mut buf = [0u8; 4];
                             out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
@@ -488,45 +514,85 @@ mod tests {
 
     #[test]
     fn test_lowercase() {
-        assert_eq!(transform("lowercase", Cow::Borrowed(b"HeLLo World")).as_ref(), b"hello world");
+        assert_eq!(
+            transform("lowercase", Cow::Borrowed(b"HeLLo World")).as_ref(),
+            b"hello world"
+        );
     }
 
     #[test]
     fn test_urldecode() {
-        assert_eq!(transform("urlDecode", Cow::Borrowed(b"hello+world%21")).as_ref(), b"hello world!");
-        assert_eq!(transform("urlDecodeUni", Cow::Borrowed(b"test%u0020uni")).as_ref(), b"test uni");
+        assert_eq!(
+            transform("urlDecode", Cow::Borrowed(b"hello+world%21")).as_ref(),
+            b"hello world!"
+        );
+        assert_eq!(
+            transform("urlDecodeUni", Cow::Borrowed(b"test%u0020uni")).as_ref(),
+            b"test uni"
+        );
     }
 
     #[test]
     fn test_html_entity_decode() {
-        assert_eq!(transform("htmlEntityDecode", Cow::Borrowed(b"&lt;script&gt;&amp;&#x41;&#65;")).as_ref(), b"<script>&AA");
+        assert_eq!(
+            transform(
+                "htmlEntityDecode",
+                Cow::Borrowed(b"&lt;script&gt;&amp;&#x41;&#65;")
+            )
+            .as_ref(),
+            b"<script>&AA"
+        );
     }
 
     #[test]
     fn test_whitespace() {
-        assert_eq!(transform("removeWhitespace", Cow::Borrowed(b" a 	 b \n c ")).as_ref(), b"abc");
-        assert_eq!(transform("compressWhitespace", Cow::Borrowed(b" a 	\n b  c ")).as_ref(), b" a b c ");
+        assert_eq!(
+            transform("removeWhitespace", Cow::Borrowed(b" a 	 b \n c ")).as_ref(),
+            b"abc"
+        );
+        assert_eq!(
+            transform("compressWhitespace", Cow::Borrowed(b" a 	\n b  c ")).as_ref(),
+            b" a b c "
+        );
     }
 
     #[test]
     fn test_replace_comments() {
-        assert_eq!(transform("replaceComments", Cow::Borrowed(b"select/*comment*/1")).as_ref(), b"select 1");
+        assert_eq!(
+            transform("replaceComments", Cow::Borrowed(b"select/*comment*/1")).as_ref(),
+            b"select 1"
+        );
     }
 
     #[test]
     fn test_normalize_path() {
-        assert_eq!(transform("normalizePath", Cow::Borrowed(b"/a/b/../c/./d")).as_ref(), b"/a/c/d");
-        assert_eq!(transform("normalizePathWin", Cow::Borrowed(b"\\a\\b\\..\\c")).as_ref(), b"/a/c");
+        assert_eq!(
+            transform("normalizePath", Cow::Borrowed(b"/a/b/../c/./d")).as_ref(),
+            b"/a/c/d"
+        );
+        assert_eq!(
+            transform("normalizePathWin", Cow::Borrowed(b"\\a\\b\\..\\c")).as_ref(),
+            b"/a/c"
+        );
     }
 
     #[test]
     fn test_cmdline() {
-        assert_eq!(transform("cmdLine", Cow::Borrowed(b"c^a^t,/etc/passwd")).as_ref(), b"cat /etc/passwd");
+        assert_eq!(
+            transform("cmdLine", Cow::Borrowed(b"c^a^t,/etc/passwd")).as_ref(),
+            b"cat /etc/passwd"
+        );
     }
 
     #[test]
     fn test_base64_and_hex() {
-        assert_eq!(transform("base64Decode", Cow::Borrowed(b"aGVsbG8=")).as_ref(), b"hello");
-        assert_eq!(transform("hexDecode", Cow::Borrowed(b"414243")).as_ref(), b"ABC");
+        assert_eq!(
+            transform("base64Decode", Cow::Borrowed(b"aGVsbG8=")).as_ref(),
+            b"hello"
+        );
+        assert_eq!(
+            transform("hexDecode", Cow::Borrowed(b"414243")).as_ref(),
+            b"ABC"
+        );
     }
 }

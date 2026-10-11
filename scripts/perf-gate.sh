@@ -67,13 +67,14 @@ PY
     RPS_THRESHOLD="${RPS_THRESHOLD:-7}" RSS_THRESHOLD="${RSS_THRESHOLD:-10}" \
       python3 - "${BASE_DIR}" "${CUR_DIR}" "${SCENARIO}" <<'PY'
 import json, os, sys
+from typing import Optional
 from pathlib import Path
 
 rps_threshold = float(os.environ["RPS_THRESHOLD"])
 rss_threshold = float(os.environ["RSS_THRESHOLD"])
 base_dir, cur_dir, scenario = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 
-def latest(directory: Path) -> dict | None:
+def latest(directory: Path) -> Optional[dict]:
     files = sorted(directory.glob(f"{scenario}-prx-*.json"), key=lambda p: p.stat().st_mtime)
     return json.load(files[-1].open()) if files else None
 

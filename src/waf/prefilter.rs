@@ -4,7 +4,6 @@
 //! automaton to quickly skip non-matching rules.
 
 use aho_corasick::AhoCorasick;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Prefilter {
@@ -14,10 +13,12 @@ pub struct Prefilter {
 
 impl Prefilter {
     pub fn new(literals: Vec<String>) -> Self {
-        let automaton = AhoCorasick::new(&literals).unwrap_or_else(|_| {
-            AhoCorasick::new(vec![""]).unwrap()
-        });
-        Self { automaton, literals }
+        let automaton =
+            AhoCorasick::new(&literals).unwrap_or_else(|_| AhoCorasick::new(vec![""]).unwrap());
+        Self {
+            automaton,
+            literals,
+        }
     }
 
     pub fn is_match(&self, input: &[u8]) -> bool {

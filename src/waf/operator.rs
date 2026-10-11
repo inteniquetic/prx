@@ -3,6 +3,9 @@
 //! Evaluates an operator against a target value.
 //! Operators can be negated (`!@...`).
 
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::collapsible_if)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::net::IpAddr;
@@ -252,7 +255,8 @@ fn ip_match(input: &[u8], cidr_list: &str) -> bool {
                 return true;
             }
         } else if let Some((net_str, prefix_str)) = item.split_once('/') {
-            if let (Ok(net_ip), Ok(prefix)) = (IpAddr::from_str(net_str), prefix_str.parse::<u8>()) {
+            if let (Ok(net_ip), Ok(prefix)) = (IpAddr::from_str(net_str), prefix_str.parse::<u8>())
+            {
                 match (ip, net_ip) {
                     (IpAddr::V4(addr), IpAddr::V4(net)) => {
                         if prefix <= 32 {
@@ -312,58 +316,234 @@ mod tests {
     #[test]
     fn test_numeric_operators() {
         let captures = &mut [None, None, None, None, None, None, None, None, None, None];
-        let op_eq = Operator { name: "eq".into(), negated: false, argument: "10".into() };
-        assert!(evaluate_operator(&op_eq, None, b"10", |_| None, captures, None));
-        assert!(!evaluate_operator(&op_eq, None, b"11", |_| None, captures, None));
+        let op_eq = Operator {
+            name: "eq".into(),
+            negated: false,
+            argument: "10".into(),
+        };
+        assert!(evaluate_operator(
+            &op_eq,
+            None,
+            b"10",
+            |_| None,
+            captures,
+            None
+        ));
+        assert!(!evaluate_operator(
+            &op_eq,
+            None,
+            b"11",
+            |_| None,
+            captures,
+            None
+        ));
 
-        let op_ge = Operator { name: "ge".into(), negated: false, argument: "5".into() };
-        assert!(evaluate_operator(&op_ge, None, b"5", |_| None, captures, None));
-        assert!(evaluate_operator(&op_ge, None, b"6", |_| None, captures, None));
-        assert!(!evaluate_operator(&op_ge, None, b"4", |_| None, captures, None));
+        let op_ge = Operator {
+            name: "ge".into(),
+            negated: false,
+            argument: "5".into(),
+        };
+        assert!(evaluate_operator(
+            &op_ge,
+            None,
+            b"5",
+            |_| None,
+            captures,
+            None
+        ));
+        assert!(evaluate_operator(
+            &op_ge,
+            None,
+            b"6",
+            |_| None,
+            captures,
+            None
+        ));
+        assert!(!evaluate_operator(
+            &op_ge,
+            None,
+            b"4",
+            |_| None,
+            captures,
+            None
+        ));
 
-        let op_lt = Operator { name: "lt".into(), negated: false, argument: "5".into() };
-        assert!(evaluate_operator(&op_lt, None, b"4", |_| None, captures, None));
-        assert!(!evaluate_operator(&op_lt, None, b"5", |_| None, captures, None));
+        let op_lt = Operator {
+            name: "lt".into(),
+            negated: false,
+            argument: "5".into(),
+        };
+        assert!(evaluate_operator(
+            &op_lt,
+            None,
+            b"4",
+            |_| None,
+            captures,
+            None
+        ));
+        assert!(!evaluate_operator(
+            &op_lt,
+            None,
+            b"5",
+            |_| None,
+            captures,
+            None
+        ));
     }
 
     #[test]
     fn test_string_operators() {
         let captures = &mut [None, None, None, None, None, None, None, None, None, None];
-        let op_contains = Operator { name: "contains".into(), negated: false, argument: "admin".into() };
-        assert!(evaluate_operator(&op_contains, None, b"/admin/login", |_| None, captures, None));
-        assert!(!evaluate_operator(&op_contains, None, b"/user/login", |_| None, captures, None));
+        let op_contains = Operator {
+            name: "contains".into(),
+            negated: false,
+            argument: "admin".into(),
+        };
+        assert!(evaluate_operator(
+            &op_contains,
+            None,
+            b"/admin/login",
+            |_| None,
+            captures,
+            None
+        ));
+        assert!(!evaluate_operator(
+            &op_contains,
+            None,
+            b"/user/login",
+            |_| None,
+            captures,
+            None
+        ));
 
-        let op_within = Operator { name: "within".into(), negated: false, argument: "GET POST".into() };
-        assert!(evaluate_operator(&op_within, None, b"GET", |_| None, captures, None));
-        assert!(!evaluate_operator(&op_within, None, b"DELETE", |_| None, captures, None));
+        let op_within = Operator {
+            name: "within".into(),
+            negated: false,
+            argument: "GET POST".into(),
+        };
+        assert!(evaluate_operator(
+            &op_within,
+            None,
+            b"GET",
+            |_| None,
+            captures,
+            None
+        ));
+        assert!(!evaluate_operator(
+            &op_within,
+            None,
+            b"DELETE",
+            |_| None,
+            captures,
+            None
+        ));
     }
 
     #[test]
     fn test_pm_operator() {
         let captures = &mut [None, None, None, None, None, None, None, None, None, None];
-        let op = Operator { name: "pm".into(), negated: false, argument: "select union insert".into() };
-        assert!(evaluate_operator(&op, None, b"SELECT 1 FROM foo", |_| None, captures, None));
-        assert!(!evaluate_operator(&op, None, b"UPDATE foo SET bar=1", |_| None, captures, None));
+        let op = Operator {
+            name: "pm".into(),
+            negated: false,
+            argument: "select union insert".into(),
+        };
+        assert!(evaluate_operator(
+            &op,
+            None,
+            b"SELECT 1 FROM foo",
+            |_| None,
+            captures,
+            None
+        ));
+        assert!(!evaluate_operator(
+            &op,
+            None,
+            b"UPDATE foo SET bar=1",
+            |_| None,
+            captures,
+            None
+        ));
     }
 
     #[test]
     fn test_libinjection() {
         let captures = &mut [None, None, None, None, None, None, None, None, None, None];
-        let op_sqli = Operator { name: "detectSQLi".into(), negated: false, argument: String::new() };
-        assert!(evaluate_operator(&op_sqli, None, b"1' OR '1'='1", |_| None, captures, None));
-        assert!(!evaluate_operator(&op_sqli, None, b"normal text", |_| None, captures, None));
+        let op_sqli = Operator {
+            name: "detectSQLi".into(),
+            negated: false,
+            argument: String::new(),
+        };
+        assert!(evaluate_operator(
+            &op_sqli,
+            None,
+            b"1' OR '1'='1",
+            |_| None,
+            captures,
+            None
+        ));
+        assert!(!evaluate_operator(
+            &op_sqli,
+            None,
+            b"normal text",
+            |_| None,
+            captures,
+            None
+        ));
 
-        let op_xss = Operator { name: "detectXSS".into(), negated: false, argument: String::new() };
-        assert!(evaluate_operator(&op_xss, None, b"<script>alert(1)</script>", |_| None, captures, None));
-        assert!(!evaluate_operator(&op_xss, None, b"normal text", |_| None, captures, None));
+        let op_xss = Operator {
+            name: "detectXSS".into(),
+            negated: false,
+            argument: String::new(),
+        };
+        assert!(evaluate_operator(
+            &op_xss,
+            None,
+            b"<script>alert(1)</script>",
+            |_| None,
+            captures,
+            None
+        ));
+        assert!(!evaluate_operator(
+            &op_xss,
+            None,
+            b"normal text",
+            |_| None,
+            captures,
+            None
+        ));
     }
 
     #[test]
     fn test_ip_match() {
         let captures = &mut [None, None, None, None, None, None, None, None, None, None];
-        let op = Operator { name: "ipMatch".into(), negated: false, argument: "192.168.1.0/24,10.0.0.1".into() };
-        assert!(evaluate_operator(&op, None, b"192.168.1.50", |_| None, captures, None));
-        assert!(evaluate_operator(&op, None, b"10.0.0.1", |_| None, captures, None));
-        assert!(!evaluate_operator(&op, None, b"172.16.0.1", |_| None, captures, None));
+        let op = Operator {
+            name: "ipMatch".into(),
+            negated: false,
+            argument: "192.168.1.0/24,10.0.0.1".into(),
+        };
+        assert!(evaluate_operator(
+            &op,
+            None,
+            b"192.168.1.50",
+            |_| None,
+            captures,
+            None
+        ));
+        assert!(evaluate_operator(
+            &op,
+            None,
+            b"10.0.0.1",
+            |_| None,
+            captures,
+            None
+        ));
+        assert!(!evaluate_operator(
+            &op,
+            None,
+            b"172.16.0.1",
+            |_| None,
+            captures,
+            None
+        ));
     }
 }
