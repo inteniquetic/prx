@@ -1,0 +1,498 @@
+bash scripts/release-gate.sh
+[1/4] cargo fmt -- --check
+[2/4] cargo clippy --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.69s
+[3/4] cargo test --lib --bins --tests -- --test-threads=1
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (/Users/inteniquetic/.cargo-target/debug/deps/prx-7602cae8c8d0cd82)
+
+running 224 tests
+test acme::tests::a_missing_certificate_is_due ... ok
+test acme::tests::an_unreadable_certificate_is_due_rather_than_fatal ... ok
+test acme::tests::the_challenge_prefix_is_owned_only_once_acme_is_enabled ... ok
+test acme::tests::the_challenge_store_answers_only_known_tokens ... ok
+test admin::tests::a_disabled_route_never_matches ... ok
+test admin::tests::a_drained_upstream_takes_no_traffic ... ok
+test admin::tests::a_dry_run_answers_with_the_report_and_writes_nothing ... ok
+test admin::tests::an_apply_that_was_overtaken_is_a_conflict_not_a_silent_win ... ok
+test admin::tests::an_apply_with_a_current_if_match_goes_through ... ok
+test admin::tests::an_edit_changes_one_field_and_leaves_the_rest_of_the_file_alone ... ok
+test admin::tests::an_edit_to_a_draft_that_does_not_parse_is_refused ... ok
+test admin::tests::an_invalid_apply_names_the_line_it_failed_on ... ok
+test admin::tests::apply_config_text_replaces_file_content ... ok
+test admin::tests::atomic_replace_overwrites_target ... ok
+test admin::tests::draining_every_upstream_leaves_nothing_to_pick ... ok
+test admin::tests::get_config_carries_an_etag_that_follows_the_file ... ok
+test admin::tests::renewing_a_certificate_reaches_the_acme_loop ... ok
+test admin::tests::renewing_a_certificate_without_acme_says_so_instead_of_pretending ... ok
+test admin::tests::route_tester_agrees_with_the_matcher ... ok
+test admin::tests::route_tester_names_the_rule_that_won ... ok
+test admin::tests::route_tester_reports_the_route_a_request_would_reach ... ok
+test admin::tests::service_status_reports_every_upstream ... ok
+test admin::tests::the_share_a_weight_buys_is_the_share_traffic_gets ... ok
+test admin::tests::the_tester_does_not_disturb_the_load_balancer ... ok
+test admin::tests::validate_hands_back_the_parsed_config_and_its_warnings ... ok
+test admin::tests::validate_reports_every_error_with_its_line ... ok
+test admin::tests::webui_falls_back_for_a_route_named_after_a_host ... ok
+test admin::tests::webui_falls_back_to_index_for_client_routes ... ok
+test admin::tests::webui_serves_embedded_assets ... ok
+test admin::tests::webui_still_404s_a_missing_asset ... ok
+test admin::tests::weight_zero_is_not_a_drain ... ok
+test cache::tests::a_follower_gives_up_rather_than_waiting_forever ... ok
+test cache::tests::a_stored_response_is_served_until_it_expires ... ok
+test cache::tests::concurrent_misses_are_coalesced_into_one_fetch ... ok
+test cache::tests::connection_headers_are_not_stored ... ok
+test cache::tests::eviction_keeps_the_cache_inside_its_caps ... ok
+test cache::tests::purge_empties_the_cache ... ok
+test cache::tests::responses_that_must_not_be_shared_are_refused ... ok
+test config::tests::a_bad_setting_is_reported_against_the_settings_table ... ok
+test config::tests::a_config_with_no_plugins_reports_nothing_about_them ... ok
+test config::tests::a_plugin_no_route_uses_is_a_warning_not_an_error ... ok
+test config::tests::a_route_can_use_a_declared_plugin ... ok
+test config::tests::a_route_referring_to_a_plugin_that_does_not_exist_is_an_error ... ok
+test config::tests::an_unknown_plugin_kind_is_an_error_at_its_own_field ... ok
+test config::tests::declaring_the_same_plugin_twice_is_an_error ... ok
+test config::tests::listing_a_plugin_twice_on_one_route_is_a_warning ... ok
+test config::tests::plugins_survive_a_round_trip_through_toml ... ok
+test config::tests::validate_accepts_known_http_methods_in_any_case ... ok
+test config::tests::validate_accepts_valid_config ... ok
+test config::tests::validate_rejects_duplicate_service_names ... ok
+test config::tests::validate_rejects_invalid_circuit_breaker_config ... ok
+test config::tests::validate_rejects_invalid_health_path ... ok
+test config::tests::validate_rejects_route_with_unknown_service ... ok
+test config::tests::validate_rejects_service_with_no_upstreams ... ok
+test config::tests::validate_rejects_unknown_http_method ... ok
+test config_edit::tests::a_certificate_is_appended_as_its_own_block ... ok
+test config_edit::tests::a_changed_field_leaves_every_comment_in_place ... ok
+test config_edit::tests::a_draft_that_is_not_toml_yet_is_refused_whole ... ok
+test config_edit::tests::a_list_is_written_as_a_readable_array ... ok
+test config_edit::tests::a_missing_table_is_created_on_the_way_down ... ok
+test config_edit::tests::a_nested_element_is_addressed_by_index ... ok
+test config_edit::tests::a_plugin_setting_can_be_edited_like_any_other_field ... ok
+test config_edit::tests::a_whole_table_can_be_removed ... ok
+test config_edit::tests::an_edit_that_cannot_be_placed_is_refused_rather_than_guessed ... ok
+test config_edit::tests::clearing_a_field_takes_the_key_out ... ok
+test config_edit::tests::removing_the_last_element_removes_the_array ... ok
+test config_edit::tests::several_edits_apply_in_order ... ok
+test headers::tests::a_missing_variable_skips_the_header_instead_of_writing_a_hole ... ok
+test headers::tests::global_rules_apply_before_route_rules ... ok
+test headers::tests::literal_values_are_rendered_once_at_compile_time ... ok
+test headers::tests::remove_runs_before_set ... ok
+test headers::tests::renders_every_variable ... ok
+test headers::tests::request_id_use_is_detected ... ok
+test headers::tests::set_replaces_and_add_appends ... ok
+test health::tests::a_tcp_probe_fails_when_nothing_is_listening ... ok
+test health::tests::a_tcp_probe_succeeds_against_a_listener ... ok
+test health::tests::an_http_probe_checks_the_status_code ... ok
+test health::tests::parses_a_status_line ... ok
+test limiter::tests::a_burst_is_allowed_then_the_rate_applies ... ok
+test limiter::tests::a_denial_says_how_long_to_wait ... ok
+test limiter::tests::concurrency_limiter_releases_slots ... ok
+test limiter::tests::idle_entries_are_dropped ... ok
+test limiter::tests::keys_are_limited_independently ... ok
+test limiter::tests::memory_is_bounded_when_keys_never_repeat ... ok
+test limiter::tests::releasing_more_than_acquired_does_not_wrap ... ok
+test limiter::tests::tokens_never_bank_beyond_the_burst ... ok
+test metrics::tests::inflight_gauge_counts_both_ways ... ok
+test metrics::tests::latency_buckets_reach_past_ten_milliseconds ... ok
+test metrics::tests::snapshot_groups_requests_by_status_class ... ok
+test plugin::tests::a_chain_answers_for_every_phase_its_members_declare ... ok
+test plugin::tests::a_chain_asks_for_only_what_its_plugins_declare ... ok
+test plugin::tests::a_header_that_cannot_be_encoded_is_dropped_not_fatal ... ok
+test plugin::tests::a_response_carries_the_headers_a_rejection_needs ... ok
+test plugin::tests::an_empty_chain_handles_nothing ... ok
+test plugin::tests::deny_is_a_response_with_no_body ... ok
+test plugin::tests::phase_bits_do_not_overlap ... ok
+test plugin::tests::state_is_allocated_once_and_kept_apart_per_plugin ... ok
+test plugin::tests::state_is_not_allocated_when_no_plugin_wants_any ... ok
+test plugin::tests::the_chain_keeps_the_order_the_config_listed ... ok
+test proxy::tests::a_non_idempotent_request_is_not_replayed_after_a_proxy_error ... ok
+test proxy::tests::a_request_past_its_deadline_is_not_retried ... ok
+test proxy::tests::a_route_without_plugins_enters_no_phase ... ok
+test proxy::tests::request_keeps_its_snapshot_across_a_reload ... ok
+test proxy::tests::retry_budget_can_be_turned_off ... ok
+test proxy::tests::retry_budget_limits_a_storm_of_retries ... ok
+test proxy::tests::should_retry_respects_max_retries ... ok
+test proxy::tests::should_retry_stops_when_all_upstreams_already_attempted ... ok
+test proxy::tests::the_plugin_system_costs_a_request_three_empty_fields ... ok
+test reload::tests::resolve_watch_dir_uses_current_dir_for_relative_file ... ok
+test reload::tests::resolve_watch_dir_uses_parent_for_absolute_file ... ok
+test router::tests::a_disabled_default_route_is_not_the_fallback ... ok
+test router::tests::a_disabled_route_is_not_in_the_index ... ok
+test router::tests::a_disabled_route_keeps_the_index_of_the_ones_after_it ... ok
+test router::tests::a_rejected_method_does_not_fall_through_to_a_broader_route ... ok
+test router::tests::a_specific_host_does_not_fall_through_to_a_wildcard_on_method_mismatch ... ok
+test router::tests::default_route_is_the_fallback ... ok
+test router::tests::empty_host_pattern_means_any_host ... ok
+test router::tests::exact_host_beats_wildcard_and_any ... ok
+test router::tests::first_route_in_config_order_wins_a_tie ... ok
+test router::tests::longer_wildcard_suffix_wins ... ok
+test router::tests::longest_path_prefix_wins ... ok
+test router::tests::method_matching_is_case_insensitive_in_config ... ok
+test router::tests::method_mismatch_returns_method_not_allowed ... ok
+test router::tests::no_match_without_a_default_route ... ok
+test router::tests::path_shorter_than_the_prefix_does_not_match ... ok
+test router::tests::trie_handles_shared_and_split_prefixes ... ok
+test router::tests::unknown_request_method_only_matches_unrestricted_routes ... ok
+test router::tests::wildcard_matches_the_bare_domain_too ... ok
+test runtime::header_rule_tests::route_header_rules_are_compiled_from_toml ... ok
+test runtime::lb_tests::inflight_counting_is_balanced_and_saturating ... ok
+test runtime::lb_tests::latency_average_is_smoothed ... ok
+test runtime::lb_tests::least_conn_avoids_the_busy_upstream ... ok
+test runtime::lb_tests::p2c_ewma_avoids_the_slow_upstream ... ok
+test runtime::lb_tests::sticky_selection_falls_back_when_the_pinned_upstream_is_down ... ok
+test runtime::lb_tests::weight_shapes_the_round_robin_distribution ... ok
+test runtime::tests::a_chain_is_built_in_the_order_the_route_listed ... ok
+test runtime::tests::a_disabled_plugin_is_left_out_of_the_chain ... ok
+test runtime::tests::a_name_that_cannot_be_built_does_not_take_the_reload_down ... ok
+test runtime::tests::a_route_that_lists_no_plugins_gets_an_empty_chain ... ok
+test runtime::tests::circuit_breaker_opens_after_failure_threshold ... ok
+test runtime::tests::next_upstream_skips_attempted_candidate_for_failover ... ok
+test runtime::tests::normalize_host_lowercases_and_strips_port ... ok
+test runtime::tests::readiness_fails_when_all_upstreams_are_open_circuit ... ok
+test runtime::tests::route_resolves_correct_service_index ... ok
+test runtime::tests::select_route_returns_none_when_no_route_matches_and_no_default ... ok
+test runtime::tests::select_route_uses_default_route_when_present ... ok
+test runtime::tests::two_routes_using_one_plugin_share_the_same_instance ... ok
+test stats::tests::a_counter_that_went_backwards_reads_as_a_quiet_second ... ok
+test stats::tests::cache_hit_ratio_covers_only_the_window ... ok
+test stats::tests::events_keep_only_the_most_recent ... ok
+test stats::tests::percentiles_are_none_without_traffic ... ok
+test stats::tests::quantiles_interpolate_inside_the_bucket ... ok
+test stats::tests::rates_are_per_second_not_per_tick ... ok
+test tls::tests::civil_dates_match_known_epochs ... ok
+test tls::tests::parses_openssl_not_after_format ... ok
+test validate::tests::a_syntax_error_is_reported_alone_and_in_place ... ok
+test validate::tests::a_valid_config_comes_back_parsed_with_its_warnings ... ok
+test validate::tests::a_warning_points_at_the_service_it_is_about ... ok
+test validate::tests::an_unknown_service_lists_the_ones_that_exist ... ok
+test validate::tests::columns_count_characters_not_bytes ... ok
+test validate::tests::points_at_the_line_the_field_is_on ... ok
+test validate::tests::reports_every_error_in_one_pass ... ok
+test waf::evaluator::tests::setvar_only_updates_tx_and_accepts_mixed_case_prefixes ... ok
+test waf::operator::tests::ipv6_prefix_boundaries_are_checked_before_shifting ... ok
+test waf::operator::tests::test_ip_match ... ok
+test waf::operator::tests::test_libinjection ... ok
+test waf::operator::tests::test_numeric_operators ... ok
+test waf::operator::tests::test_pm_operator ... ok
+test waf::operator::tests::test_string_operators ... ok
+test waf::parse::tests::a_broken_link_takes_the_whole_chain_and_nothing_else ... ok
+test waf::parse::tests::a_broken_rule_is_reported_with_its_id_and_costs_only_itself ... ok
+test waf::parse::tests::a_chain_owns_the_rules_after_it ... ok
+test waf::parse::tests::a_chained_rule_with_an_id_is_a_stray_chain ... ok
+test waf::parse::tests::a_comment_never_swallows_the_line_after_it ... ok
+test waf::parse::tests::a_dangling_chain_is_an_error_with_coordinates ... ok
+test waf::parse::tests::a_real_rule_parses_into_every_part ... ok
+test waf::parse::tests::actions_are_typed ... ok
+test waf::parse::tests::an_unknown_directive_is_reported_and_the_file_goes_on ... ok
+test waf::parse::tests::an_unreadable_line_ends_the_chain_it_interrupts ... ok
+test waf::parse::tests::bad_action_values_are_errors_not_guesses ... ok
+test waf::parse::tests::continuations_keep_the_first_line_number_and_the_spacing ... ok
+test waf::parse::tests::crlf_files_parse ... ok
+test waf::parse::tests::every_other_directive_parses ... ok
+test waf::parse::tests::garbage_never_panics_and_whatever_parses_round_trips ... ok
+test waf::parse::tests::only_the_quote_itself_is_unescaped ... ok
+test waf::parse::tests::operators_default_to_rx_and_may_be_negated ... ok
+test waf::parse::tests::quoted_action_values_keep_commas_colons_and_escaped_quotes ... ok
+test waf::parse::tests::rendering_round_trips ... ok
+test waf::parse::tests::targets_carry_negation_count_and_selectors ... ok
+test waf::pcre::tests::a_character_in_a_class_is_its_bytes ... ok
+test waf::pcre::tests::a_pattern_beyond_repair_reports_one_line ... ok
+test waf::pcre::tests::an_accepted_pattern_is_never_rewritten ... ok
+test waf::pcre::tests::an_open_lower_bound_is_refused_not_guessed ... ok
+test waf::pcre::tests::an_unknown_class_escape_is_an_error_not_a_literal ... ok
+test waf::pcre::tests::braced_byte_escapes_mean_bytes ... ok
+test waf::pcre::tests::patterns_read_bytes_across_lines_like_modsecurity ... ok
+test waf::pcre::tests::pcre_leniency_is_repaired_and_marked ... ok
+test waf::pcre::tests::repair_leaves_real_quantifiers_and_braced_escapes_alone ... ok
+test waf::tests::a_duplicate_id_keeps_the_first_rule ... ok
+test waf::tests::a_pattern_that_cannot_compile_costs_its_whole_chain_and_nothing_else ... ok
+test waf::tests::a_removed_id_can_be_defined_again ... ok
+test waf::tests::a_rule_without_an_id_is_not_loaded ... ok
+test waf::tests::a_ruleset_can_be_shared_across_threads ... ok
+test waf::tests::an_rx_with_a_macro_is_left_for_the_request ... ok
+test waf::tests::default_actions_are_inherited_per_phase ... ok
+test waf::tests::equal_transformation_chains_share_one_key ... ok
+test waf::tests::files_load_in_the_order_given_and_globs_in_sorted_order ... ok
+test waf::tests::needs_lists_what_enabled_rules_read ... ok
+test waf::tests::removals_apply_to_the_rules_before_them ... ok
+test waf::tests::rules_land_in_their_phase_in_file_order ... ok
+test waf::tests::rx_is_compiled_at_load_and_a_repair_is_recorded ... ok
+test waf::tests::signatures_and_timeouts_are_kept ... ok
+test waf::tests::skip_after_is_resolved_to_an_index_in_its_own_phase ... ok
+test waf::tests::target_updates_extend_the_rule_they_name ... ok
+test waf::tests::the_bench_engine_config_loads_without_noise ... ok
+test waf::tests::the_summary_is_loud_about_what_was_left_out ... ok
+test waf::transform::tests::test_base64_and_hex ... ok
+test waf::transform::tests::test_cmdline ... ok
+test waf::transform::tests::test_html_entity_decode ... ok
+test waf::transform::tests::test_lowercase ... ok
+test waf::transform::tests::test_normalize_path ... ok
+test waf::transform::tests::test_replace_comments ... ok
+test waf::transform::tests::test_urldecode ... ok
+test waf::transform::tests::test_whitespace ... ok
+
+test result: ok. 224 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.47s
+
+     Running unittests src/main.rs (/Users/inteniquetic/.cargo-target/debug/deps/prx-04438fd9ecddf302)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/e2e_acme.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_acme-d322237cf49704a8)
+
+running 2 tests
+test acme_failure_keeps_the_proxy_serving ... ok
+test acme_issues_and_installs_a_certificate_without_a_restart ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s
+
+     Running tests/e2e_cache.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_cache-9cc05ccf7b16f551)
+
+running 8 tests
+test a_body_over_the_limit_is_streamed_but_not_stored ... ok
+test a_post_is_never_served_from_the_cache ... ok
+test a_private_response_is_never_shared ... ok
+test a_response_that_sets_a_cookie_is_never_shared ... ok
+test a_second_request_is_served_without_touching_the_upstream ... ok
+test an_authenticated_request_bypasses_the_cache ... ok
+test concurrent_misses_reach_the_upstream_once ... ok
+test entries_expire_and_are_fetched_again ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.43s
+
+     Running tests/e2e_compression.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_compression-99ffbf2edfb2b344)
+
+running 5 tests
+test a_client_that_does_not_ask_gets_the_body_untouched ... ok
+test a_compressible_body_is_compressed_when_the_client_accepts_it ... ok
+test an_already_compressed_response_is_not_compressed_again ... ok
+test brotli_and_zstd_are_negotiated_too ... ok
+test compression_stays_off_until_it_is_configured ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+     Running tests/e2e_grpc.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_grpc-ce5555d5253e078e)
+
+running 3 tests
+test forwards_a_non_zero_grpc_status ... ok
+test forwards_a_server_streaming_response ... ok
+test forwards_a_unary_call_with_its_trailers ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/e2e_headers.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_headers-04f969d96b4792b6)
+
+running 7 tests
+test add_appends_to_an_existing_forwarded_for_chain ... ok
+test forwards_client_ip_to_the_upstream ... ok
+test generates_a_request_id_and_reuses_an_inbound_one ... ok
+test global_rules_apply_to_every_route ... ok
+test removes_internal_headers_before_the_upstream_sees_them ... ok
+test rewrites_response_headers ... ok
+test set_replaces_a_spoofed_header ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+     Running tests/e2e_health.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_health-e4cb447d36e16917)
+
+running 2 tests
+test an_unhealthy_upstream_is_taken_out_before_a_user_request_finds_it ... ok
+test readiness_reflects_the_probe_verdict ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.45s
+
+     Running tests/e2e_plugin.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_plugin-ecd07e7dc93ce9c0)
+
+running 5 tests
+test a_plugin_can_add_a_header_on_the_way_back ... ok
+test a_plugin_can_answer_the_request_itself ... ok
+test a_plugin_reaches_the_upstream_request ... ok
+test a_route_without_plugins_is_untouched ... ok
+test plugins_run_in_the_order_the_route_lists_them ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+     Running tests/e2e_proxy.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_proxy-eb7f192f34a4f3cb)
+
+running 6 tests
+test matches_the_most_specific_route ... ok
+test rejects_methods_a_route_does_not_allow ... ok
+test retries_and_fails_over_to_next_upstream ... ok
+test returns_404_when_no_route_matches ... ok
+test routes_request_to_upstream ... ok
+test serves_health_and_ready_endpoints ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+     Running tests/e2e_rate_limit.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_rate_limit-f989c7079e805d72)
+
+running 4 tests
+test a_concurrency_limit_sheds_load_instead_of_queueing_it ... ok
+test each_header_value_gets_its_own_allowance ... ok
+test requests_over_the_limit_get_429_with_retry_after ... ok
+test traffic_under_the_limit_is_never_rejected ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.27s
+
+     Running tests/e2e_retry.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_retry-e296f6dc774abbd9)
+
+running 3 tests
+test a_post_is_not_replayed_after_the_upstream_dropped_it ... ok
+test a_request_over_its_time_budget_gets_504 ... ok
+test the_retry_budget_caps_amplification_against_a_dead_upstream ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+     Running tests/e2e_stats.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_stats-1d7b1e31929c995f)
+
+running 3 tests
+test applying_a_config_lands_on_the_event_strip ... ok
+test live_stats_report_the_same_traffic_metrics_does ... ok
+test the_stream_pushes_samples_and_caps_its_clients ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.33s
+
+     Running tests/e2e_sticky.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_sticky-423a4083bc4f816a)
+
+running 3 tests
+test a_cookie_keeps_a_client_on_the_same_upstream ... ok
+test affinity_gives_way_when_the_pinned_upstream_disappears ... ok
+test client_ip_mode_pins_without_a_cookie ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+     Running tests/e2e_tls.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_tls-0f28dbda0d354481)
+
+running 4 tests
+test a_mismatched_key_is_rejected_at_startup ... ok
+test both_http_versions_work_over_tls ... ok
+test sni_selects_the_matching_certificate ... ok
+test the_plaintext_listener_still_serves_both_versions ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.03s
+
+     Running tests/e2e_websocket.rs (/Users/inteniquetic/.cargo-target/debug/deps/e2e_websocket-46c93f7ab5b63f0d)
+
+running 4 tests
+test an_idle_connection_survives_the_upstream_read_timeout ... ok
+test forwards_the_close_handshake ... ok
+test proxies_frames_larger_than_a_single_read ... ok
+test proxies_text_and_binary_frames ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+
+     Running tests/waf_crs.rs (/Users/inteniquetic/.cargo-target/debug/deps/waf_crs-9ff4d733e92b1b94)
+
+running 2 tests
+test crs_loads_whole_and_matches_the_t504_census ... ok
+test every_crs_file_survives_a_round_trip ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+[4/4] cargo audit
+    Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 1296 security advisories (from /Users/inteniquetic/.cargo/advisory-db)
+    Updating crates.io index
+    Scanning Cargo.lock for vulnerabilities (381 crate dependencies)
+Crate:     derivative
+Version:   2.2.0
+Warning:   unmaintained
+Title:     `derivative` is unmaintained; consider using an alternative
+Date:      2024-06-26
+ID:        RUSTSEC-2024-0388
+URL:       https://rustsec.org/advisories/RUSTSEC-2024-0388
+Dependency tree:
+derivative 2.2.0
+├── pingora-load-balancing 0.9.0
+│   └── pingora 0.9.0
+│       └── prx 0.1.0
+└── pingora-core 0.9.0
+    ├── pingora-proxy 0.9.0
+    │   └── pingora 0.9.0
+    ├── pingora-prometheus 0.9.0
+    │   └── prx 0.1.0
+    ├── pingora-load-balancing 0.9.0
+    ├── pingora-cache 0.9.0
+    │   ├── pingora-proxy 0.9.0
+    │   └── pingora 0.9.0
+    └── pingora 0.9.0
+
+Crate:     rand
+Version:   0.8.5
+Warning:   unsound
+Title:     Rand is unsound with a custom logger using `rand::rng()`
+Date:      2026-04-09
+ID:        RUSTSEC-2026-0097
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0097
+Dependency tree:
+rand 0.8.5
+├── pingora-runtime 0.9.0
+│   ├── pingora-load-balancing 0.9.0
+│   │   └── pingora 0.9.0
+│   │       └── prx 0.1.0
+│   └── pingora-core 0.9.0
+│       ├── pingora-proxy 0.9.0
+│       │   └── pingora 0.9.0
+│       ├── pingora-prometheus 0.9.0
+│       │   └── prx 0.1.0
+│       ├── pingora-load-balancing 0.9.0
+│       ├── pingora-cache 0.9.0
+│       │   ├── pingora-proxy 0.9.0
+│       │   └── pingora 0.9.0
+│       └── pingora 0.9.0
+├── pingora-proxy 0.9.0
+├── pingora-lru 0.9.0
+│   └── pingora-cache 0.9.0
+├── pingora-load-balancing 0.9.0
+├── pingora-core 0.9.0
+└── pingora-cache 0.9.0
+
+Crate:     rand
+Version:   0.9.2
+Warning:   unsound
+Title:     Rand is unsound with a custom logger using `rand::rng()`
+Date:      2026-04-09
+ID:        RUSTSEC-2026-0097
+URL:       https://rustsec.org/advisories/RUSTSEC-2026-0097
+Dependency tree:
+rand 0.9.2
+└── prx 0.1.0
+
+warning: 3 allowed warnings found
+release gate passed
+bash scripts/perf-gate.sh micro
+benchmark                                        baseline ns     current ns     delta  status
+config_parse_validate/10                            92,540.9       45,594.7    -50.7%  faster
+config_parse_validate/100                          881,042.8      409,786.7    -53.5%  faster
+config_parse_validate/1000                       8,864,072.8    4,117,383.0    -53.5%  faster
+request_path_helpers/hash_key_host_path                 32.6            9.9    -69.6%  faster
+request_path_helpers/normalize_host_ipv6                19.2            8.7    -54.5%  faster
+request_path_helpers/normalize_host_plain               26.5           11.0    -58.6%  faster
+request_path_helpers/normalize_host_with_port           52.4           25.9    -50.6%  faster
+runtime_build/10                                    13,813.7        6,723.3    -51.3%  faster
+runtime_build/100                                  155,243.9       65,082.6    -58.1%  faster
+runtime_build/1000                               1,908,351.1      673,314.5    -64.7%  faster
+select_route/default_fallback/10                        55.7           26.1    -53.2%  faster
+select_route/default_fallback/100                       55.7           26.4    -52.6%  faster
+select_route/default_fallback/1000                      55.2           26.9    -51.3%  faster
+select_route/first_route/10                             67.9           20.7    -69.6%  faster
+select_route/first_route/100                            67.4           21.1    -68.7%  faster
+select_route/first_route/1000                           67.8           20.9    -69.2%  faster
+select_route/host_with_port/10                          79.7           35.8    -55.0%  faster
+select_route/host_with_port/100                         78.2           36.9    -52.9%  faster
+select_route/host_with_port/1000                        78.6           36.7    -53.3%  faster
+select_route/last_route/10                              54.8           20.6    -62.5%  faster
+select_route/last_route/100                             62.6           21.6    -65.5%  faster
+select_route/last_route/1000                            58.0           22.5    -61.2%  faster
+select_route/wildcard_last/10                           81.4           32.3    -60.3%  faster
+select_route/wildcard_last/100                          83.7           32.7    -60.9%  faster
+select_route/wildcard_last/1000                         81.9           33.1    -59.6%  faster
+
+OK: no benchmark regressed by more than 5.0%
+bash scripts/perf-gate.sh macro h1-keepalive
+scenario h1-keepalive: rps 16,027 -> 13,959 (-12.9%), peak RSS 25.1MB -> 30.8MB (+23.0%)
+FAIL: throughput dropped more than 7.0%
+FAIL: peak RSS grew more than 10.0%
+make: *** [gate] Error 1

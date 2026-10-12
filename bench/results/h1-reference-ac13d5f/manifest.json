@@ -1,0 +1,23 @@
+{
+  "classification": "provisional initial reference; not historical no-regression evidence",
+  "commit": "ac13d5f727349cdcb7efafbd1d0318168f5d40d4",
+  "run_exit_codes": {
+    "baseline-run-1": 0,
+    "current-run-1": 0,
+    "current-run-2": 0,
+    "macro-gate": 1,
+    "make-gate": 2
+  },
+  "rps_range_over_min_percent": 15.398099746475257,
+  "tests_passed": 285,
+  "sha256": {
+    "bench/results/h1-reference-ac13d5f/current-run-2.log": "9eaf5004b4fcae02c5b2da407826d4126a79757124193493e08769887e220bf3",
+    "bench/results/h1-reference-ac13d5f/current-run-1.log": "c3e1c7f80dc5a040718d517fc42da72bbfd986bf29d36e885cce9727332c5ce9",
+    "bench/results/h1-reference-ac13d5f/macro-gate.log": "ad1f8213e2e103d912c39252922804f8b0847e669287774a80e8cb632db9c87f",
+    "bench/results/h1-reference-ac13d5f/current-run-2.json": "b2ee15dfc1414b1413cba4f3a32c9d625a984c9237f0562433ceba1533277b11",
+    "bench/results/h1-reference-ac13d5f/current-run-1.json": "5a0a9bf7f3fdc349acbc136131005db8041a6c46d7bf163583387a412215eafb",
+    "bench/results/h1-reference-ac13d5f/make-gate.log": "8ac2139fa4dc01ec63514d735df3d418824f3f2d7f593297d9fd857b3c61396b",
+    "bench/results/h1-reference-ac13d5f/baseline-run-1.json": "ebb8c499729752ff8f12261e720b93924773db950baa27f8f04ac95a4f01d7ab",
+    "bench/results/h1-reference-ac13d5f/baseline-run-1.log": "d6d50214f8de3eaed3d7b9a17768d6b953b47b0536a3b8f1a1ed7f159dbd5d50"
+  }
+}

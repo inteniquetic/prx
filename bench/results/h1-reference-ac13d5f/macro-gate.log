@@ -1,0 +1,3 @@
+scenario h1-keepalive: rps 16,027 -> 13,959 (-12.9%), peak RSS 25.1MB -> 30.8MB (+23.0%)
+FAIL: throughput dropped more than 7.0%
+FAIL: peak RSS grew more than 10.0%

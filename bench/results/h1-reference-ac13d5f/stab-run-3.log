@@ -1,0 +1,25 @@
+bash scripts/bench.sh prx h1-keepalive
+==> prx / h1-keepalive  (64 conns, warmup 10s, measure 60s)
+ Image bench-backend1 Building 
+ Image bench-backend2 Building 
+ Image bench-prx Building 
+ Image bench-backend2 Built 
+ Image bench-backend1 Built 
+ Image bench-prx Built 
+ Network bench_bench Creating 
+ Network bench_bench Created 
+ Container bench-backend1 Creating 
+ Container bench-backend2 Creating 
+ Container bench-backend1 Created 
+ Container bench-backend2 Created 
+ Container bench-prx Creating 
+ Container bench-prx Created 
+ Container bench-backend2 Starting 
+ Container bench-backend1 Starting 
+ Container bench-backend2 Started 
+ Container bench-backend1 Started 
+ Container bench-prx Starting 
+ Container bench-prx Started 
+    warmup...
+    measuring...
+    wrote /Users/inteniquetic/Development/Project/INTENIQUETIC/prx/bench/results/h1-keepalive-prx-ac13d5f.json
