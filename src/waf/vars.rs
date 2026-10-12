@@ -7,7 +7,7 @@
 #![allow(clippy::collapsible_if)]
 
 use crate::waf::rule::Key;
-use pingora::http::RequestHeader;
+use pingora::http::{RequestHeader, ResponseHeader};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -16,6 +16,10 @@ use std::collections::HashMap;
 pub struct Transaction<'a> {
     pub head: &'a RequestHeader,
     pub body: &'a [u8],
+    /// Upstream response headers, for phase 3 and later. Empty before phase 3.
+    pub response_head: Option<&'a ResponseHeader>,
+    /// Response body bytes as the client receives them, for phase 4 and later.
+    pub response_body: &'a [u8],
     /// Cache: (VariableCollection, SelectorKey, TransformChainIndex) -> TransformedValue
     pub transform_cache: RefCell<HashMap<(String, String, usize), Cow<'a, [u8]>>>,
     /// Anomaly Scores per phase (0-4 for phase 1-5)
@@ -29,6 +33,8 @@ impl<'a> Transaction<'a> {
         Self {
             head,
             body,
+            response_head: None,
+            response_body: b"",
             transform_cache: RefCell::new(HashMap::new()),
             anomaly_scores: RefCell::new([0; 5]),
             tx: RefCell::new(HashMap::new()),
@@ -103,6 +109,14 @@ pub fn extract_variable<'a>(
                 Cow::Borrowed(b"")
             }
         }
+        "RESPONSE_HEADERS" => extract_response_headers(trx, key),
+        "RESPONSE_BODY" => {
+            if matches!(key, Key::All) {
+                Cow::Borrowed(trx.response_body)
+            } else {
+                Cow::Borrowed(b"")
+            }
+        }
         "ARGS" | "ARGS_GET" => extract_args(trx, key, false),
         "ARGS_POST" => extract_args(trx, key, true),
         // Add more collections as needed
@@ -119,6 +133,16 @@ fn extract_headers<'a>(trx: &'a Transaction<'a>, key: &Key) -> Cow<'a, [u8]> {
                 Cow::Borrowed(b"")
             }
         }
+        _ => Cow::Borrowed(b""),
+    }
+}
+
+fn extract_response_headers<'a>(trx: &'a Transaction<'a>, key: &Key) -> Cow<'a, [u8]> {
+    match (key, trx.response_head) {
+        (Key::Name(name), Some(head)) => match head.headers.get(name) {
+            Some(value) => Cow::Borrowed(value.as_bytes()),
+            None => Cow::Borrowed(b""),
+        },
         _ => Cow::Borrowed(b""),
     }
 }

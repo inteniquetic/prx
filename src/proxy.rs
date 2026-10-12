@@ -271,6 +271,33 @@ impl PrxProxy {
         Ok(true)
     }
 
+    /// Rewrites the upstream response head into a short replacement response,
+    /// keeping the upstream headers but dropping their framing.
+    fn replace_response(
+        response: &mut ResponseHeader,
+        status: u16,
+        body: &'static [u8],
+    ) -> Result<()> {
+        response.set_status(status)?;
+        response.remove_header("transfer-encoding");
+        response.remove_header("content-encoding");
+        response.insert_header("content-length", body.len().to_string())?;
+        Ok(())
+    }
+
+    /// Reads the whole request body, giving up once it grows past `limit`.
+    /// `Ok(None)` means the body is larger than the limit.
+    async fn read_body_within_limit(session: &mut Session, limit: u64) -> Result<Option<BytesMut>> {
+        let mut body = BytesMut::new();
+        while let Some(chunk) = session.read_request_body().await? {
+            if (body.len() + chunk.len()) as u64 > limit {
+                return Ok(None);
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(Some(body))
+    }
+
     /// Resolves the client address once per request, and only when a header
     /// rule asks for it.
     fn fill_client_addr(session: &Session, ctx: &mut RequestCtx) {
@@ -697,6 +724,36 @@ impl ProxyHttp for PrxProxy {
                             return Self::respond_from_plugin(session, response).await;
                         }
                     }
+
+                    // Phase 2 (T512) needs the request body, so it is read and
+                    // judged here, before an upstream is chosen. Pingora writes
+                    // the request header upstream before it reads any body, so
+                    // a later hook would be too late to stop the request.
+                    let settings = &snapshot.ruleset.settings;
+                    let limit = settings.request_body_limit.unwrap_or(0);
+                    if !ctx.is_upgrade
+                        && settings.request_body_access.unwrap_or(false)
+                        && limit > 0
+                        && !snapshot.ruleset.phases[1].is_empty()
+                    {
+                        // Keep a copy of every byte read, so pingora replays
+                        // the body to each upstream attempt on its own.
+                        session.as_mut().enable_retry_buffering();
+                        let Some(body) = Self::read_body_within_limit(session, limit).await? else {
+                            ctx.body_too_large = true;
+                            session.set_keepalive(None);
+                            return Self::respond_text(session, 413, "request_body_too_large\n")
+                                .await;
+                        };
+                        let decision = {
+                            let evaluator = Evaluator::new(snapshot.ruleset.clone());
+                            let trx = Transaction::new(session.req_header(), &body[..]);
+                            evaluator.evaluate_phase(1, &trx)
+                        };
+                        if Self::enforce_waf(session, decision).await? {
+                            return Ok(true);
+                        }
+                    }
                 }
                 Ok(false)
             }
@@ -1017,7 +1074,7 @@ impl ProxyHttp for PrxProxy {
 
     async fn response_filter(
         &self,
-        _session: &mut Session,
+        session: &mut Session,
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> Result<()> {
@@ -1091,7 +1148,39 @@ impl ProxyHttp for PrxProxy {
             return Ok(());
         };
 
-        // Hand out the affinity cookie for the upstream this request landed on.
+        // Phase 3 (T512): judge the upstream response head before it is sent.
+        // A deny replaces the status so the upstream body is never forwarded.
+        // Skipped when a plugin already answered, so that answer is kept.
+        if ctx.plugin_body.is_none() && !snapshot.ruleset.phases[2].is_empty() {
+            let decision = {
+                let evaluator = Evaluator::new(snapshot.ruleset.clone());
+                let mut trx = Transaction::new(session.req_header(), &ctx.buffered_body[..]);
+                trx.response_head = Some(upstream_response);
+                evaluator.evaluate_phase(2, &trx)
+            };
+            match decision {
+                WafDecision::Allow => {}
+                WafDecision::Deny(status) => {
+                    Self::replace_response(upstream_response, status, b"forbidden\n")?;
+                    ctx.plugin_body = Some(Bytes::from_static(b"forbidden\n"));
+                    ctx.plugin_body_sent = false;
+                }
+                WafDecision::Drop => {
+                    // Dropping the connection from response_filter would leave
+                    // the client hanging without a status, so a 403 is sent.
+                    Self::replace_response(upstream_response, 403, b"forbidden\n")?;
+                    ctx.plugin_body = Some(Bytes::from_static(b"forbidden\n"));
+                    ctx.plugin_body_sent = false;
+                }
+                WafDecision::Redirect(url) => {
+                    Self::replace_response(upstream_response, 302, b"")?;
+                    upstream_response.insert_header("location", url)?;
+                    ctx.plugin_body = Some(Bytes::new());
+                    ctx.plugin_body_sent = false;
+                }
+            }
+        }
+
         // This one stays here: it belongs to the service's load balancing, not
         // to anything a route can switch on.
         if let Some(addr_hash) = ctx.sticky_cookie.filter(|hash| *hash != 0)
@@ -1111,7 +1200,7 @@ impl ProxyHttp for PrxProxy {
 
     fn response_body_filter(
         &self,
-        _session: &mut Session,
+        session: &mut Session,
         body: &mut Option<Bytes>,
         end_of_stream: bool,
         ctx: &mut Self::CTX,
@@ -1131,6 +1220,23 @@ impl ProxyHttp for PrxProxy {
         if ctx.plugin_body_sent {
             *body = None;
             return Ok(None);
+        }
+
+        // Phase 4 (T512): audit only. The rule sees the bytes the client is
+        // about to receive, and its result is logged. It never changes `body`.
+        if let Some(snapshot) = &ctx.snapshot
+            && !snapshot.ruleset.phases[3].is_empty()
+            && let Some(chunk) = body.as_deref()
+        {
+            let evaluator = Evaluator::new(snapshot.ruleset.clone());
+            let mut trx = Transaction::new(session.req_header(), &ctx.buffered_body[..]);
+            trx.response_body = chunk;
+            let decision = evaluator.evaluate_phase(3, &trx);
+            if decision != WafDecision::Allow {
+                crate::waf::evaluator::audit::PHASE4_MATCHES
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                warn!(?decision, "WAF phase 4 matched response body (audit only)");
+            }
         }
 
         // Plugins that watch the body do so on what the client will receive.
@@ -1248,6 +1354,20 @@ impl ProxyHttp for PrxProxy {
             .response_written()
             .map(|resp| resp.status.as_u16())
             .unwrap_or_else(|| if e.is_some() { 500 } else { 0 });
+
+        // Phase 5 (T512): audit trail. It runs for every routed request, whether
+        // it was allowed, blocked, or answered early, and only logs the result.
+        if let Some(snapshot) = &ctx.snapshot
+            && !snapshot.ruleset.phases[4].is_empty()
+        {
+            let evaluator = Evaluator::new(snapshot.ruleset.clone());
+            let mut trx = Transaction::new(session.req_header(), &ctx.buffered_body[..]);
+            trx.response_head = session.response_written();
+            let decision = evaluator.evaluate_phase(4, &trx);
+            crate::waf::evaluator::audit::PHASE5_RUNS
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            info!(?decision, "WAF phase 5 logging evaluation");
+        }
 
         // The log phase runs for every request that reached a route, including
         // the ones a plugin answered itself — which is the whole point: a

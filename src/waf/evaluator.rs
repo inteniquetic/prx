@@ -16,6 +16,25 @@ pub struct Evaluator {
     ruleset: Arc<RuleSet>,
 }
 
+/// Audit-only hook invocations, per phase (index 0 is phase 1). Phases 4 and 5
+/// never block, so this is how a test proves they ran and what they matched.
+pub mod audit {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Phase 4 (response body) evaluations that produced a non-Allow decision.
+    pub static PHASE4_MATCHES: AtomicU64 = AtomicU64::new(0);
+    /// Phase 5 (logging) evaluations, allowed or not.
+    pub static PHASE5_RUNS: AtomicU64 = AtomicU64::new(0);
+
+    pub fn phase4_matches() -> u64 {
+        PHASE4_MATCHES.load(Ordering::SeqCst)
+    }
+
+    pub fn phase5_runs() -> u64 {
+        PHASE5_RUNS.load(Ordering::SeqCst)
+    }
+}
+
 impl Evaluator {
     pub fn new(ruleset: Arc<RuleSet>) -> Self {
         Self { ruleset }
