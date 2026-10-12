@@ -305,6 +305,40 @@ async fn phase5_logging_runs_for_allowed_and_blocked_requests() {
     );
 }
 
+/// T513: the anomaly score a phase-1 rule adds must reach the phase-2 rule that
+/// compares it with the threshold. Phase 1 scores every request by +5, and the
+/// phase-2 rule (which reads the body) denies once the score meets the
+/// threshold. Each phase used to start from an empty transaction, so the
+/// threshold never fired at the final phase.
+#[tokio::test]
+async fn phase2_denies_on_score_accumulated_in_phase1() {
+    let rules = concat!(
+        "SecRequestBodyAccess On\n",
+        "SecRequestBodyLimit 65536\n",
+        "SecAction \"id:300,phase:1,pass,nolog,setvar:tx.blocking_inbound_anomaly_score=+5\"\n",
+        "SecRule TX:BLOCKING_INBOUND_ANOMALY_SCORE \"@ge %{tx.inbound_anomaly_score_threshold}\" \"id:301,phase:2,deny,status:403,nolog\"\n",
+    );
+    // Default threshold is 5: a score of 5 meets it, so the request is denied.
+    let out = run("", rules, post(b"user=admin"), OK_LINE, "ok").await;
+    assert!(out.response.starts_with("HTTP/1.1 403"), "{}", out.response);
+    assert!(!out.contacted(), "phase 2 denied request reached upstream");
+
+    // Control: the same rules with the threshold above the score are forwarded.
+    let out = run(
+        "inbound_anomaly_threshold = 10",
+        rules,
+        post(b"user=admin"),
+        OK_LINE,
+        "ok",
+    )
+    .await;
+    assert!(out.response.starts_with("HTTP/1.1 200"), "{}", out.response);
+    assert!(
+        out.contacted(),
+        "below-threshold request must reach upstream"
+    );
+}
+
 fn get_request() -> Vec<u8> {
     b"GET / HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n".to_vec()
 }

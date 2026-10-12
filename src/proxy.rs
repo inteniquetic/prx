@@ -23,7 +23,6 @@ use crate::plugin::{
 };
 use crate::router::RouteMatch;
 use crate::runtime::{RuntimeConfig, hash_key, normalize_host};
-use crate::waf::vars::Transaction;
 
 /// Names used for requests that never reach a configured route. Pre-built so
 /// the request path never allocates one (T101).
@@ -503,6 +502,56 @@ pub struct RequestCtx {
     pub buffered_body: BytesMut,
     /// Whether the buffering has reached the limit or was rejected.
     pub body_too_large: bool,
+    /// WAF transaction state carried from one phase to the next (T512/T513).
+    /// A phase rebuilds a short-lived `Transaction` from it and writes back.
+    waf: Option<WafRequestState>,
+}
+
+/// The per-request WAF state that must survive from phase to phase: TX
+/// variables (including the seeded threshold and paranoia level) and the
+/// anomaly scores accumulated per phase.
+#[derive(Default)]
+pub struct WafRequestState {
+    tx: std::collections::HashMap<String, String>,
+    anomaly_scores: [u32; 5],
+    seeded: bool,
+}
+
+impl WafRequestState {
+    /// Runs one phase against a Transaction seeded from this state, then
+    /// copies the TX variables and scores back so the next phase sees them.
+    /// The tuning variables are seeded once, before the first phase runs, so
+    /// a rule in any phase can read the configured threshold.
+    #[allow(clippy::too_many_arguments)]
+    fn run_phase(
+        &mut self,
+        ruleset: &Arc<crate::waf::rule::RuleSet>,
+        head: &pingora::http::RequestHeader,
+        body: &[u8],
+        response_head: Option<&pingora::http::ResponseHeader>,
+        response_body: &[u8],
+        phase_index: usize,
+    ) -> WafDecision {
+        let evaluator = Evaluator::new(Arc::clone(ruleset));
+        let mut trx = crate::waf::vars::Transaction::new(head, body);
+        trx.response_head = response_head;
+        trx.response_body = response_body;
+        *trx.tx.borrow_mut() = std::mem::take(&mut self.tx);
+        *trx.anomaly_scores.borrow_mut() = self.anomaly_scores;
+        if !self.seeded {
+            let tuning = &ruleset.tuning;
+            trx.set_var("blocking_paranoia_level", tuning.paranoia_level.to_string());
+            trx.set_var(
+                "inbound_anomaly_score_threshold",
+                tuning.inbound_anomaly_threshold.to_string(),
+            );
+            self.seeded = true;
+        }
+        let decision = evaluator.evaluate_phase(phase_index, &trx);
+        self.tx = std::mem::take(&mut *trx.tx.borrow_mut());
+        self.anomaly_scores = *trx.anomaly_scores.borrow();
+        decision
+    }
 }
 
 impl RequestCtx {
@@ -566,6 +615,7 @@ impl Default for RequestCtx {
             plugin_body_sent: false,
             buffered_body: BytesMut::new(),
             body_too_large: false,
+            waf: None,
         }
     }
 }
@@ -702,11 +752,14 @@ impl ProxyHttp for PrxProxy {
                     // Moving phase 1 here is required for early enforcement; T512 owns
                     // scheduling the remaining phases and carrying TX between hooks.
                     if !snapshot.ruleset.phases[0].is_empty() {
-                        let decision = {
-                            let evaluator = Evaluator::new(snapshot.ruleset.clone());
-                            let trx = Transaction::new(session.req_header(), b"");
-                            evaluator.evaluate_request_head(&trx)
-                        };
+                        let decision = ctx.waf.get_or_insert_with(Default::default).run_phase(
+                            &snapshot.ruleset,
+                            session.req_header(),
+                            b"",
+                            None,
+                            b"",
+                            0,
+                        );
                         if Self::enforce_waf(session, decision).await? {
                             return Ok(true);
                         }
@@ -745,11 +798,14 @@ impl ProxyHttp for PrxProxy {
                             return Self::respond_text(session, 413, "request_body_too_large\n")
                                 .await;
                         };
-                        let decision = {
-                            let evaluator = Evaluator::new(snapshot.ruleset.clone());
-                            let trx = Transaction::new(session.req_header(), &body[..]);
-                            evaluator.evaluate_phase(1, &trx)
-                        };
+                        let decision = ctx.waf.get_or_insert_with(Default::default).run_phase(
+                            &snapshot.ruleset,
+                            session.req_header(),
+                            &body[..],
+                            None,
+                            b"",
+                            1,
+                        );
                         if Self::enforce_waf(session, decision).await? {
                             return Ok(true);
                         }
@@ -1152,12 +1208,14 @@ impl ProxyHttp for PrxProxy {
         // A deny replaces the status so the upstream body is never forwarded.
         // Skipped when a plugin already answered, so that answer is kept.
         if ctx.plugin_body.is_none() && !snapshot.ruleset.phases[2].is_empty() {
-            let decision = {
-                let evaluator = Evaluator::new(snapshot.ruleset.clone());
-                let mut trx = Transaction::new(session.req_header(), &ctx.buffered_body[..]);
-                trx.response_head = Some(upstream_response);
-                evaluator.evaluate_phase(2, &trx)
-            };
+            let decision = ctx.waf.get_or_insert_with(Default::default).run_phase(
+                &snapshot.ruleset,
+                session.req_header(),
+                &ctx.buffered_body[..],
+                Some(upstream_response),
+                b"",
+                2,
+            );
             match decision {
                 WafDecision::Allow => {}
                 WafDecision::Deny(status) => {
@@ -1228,10 +1286,14 @@ impl ProxyHttp for PrxProxy {
             && !snapshot.ruleset.phases[3].is_empty()
             && let Some(chunk) = body.as_deref()
         {
-            let evaluator = Evaluator::new(snapshot.ruleset.clone());
-            let mut trx = Transaction::new(session.req_header(), &ctx.buffered_body[..]);
-            trx.response_body = chunk;
-            let decision = evaluator.evaluate_phase(3, &trx);
+            let decision = ctx.waf.get_or_insert_with(Default::default).run_phase(
+                &snapshot.ruleset,
+                session.req_header(),
+                &ctx.buffered_body[..],
+                None,
+                chunk,
+                3,
+            );
             if decision != WafDecision::Allow {
                 crate::waf::evaluator::audit::PHASE4_MATCHES
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1360,10 +1422,14 @@ impl ProxyHttp for PrxProxy {
         if let Some(snapshot) = &ctx.snapshot
             && !snapshot.ruleset.phases[4].is_empty()
         {
-            let evaluator = Evaluator::new(snapshot.ruleset.clone());
-            let mut trx = Transaction::new(session.req_header(), &ctx.buffered_body[..]);
-            trx.response_head = session.response_written();
-            let decision = evaluator.evaluate_phase(4, &trx);
+            let decision = ctx.waf.get_or_insert_with(Default::default).run_phase(
+                &snapshot.ruleset,
+                session.req_header(),
+                &ctx.buffered_body[..],
+                session.response_written(),
+                b"",
+                4,
+            );
             crate::waf::evaluator::audit::PHASE5_RUNS
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             info!(?decision, "WAF phase 5 logging evaluation");
