@@ -64,18 +64,30 @@ impl Evaluator {
             );
         }
         let detection = self.ruleset.settings.rule_engine == Some(RuleEngine::DetectionOnly);
-        for rule in &self.ruleset.phases[phase_index] {
-            if self.evaluate_rule(rule, trx) {
-                // Rule matched, trigger actions
-                self.process_actions(rule, trx);
-                let decision = match &rule.disruptive {
-                    Disruptive::Deny => WafDecision::Deny(rule.status.unwrap_or(403)),
-                    Disruptive::Drop => WafDecision::Drop,
-                    Disruptive::Redirect(url) => WafDecision::Redirect(url.clone()),
-                    _ => WafDecision::Allow,
-                };
-                if !detection && decision != WafDecision::Allow {
-                    return decision;
+        let rules = &self.ruleset.phases[phase_index];
+        let mut index = 0;
+        while let Some(rule) = rules.get(index) {
+            index += 1;
+            if !self.evaluate_rule(rule, trx) {
+                continue;
+            }
+            self.process_actions(rule, trx);
+            let decision = match &rule.disruptive {
+                Disruptive::Deny => WafDecision::Deny(rule.status.unwrap_or(403)),
+                Disruptive::Drop => WafDecision::Drop,
+                Disruptive::Redirect(url) => WafDecision::Redirect(url.clone()),
+                _ => WafDecision::Allow,
+            };
+            if !detection && decision != WafDecision::Allow {
+                return decision;
+            }
+            // Both jumps fire only when the rule matched.
+            if let Some(target) = rule.skip_after {
+                index = index.max(target);
+            }
+            for action in &rule.links[0].actions {
+                if let crate::waf::rule::Action::Skip(n) = action {
+                    index += *n as usize;
                 }
             }
         }
@@ -126,12 +138,17 @@ impl Evaluator {
     }
 
     fn evaluate_link<'a>(&self, link: &'a RuleLink, trx: &'a Transaction<'a>) -> bool {
+        let capture = link
+            .actions
+            .iter()
+            .any(|a| matches!(a, crate::waf::rule::Action::Capture));
         if link.targets.is_empty() {
             return self.evaluate_operator(
                 &link.operator,
                 link.rx.as_ref(),
                 Cow::Borrowed(b""),
                 trx,
+                capture,
             );
         }
         let mut matched = false;
@@ -145,7 +162,7 @@ impl Evaluator {
             );
 
             // Evaluate operator
-            if self.evaluate_operator(&link.operator, link.rx.as_ref(), transformed, trx) {
+            if self.evaluate_operator(&link.operator, link.rx.as_ref(), transformed, trx, capture) {
                 matched = !target.exclude;
                 break;
             } else if target.exclude {
@@ -168,15 +185,28 @@ impl Evaluator {
         rx: Option<&Rx>,
         value: Cow<'_, [u8]>,
         trx: &Transaction,
+        capture: bool,
     ) -> bool {
-        crate::waf::operator::evaluate_operator(
+        let mut captures: [Option<String>; 10] = Default::default();
+        let matched = crate::waf::operator::evaluate_operator(
             operator,
             rx,
             value.as_ref(),
             |key| Self::resolve_macro(trx, key),
-            &mut [None, None, None, None, None, None, None, None, None, None],
+            &mut captures,
             None,
-        )
+        );
+        if matched && capture {
+            for (i, group) in captures.into_iter().enumerate() {
+                match group {
+                    Some(text) => trx.set_var(&i.to_string(), text),
+                    None => {
+                        trx.tx.borrow_mut().remove(&i.to_string());
+                    }
+                }
+            }
+        }
+        matched
     }
 }
 
@@ -206,6 +236,50 @@ SecRule TX:score "@ge %{tx.threshold}" "id:4,phase:2,block"
         assert_eq!(trx.get_var("score").as_deref(), Some("3"));
         assert_eq!(evaluator.evaluate_phase(1, &trx), WafDecision::Deny(406));
         assert_eq!(trx.get_var("score").as_deref(), Some("6"));
+    }
+
+    /// Decision plus the TX variables left behind, keyed upper-case.
+    fn run(conf: &str, uri: &[u8]) -> (WafDecision, std::collections::HashMap<String, String>) {
+        let loaded = crate::waf::load_text(&[("t", conf)]);
+        assert_eq!(loaded.summary.skipped, 0, "{loaded}");
+        let evaluator = Evaluator::new(Arc::new(loaded.ruleset));
+        let head = RequestHeader::build("GET", uri, None).unwrap();
+        let trx = Transaction::new(&head, b"");
+        let decision = evaluator.evaluate_phase(0, &trx);
+        let tx = trx.tx.borrow().clone();
+        (decision, tx)
+    }
+
+    #[test]
+    fn capture_reaches_the_next_rule_as_tx_1() {
+        let (decision, tx) = run(
+            r#"
+SecRule ARGS:q "@rx id=(\d+)" "id:1,phase:1,pass,capture"
+SecRule TX:1 "@eq 42" "id:2,phase:1,deny,status:418"
+"#,
+            b"/x?q=id=42",
+        );
+        assert_eq!(decision, WafDecision::Deny(418));
+        assert_eq!(tx.get("1").map(String::as_str), Some("42"));
+    }
+
+    #[test]
+    fn skip_after_jumps_only_on_match_and_chain_needs_every_link() {
+        let conf = r#"
+SecRule ARGS:q "@contains safe" "id:1,phase:1,pass,skipAfter:END"
+SecRule ARGS:q "@contains x" "id:2,phase:1,deny,status:403"
+SecMarker END
+SecRule ARGS:q "@contains a" "id:3,phase:1,pass,chain,setvar:tx.hit=1"
+  SecRule ARGS:q "@contains b" "chain"
+  SecRule ARGS:q "@contains c" ""
+"#;
+        assert_eq!(run(conf, b"/?q=safe-x").0, WafDecision::Allow);
+        assert_eq!(run(conf, b"/?q=x").0, WafDecision::Deny(403));
+        assert_eq!(
+            run(conf, b"/?q=abc").1.get("HIT").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(run(conf, b"/?q=ab").1.get("HIT"), None);
     }
 
     #[test]
