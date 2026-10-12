@@ -29,6 +29,51 @@ is_default = true
     let loaded = prx::waf::load_text(&[("test.conf", rules)]);
     assert_eq!(loaded.summary.skipped, 0, "{loaded}");
     runtime.ruleset = Arc::new(loaded.ruleset);
+    let path = if attack { "/?attack=yes" } else { "/" };
+    drive(runtime, upstream, path).await
+}
+
+/// Like `exercise`, but the rules and the `[waf]` keys come from a config
+/// file, loaded the way startup does, so the tuning reaches the runtime from
+/// config. `path` is requested as-is.
+async fn exercise_configured(waf_keys: &str, rules: &str, path: &str) -> (String, bool) {
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("rules.conf"), rules).unwrap();
+    let config_path = dir.path().join("Prx.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[waf]
+rules_file = "rules.conf"
+{waf_keys}
+
+[[service]]
+name = "app"
+[[service.upstream]]
+addr = "{}"
+
+[[route]]
+name = "app"
+service = "app"
+is_default = true
+"#,
+            upstream.local_addr().unwrap()
+        ),
+    )
+    .unwrap();
+    let config = PrxConfig::from_file(&config_path).expect("config loads");
+    drive(RuntimeConfig::from_config(config), upstream, path).await
+}
+
+/// Sends one `GET path` through the proxy and reports the response and
+/// whether the upstream was contacted.
+async fn drive(
+    runtime: RuntimeConfig,
+    upstream: tokio::net::TcpListener,
+    path: &str,
+) -> (String, bool) {
     let proxy = PrxProxy::new(
         Arc::new(ArcSwap::from_pointee(runtime)),
         false,
@@ -63,7 +108,6 @@ is_default = true
             false
         }
     });
-    let path = if attack { "/?attack=yes" } else { "/" };
     client
         .write_all(
             format!("GET {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n").as_bytes(),
@@ -208,4 +252,53 @@ is_default = true
         !upstream_task.await.unwrap(),
         "denied request contacted upstream"
     );
+}
+
+/// CRS-shaped scoring in phase 1, the only phase the proxy evaluates today.
+/// Rule 10 scores a PL1 hit, rule 11 adds it to the blocking score only when
+/// `blocking_paranoia_level` allows, and rule 12 is the final blocking
+/// evaluation against the configured threshold.
+const SCORED_RULES: &str = concat!(
+    "SecRule ARGS:attack \"@streq yes\" \"id:10,phase:1,pass,nolog,setvar:tx.inbound_anomaly_score_pl1=+5\"\n",
+    "SecRule TX:BLOCKING_PARANOIA_LEVEL \"@ge 1\" \"id:11,phase:1,pass,nolog,setvar:tx.blocking_inbound_anomaly_score=+%{tx.inbound_anomaly_score_pl1}\"\n",
+    "SecRule TX:BLOCKING_INBOUND_ANOMALY_SCORE \"@ge %{tx.inbound_anomaly_score_threshold}\" \"id:12,phase:1,deny,nolog\"\n",
+);
+
+#[tokio::test]
+async fn summed_score_at_threshold_blocks_at_paranoia_1() {
+    let (response, contacted) = exercise_configured("", SCORED_RULES, "/?attack=yes").await;
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    assert!(!contacted, "blocked request reached upstream");
+
+    let (response, contacted) = exercise_configured("", SCORED_RULES, "/").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(contacted, "benign request must reach upstream");
+}
+
+#[tokio::test]
+async fn same_score_below_a_higher_configured_threshold_is_not_blocked() {
+    let keys = "inbound_anomaly_threshold = 10";
+    let (response, contacted) = exercise_configured(keys, SCORED_RULES, "/?attack=yes").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(contacted, "score 5 is below threshold 10");
+}
+
+#[tokio::test]
+async fn paranoia_2_rule_scores_only_when_blocking_paranoia_is_2() {
+    let rules = concat!(
+        "SecRule ARGS:attack \"@streq yes\" \"id:20,phase:1,pass,nolog,tag:'paranoia-level/2',setvar:tx.inbound_anomaly_score_pl2=+5\"\n",
+        "SecRule TX:BLOCKING_PARANOIA_LEVEL \"@ge 2\" \"id:21,phase:1,pass,nolog,setvar:tx.blocking_inbound_anomaly_score=+%{tx.inbound_anomaly_score_pl2}\"\n",
+        "SecRule TX:BLOCKING_INBOUND_ANOMALY_SCORE \"@ge %{tx.inbound_anomaly_score_threshold}\" \"id:22,phase:1,deny,nolog\"\n",
+    );
+    let (response, contacted) =
+        exercise_configured("paranoia_level = 1", rules, "/?attack=yes").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(contacted, "PL2 rule must not block at paranoia_level = 1");
+
+    // Control: the same request is blocked once the config raises the level,
+    // so the 200 above is down to paranoia gating and not a dead rule.
+    let (response, contacted) =
+        exercise_configured("paranoia_level = 2", rules, "/?attack=yes").await;
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    assert!(!contacted);
 }

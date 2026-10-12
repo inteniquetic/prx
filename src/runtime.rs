@@ -108,16 +108,21 @@ impl RuntimeConfig {
         // Rules are loaded from the same file `check_waf` validated. A file
         // that fails to load here was already refused by validation, so the
         // issues are logged and the rules that did load are used.
-        let ruleset = match config.waf.resolved_rules_file() {
+        let mut ruleset = match config.waf.resolved_rules_file() {
             Some(path) => {
                 let loaded = crate::waf::load(&[path]);
                 if !loaded.issues.is_empty() {
                     tracing::warn!("{loaded}");
                 }
-                Arc::new(loaded.ruleset)
+                loaded.ruleset
             }
-            None => Arc::new(crate::waf::rule::RuleSet::default()),
+            None => crate::waf::rule::RuleSet::default(),
         };
+        ruleset.tuning = crate::waf::rule::Tuning {
+            paranoia_level: config.waf.paranoia_level(),
+            inbound_anomaly_threshold: config.waf.inbound_anomaly_threshold(),
+        };
+        let ruleset = Arc::new(ruleset);
 
         Self {
             routes,

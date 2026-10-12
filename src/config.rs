@@ -39,14 +39,47 @@ pub struct WafConfig {
     /// of the config file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules_file: Option<PathBuf>,
+    /// CRS paranoia level, 1 to 4. Only rules at or below this level count
+    /// toward blocking. Unset means 1. Kept as `i64` so that out-of-range
+    /// values reach `check` as a `ConfigIssue` instead of a parse error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paranoia_level: Option<i64>,
+    /// Summed anomaly score at which a request is blocked. Must be positive.
+    /// Unset means 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbound_anomaly_threshold: Option<i64>,
     /// Directory of the config file, set by `PrxConfig::from_file`. Not TOML.
     #[serde(skip)]
     pub base_dir: Option<PathBuf>,
 }
 
+/// Defaults for the optional `[waf]` tuning keys.
+pub const DEFAULT_PARANOIA_LEVEL: u8 = 1;
+pub const DEFAULT_INBOUND_ANOMALY_THRESHOLD: u32 = 5;
+
 impl WafConfig {
     fn is_unset(&self) -> bool {
         self.rules_file.is_none()
+            && self.paranoia_level.is_none()
+            && self.inbound_anomaly_threshold.is_none()
+    }
+
+    /// The paranoia level in effect. Values outside 1 to 4 are rejected by
+    /// `check`, so only the default can be read here for an invalid config.
+    pub fn paranoia_level(&self) -> u8 {
+        self.paranoia_level
+            .and_then(|level| u8::try_from(level).ok())
+            .filter(|level| (1..=4).contains(level))
+            .unwrap_or(DEFAULT_PARANOIA_LEVEL)
+    }
+
+    /// The inbound anomaly threshold in effect. Non-positive values are
+    /// rejected by `check`.
+    pub fn inbound_anomaly_threshold(&self) -> u32 {
+        self.inbound_anomaly_threshold
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value >= 1)
+            .unwrap_or(DEFAULT_INBOUND_ANOMALY_THRESHOLD)
     }
 
     /// The rules file to load, with a relative path made relative to the
@@ -146,6 +179,7 @@ impl PrxConfig {
         self.check_routes(&service_names, &mut out);
         self.check_plugins(&mut out);
         self.check_waf(&mut out);
+        self.check_waf_tuning(&mut out);
         self.check_admin(&mut out);
         self.check_globals(&mut out);
         out
@@ -818,6 +852,31 @@ impl PrxConfig {
                     ConfigIssue::warning(issue.code, "waf.rules_file", message)
                 }
             });
+        }
+    }
+
+    /// The optional paranoia level and anomaly threshold. They are checked
+    /// whether or not a rules file is set.
+    fn check_waf_tuning(&self, out: &mut Vec<ConfigIssue>) {
+        if let Some(level) = self.waf.paranoia_level
+            && !(1..=4).contains(&level)
+        {
+            out.push(ConfigIssue::error(
+                "paranoia_level_range",
+                "waf.paranoia_level",
+                format!("waf.paranoia_level must be between 1 and 4, got {level}"),
+            ));
+        }
+        if let Some(threshold) = self.waf.inbound_anomaly_threshold
+            && threshold < 1
+        {
+            out.push(ConfigIssue::error(
+                "inbound_anomaly_threshold_range",
+                "waf.inbound_anomaly_threshold",
+                format!(
+                    "waf.inbound_anomaly_threshold must be a positive integer, got {threshold}"
+                ),
+            ));
         }
     }
 
@@ -2377,5 +2436,78 @@ is_default = true
         );
         let rules: usize = runtime.ruleset.phases.iter().map(Vec::len).sum();
         assert_eq!(rules, 0);
+    }
+}
+
+#[cfg(test)]
+mod waf_tuning_tests {
+    use super::*;
+
+    fn with_waf_keys(keys: &str) -> PrxConfig {
+        let text = format!(
+            "[waf]\n{keys}\n\n[[service]]\nname = \"app\"\n\n[[service.upstream]]\naddr = \"127.0.0.1:3000\"\n\n[[route]]\nname = \"app\"\nservice = \"app\"\nis_default = true\n"
+        );
+        toml::from_str(&text).expect("parses")
+    }
+
+    fn waf_errors(config: &PrxConfig) -> Vec<(String, &'static str)> {
+        config
+            .check()
+            .into_iter()
+            .filter(|issue| {
+                issue.path.starts_with("waf.") && issue.severity == IssueSeverity::Error
+            })
+            .map(|issue| (issue.path, issue.code))
+            .collect()
+    }
+
+    #[test]
+    fn tuning_defaults_to_paranoia_1_and_threshold_5() {
+        let config = with_waf_keys("");
+        assert_eq!(config.waf.paranoia_level(), 1);
+        assert_eq!(config.waf.inbound_anomaly_threshold(), 5);
+        assert!(waf_errors(&config).is_empty());
+    }
+
+    #[test]
+    fn valid_tuning_is_accepted_and_used() {
+        for level in 1..=4 {
+            let keys = format!("paranoia_level = {level}\ninbound_anomaly_threshold = 7");
+            let config = with_waf_keys(&keys);
+            assert!(waf_errors(&config).is_empty(), "level {level}");
+            assert_eq!(config.waf.paranoia_level(), level as u8);
+            assert_eq!(config.waf.inbound_anomaly_threshold(), 7);
+        }
+    }
+
+    #[test]
+    fn out_of_range_paranoia_level_is_a_validation_error() {
+        for level in [0, 5] {
+            let config = with_waf_keys(&format!("paranoia_level = {level}"));
+            assert_eq!(
+                waf_errors(&config),
+                [("waf.paranoia_level".to_string(), "paranoia_level_range")],
+                "level {level}"
+            );
+            assert!(
+                PrxConfig::from_toml_str(&format!("[waf]\nparanoia_level = {level}\n")).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn zero_anomaly_threshold_is_a_validation_error() {
+        let config = with_waf_keys("inbound_anomaly_threshold = 0");
+        assert_eq!(
+            waf_errors(&config),
+            [(
+                "waf.inbound_anomaly_threshold".to_string(),
+                "inbound_anomaly_threshold_range"
+            )]
+        );
+        assert!(PrxConfig::from_toml_str(
+            "[waf]\ninbound_anomaly_threshold = 0\n\n[[service]]\nname = \"app\"\n\n[[service.upstream]]\naddr = \"127.0.0.1:3000\"\n\n[[route]]\nname = \"app\"\nservice = \"app\"\nis_default = true\n"
+        )
+        .is_err());
     }
 }

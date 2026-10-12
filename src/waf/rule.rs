@@ -505,10 +505,30 @@ impl Settings {
     }
 }
 
+/// Values from `[waf]` that the rules read as TX variables. The evaluator
+/// writes them into the transaction before phase 1 runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tuning {
+    /// `tx.blocking_paranoia_level`: rules at or below this level score toward blocking.
+    pub paranoia_level: u8,
+    /// `tx.inbound_anomaly_score_threshold`.
+    pub inbound_anomaly_threshold: u32,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Self {
+            paranoia_level: crate::config::DEFAULT_PARANOIA_LEVEL,
+            inbound_anomaly_threshold: crate::config::DEFAULT_INBOUND_ANOMALY_THRESHOLD,
+        }
+    }
+}
+
 /// An immutable, fully resolved ruleset.
 #[derive(Debug, Default, Clone)]
 pub struct RuleSet {
     pub settings: Settings,
+    pub tuning: Tuning,
     /// Rules by phase (index 0 is phase 1), in file order within a phase.
     pub phases: [Vec<Rule>; 5],
     /// Every distinct transformation chain in the ruleset, lower-cased and

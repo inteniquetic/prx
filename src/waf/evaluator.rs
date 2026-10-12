@@ -34,6 +34,16 @@ impl Evaluator {
         if self.ruleset.settings.rule_engine == Some(RuleEngine::Off) {
             return WafDecision::Allow;
         }
+        if phase_index == 0 {
+            // Before any rule reads them, so CRS's own defaults (`&TX:... @eq 0`)
+            // see the configured values and leave them alone.
+            let tuning = &self.ruleset.tuning;
+            trx.set_var("blocking_paranoia_level", tuning.paranoia_level.to_string());
+            trx.set_var(
+                "inbound_anomaly_score_threshold",
+                tuning.inbound_anomaly_threshold.to_string(),
+            );
+        }
         let detection = self.ruleset.settings.rule_engine == Some(RuleEngine::DetectionOnly);
         for rule in &self.ruleset.phases[phase_index] {
             if self.evaluate_rule(rule, trx) {
