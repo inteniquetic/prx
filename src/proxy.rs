@@ -1423,6 +1423,7 @@ mod tests {
             services: vec![service("default", max_retries, upstream_count)],
             routes: vec![route("default", "default")],
             plugins: Vec::new(),
+            waf: Default::default(),
         }))
     }
 
@@ -1447,6 +1448,7 @@ mod tests {
             services: vec![service],
             routes: vec![route("default", "default")],
             plugins: Vec::new(),
+            waf: Default::default(),
         }))
     }
 

@@ -1,4 +1,7 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
@@ -24,6 +27,40 @@ pub struct PrxConfig {
     /// that want them, the same way a route references a service (T501).
     #[serde(rename = "plugin", default)]
     pub plugins: Vec<PluginConfig>,
+    /// SecLang rules for the WAF. Empty unless `[waf] rules_file` is set.
+    #[serde(default, skip_serializing_if = "WafConfig::is_unset")]
+    pub waf: WafConfig,
+}
+
+/// The `[waf]` block. Absent means no rules, so the WAF does nothing.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct WafConfig {
+    /// A SecLang rules file. A relative path resolves against the directory
+    /// of the config file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules_file: Option<PathBuf>,
+    /// Directory of the config file, set by `PrxConfig::from_file`. Not TOML.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
+}
+
+impl WafConfig {
+    fn is_unset(&self) -> bool {
+        self.rules_file.is_none()
+    }
+
+    /// The rules file to load, with a relative path made relative to the
+    /// config file's directory.
+    pub fn resolved_rules_file(&self) -> Option<PathBuf> {
+        let file = self.rules_file.as_ref()?;
+        if file.is_absolute() {
+            return Some(file.clone());
+        }
+        Some(match &self.base_dir {
+            Some(dir) => dir.join(file),
+            None => file.clone(),
+        })
+    }
 }
 
 /// One `[[plugin]]` block.
@@ -50,18 +87,35 @@ impl PrxConfig {
     pub fn from_file(path: &Path) -> anyhow::Result<Self> {
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read config file at {}", path.to_string_lossy()))?;
-        Self::from_toml_str(&content).with_context(|| {
+        // The base directory has to be known before validation: `check_waf`
+        // resolves a relative rules_file against it.
+        let mut config = Self::parse_toml(&content).with_context(|| {
             format!(
                 "failed to parse TOML config from {}",
                 path.to_string_lossy()
             )
-        })
+        })?;
+        config.waf.base_dir = path
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .map(Path::to_path_buf);
+        config.validate().with_context(|| {
+            format!(
+                "failed to parse TOML config from {}",
+                path.to_string_lossy()
+            )
+        })?;
+        Ok(config)
     }
 
     pub fn from_toml_str(content: &str) -> anyhow::Result<Self> {
-        let config: Self = toml::from_str(content).context("invalid TOML config")?;
+        let config = Self::parse_toml(content)?;
         config.validate()?;
         Ok(config)
+    }
+
+    fn parse_toml(content: &str) -> anyhow::Result<Self> {
+        toml::from_str(content).context("invalid TOML config")
     }
 
     /// The first error in the config, as an `Err`.
@@ -91,6 +145,7 @@ impl PrxConfig {
         let service_names = self.check_services(&mut out);
         self.check_routes(&service_names, &mut out);
         self.check_plugins(&mut out);
+        self.check_waf(&mut out);
         self.check_admin(&mut out);
         self.check_globals(&mut out);
         out
@@ -742,6 +797,27 @@ impl PrxConfig {
                     ),
                 ));
             }
+        }
+    }
+
+    /// Loads the rules file and reports what the loader found: a missing or
+    /// unreadable file, or a rule that did not compile, is an error here.
+    fn check_waf(&self, out: &mut Vec<ConfigIssue>) {
+        let Some(path) = self.waf.resolved_rules_file() else {
+            return;
+        };
+        for issue in crate::waf::load(&[path]).issues {
+            let location = match issue.rule_id {
+                Some(id) => format!("{}:{} [rule {id}]", issue.file, issue.line),
+                None => format!("{}:{}", issue.file, issue.line),
+            };
+            let message = format!("{location} {}", issue.message);
+            out.push(match issue.severity {
+                IssueSeverity::Error => ConfigIssue::error(issue.code, "waf.rules_file", message),
+                IssueSeverity::Warning => {
+                    ConfigIssue::warning(issue.code, "waf.rules_file", message)
+                }
+            });
         }
     }
 
@@ -1892,6 +1968,7 @@ mod tests {
             services: vec![valid_service("default")],
             routes: vec![valid_route("default", "default")],
             plugins: Vec::new(),
+            waf: Default::default(),
         }
     }
 
@@ -2180,5 +2257,125 @@ plugins = ["mark"]
             2,
             "{codes:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod waf_config_tests {
+    use super::*;
+
+    const RULE: &str = "SecRule ARGS:attack \"@streq yes\" \"id:1,phase:1,deny\"\n";
+
+    fn config_with_rules_file(file: &str) -> String {
+        format!(
+            r#"
+[waf]
+rules_file = "{file}"
+
+[[service]]
+name = "app"
+
+[[service.upstream]]
+addr = "127.0.0.1:3000"
+
+[[route]]
+name = "app"
+service = "app"
+is_default = true
+"#
+        )
+    }
+
+    #[test]
+    fn a_missing_rules_file_is_a_validation_error() {
+        let text = config_with_rules_file("/definitely/not/here/rules.conf");
+        let config = PrxConfig::from_toml_str(&text);
+        // `from_toml_str` has no config directory, so the absolute path is what
+        // gets checked here.
+        assert!(config.is_err(), "missing rules file must fail validation");
+
+        let parsed: PrxConfig = toml::from_str(&text).expect("parses");
+        let issues = parsed.check();
+        let issue = issues
+            .iter()
+            .find(|issue| issue.path == "waf.rules_file")
+            .expect("an issue on waf.rules_file");
+        assert_eq!(issue.severity, IssueSeverity::Error);
+        assert_eq!(issue.code, "unreadable_file");
+    }
+
+    #[test]
+    fn a_relative_rules_file_resolves_against_the_config_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("rules.conf"), RULE).expect("write rules");
+        let config_path = dir.path().join("Prx.toml");
+        std::fs::write(&config_path, config_with_rules_file("rules.conf")).expect("write config");
+
+        let config =
+            PrxConfig::from_file(&config_path).expect("relative file found next to config");
+        assert_eq!(
+            config.waf.resolved_rules_file(),
+            Some(dir.path().join("rules.conf"))
+        );
+    }
+
+    #[test]
+    fn a_relative_rules_file_missing_next_to_the_config_is_rejected_at_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_path = dir.path().join("Prx.toml");
+        std::fs::write(&config_path, config_with_rules_file("nope.conf")).expect("write config");
+
+        assert!(PrxConfig::from_file(&config_path).is_err());
+    }
+
+    #[test]
+    fn a_config_without_waf_has_no_rules_file() {
+        let text = r#"
+[[service]]
+name = "app"
+
+[[service.upstream]]
+addr = "127.0.0.1:3000"
+
+[[route]]
+name = "app"
+service = "app"
+is_default = true
+"#;
+        let config = PrxConfig::from_toml_str(text).expect("valid");
+        assert!(config.waf.resolved_rules_file().is_none());
+        // Serialized form stays unchanged for configs that never set [waf].
+        let rendered = toml::to_string(&config).expect("serializes");
+        assert!(!rendered.contains("waf"), "{rendered}");
+    }
+
+    #[test]
+    fn a_rules_file_becomes_the_runtime_ruleset() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("rules.conf"),
+            format!(
+                "{RULE}SecRule ARGS:b \"@streq x\" \"id:2,phase:1,deny\"\nSecRule ARGS:c \"@streq y\" \"id:3,phase:1,deny\"\n"
+            ),
+        )
+        .expect("write rules");
+        let config_path = dir.path().join("Prx.toml");
+        std::fs::write(&config_path, config_with_rules_file("rules.conf")).expect("write config");
+
+        let runtime = crate::runtime::RuntimeConfig::from_config(
+            PrxConfig::from_file(&config_path).expect("loads"),
+        );
+        let rules: usize = runtime.ruleset.phases.iter().map(Vec::len).sum();
+        assert_eq!(rules, 3, "all three rules reach the runtime");
+    }
+
+    #[test]
+    fn no_waf_section_gives_the_empty_default_ruleset() {
+        let text = config_with_rules_file("x.conf").replace("[waf]\nrules_file = \"x.conf\"\n", "");
+        let runtime = crate::runtime::RuntimeConfig::from_config(
+            PrxConfig::from_toml_str(&text).expect("valid"),
+        );
+        let rules: usize = runtime.ruleset.phases.iter().map(Vec::len).sum();
+        assert_eq!(rules, 0);
     }
 }

@@ -105,11 +105,25 @@ impl RuntimeConfig {
             enabled: route.enabled,
         }));
 
+        // Rules are loaded from the same file `check_waf` validated. A file
+        // that fails to load here was already refused by validation, so the
+        // issues are logged and the rules that did load are used.
+        let ruleset = match config.waf.resolved_rules_file() {
+            Some(path) => {
+                let loaded = crate::waf::load(&[path]);
+                if !loaded.issues.is_empty() {
+                    tracing::warn!("{loaded}");
+                }
+                Arc::new(loaded.ruleset)
+            }
+            None => Arc::new(crate::waf::rule::RuleSet::default()),
+        };
+
         Self {
             routes,
             services,
             index,
-            ruleset: Arc::new(crate::waf::rule::RuleSet::default()),
+            ruleset,
         }
     }
 
@@ -1117,6 +1131,7 @@ mod tests {
             services,
             routes,
             plugins: Vec::new(),
+            waf: Default::default(),
         })
     }
 
@@ -1329,6 +1344,7 @@ mod tests {
             observability: ObservabilityConfig::default(),
             headers: Default::default(),
             compression: Default::default(),
+            waf: Default::default(),
             services: vec![service(
                 "api",
                 LbStrategy::default(),
