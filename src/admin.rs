@@ -16,8 +16,9 @@ use async_trait::async_trait;
 use axum::{
     Router,
     body::{self, Body},
-    extract::{Path as AxumPath, Query, State},
+    extract::{Path as AxumPath, Query, Request, State},
     http::{HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -31,8 +32,9 @@ use tracing::{error, info};
 
 use crate::{
     config::{
-        CacheConfig, ConcurrencyLimitConfig, HeaderRules, HealthCheckConfig, LbStrategy, PrxConfig,
-        RateLimitConfig, RouteConfig, ServiceConfig, StickyConfig, UpstreamConfig, UpstreamH2,
+        AdminAuth, AdminConfig, CacheConfig, ConcurrencyLimitConfig, HeaderRules,
+        HealthCheckConfig, LbStrategy, PrxConfig, RateLimitConfig, RouteConfig, ServiceConfig,
+        StickyConfig, UpstreamConfig, UpstreamH2,
     },
     config_edit::{self, EditOp},
     router::RouteMatch,
@@ -283,6 +285,9 @@ fn targeted_render(previous: &str, before: &PrxConfig, after: &PrxConfig) -> Opt
 struct AdminState {
     config_admin: ConfigAdmin,
     active_config: Arc<ArcSwap<RuntimeConfig>>,
+    /// The credential and the CORS allowlist, resolved once at startup.
+    auth: AdminAuthState,
+    policy: AdminPolicy,
     acme_status: crate::acme::SharedStatus,
     /// Present when a TLS listener is configured.
     tls_resolver: Option<Arc<crate::tls::CertResolver>>,
@@ -2826,6 +2831,297 @@ async fn get_stats_stream() -> Response<Body> {
         .into_response()
 }
 
+/// The credential the admin API checks callers against.
+///
+/// Resolved once at startup from a file or an environment variable, never
+/// from the config itself, and held only in memory.
+#[derive(Clone)]
+pub enum AdminAuthState {
+    /// No credential. Legal only because the listener is loopback.
+    None,
+    Token(String),
+    Basic {
+        user: String,
+        password: String,
+    },
+}
+
+impl AdminAuthState {
+    fn scheme(&self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Token(_) => "Bearer",
+            Self::Basic { .. } => "Basic realm=\"prx-admin\", charset=\"UTF-8\"",
+        }
+    }
+}
+
+/// Origins allowed to call the API from another site, plus the read-only flag.
+#[derive(Clone, Default)]
+pub struct AdminPolicy {
+    allow_origins: Vec<String>,
+    read_only: bool,
+}
+
+impl AdminPolicy {
+    pub fn from_config(config: &AdminConfig) -> Self {
+        Self {
+            allow_origins: config
+                .allow_origins
+                .iter()
+                .map(|origin| origin.trim().to_string())
+                .filter(|origin| !origin.is_empty())
+                .collect(),
+            read_only: config.read_only,
+        }
+    }
+}
+
+/// Methods that change config or live state. Everything else is a read.
+fn is_write_method(method: &axum::http::Method) -> bool {
+    matches!(method.as_str(), "PUT" | "POST" | "DELETE" | "PATCH")
+}
+
+/// Only the static SPA is public, never either API namespace.
+fn is_public_asset(path: &str) -> bool {
+    !["/web", "/admin"]
+        .iter()
+        .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
+}
+
+fn unauthorized(scheme: &str) -> Response<Body> {
+    let challenge = if scheme.is_empty() {
+        "Bearer".to_string()
+    } else {
+        scheme.to_string()
+    };
+    let mut response = text_response(StatusCode::UNAUTHORIZED, "unauthorized\n");
+    if let Ok(value) = HeaderValue::from_str(&challenge) {
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, value);
+    }
+    response
+}
+
+fn presented_credential(request: &Request) -> Option<String> {
+    let header = request
+        .headers()
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    Some(header.trim().to_string())
+}
+
+fn credential_matches(auth: &AdminAuthState, presented: &str) -> bool {
+    match auth {
+        AdminAuthState::None => true,
+        AdminAuthState::Token(token) => presented
+            .strip_prefix("Bearer ")
+            .or_else(|| presented.strip_prefix("bearer "))
+            .is_some_and(|rest| constant_time_eq(rest.trim().as_bytes(), token.as_bytes())),
+        AdminAuthState::Basic { user, password } => presented
+            .strip_prefix("Basic ")
+            .or_else(|| presented.strip_prefix("basic "))
+            .and_then(|rest| decode_base64(rest.trim()))
+            .and_then(|decoded| {
+                let (got_user, got_password) = decoded.split_once(':')?;
+                Some(
+                    constant_time_eq(got_user.as_bytes(), user.as_bytes())
+                        & constant_time_eq(got_password.as_bytes(), password.as_bytes()),
+                )
+            })
+            .unwrap_or(false),
+    }
+}
+
+/// Use the audited primitive rather than a compiler-optimizable XOR loop.
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    use subtle::ConstantTimeEq;
+    bool::from(left.ct_eq(right))
+}
+
+fn decode_base64(value: &str) -> Option<String> {
+    use base64::Engine;
+    String::from_utf8(
+        base64::engine::general_purpose::STANDARD
+            .decode(value)
+            .ok()?,
+    )
+    .ok()
+}
+
+async fn guard(State(state): State<AdminState>, request: Request, next: Next) -> Response<Body> {
+    if matches!(request.method().as_str(), "GET" | "HEAD") && is_public_asset(request.uri().path())
+    {
+        return next.run(request).await;
+    }
+    let origin = request
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let allowed = origin
+        .as_ref()
+        .is_some_and(|origin| state.policy.allow_origins.contains(origin));
+    // The listener is HTTP. Never trust client-supplied Forwarded headers.
+    let same_origin = origin.as_deref().is_some_and(|origin| {
+        request
+            .headers()
+            .get(header::HOST)
+            .and_then(|host| host.to_str().ok())
+            .is_some_and(|host| origin == format!("http://{host}"))
+    });
+    let finish = |mut response: Response<Body>| {
+        apply_cors(
+            &mut response,
+            origin.as_deref(),
+            &state.policy.allow_origins,
+        );
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        response
+    };
+    // Preflight carries no credentials and must never reach a write handler.
+    if request.method() == axum::http::Method::OPTIONS {
+        let method_ok = request
+            .headers()
+            .get(header::ACCESS_CONTROL_REQUEST_METHOD)
+            .and_then(|h| h.to_str().ok())
+            .is_some_and(|m| matches!(m, "GET" | "HEAD" | "PUT" | "POST" | "DELETE" | "PATCH"));
+        let headers_ok = request
+            .headers()
+            .get(header::ACCESS_CONTROL_REQUEST_HEADERS)
+            .is_none_or(|h| {
+                h.to_str().is_ok_and(|h| {
+                    h.split(',').all(|name| {
+                        matches!(
+                            name.trim().to_ascii_lowercase().as_str(),
+                            "authorization" | "content-type" | "if-match" | "accept"
+                        )
+                    })
+                })
+            });
+        return finish(text_response(
+            if allowed && method_ok && headers_ok {
+                StatusCode::NO_CONTENT
+            } else {
+                StatusCode::FORBIDDEN
+            },
+            "",
+        ));
+    }
+    if !matches!(state.auth, AdminAuthState::None)
+        && (request
+            .headers()
+            .get_all(header::AUTHORIZATION)
+            .iter()
+            .count()
+            != 1
+            || !presented_credential(&request)
+                .is_some_and(|presented| credential_matches(&state.auth, &presented)))
+    {
+        return finish(unauthorized(state.auth.scheme()));
+    }
+    if is_write_method(request.method()) {
+        let cross_site = request
+            .headers()
+            .get("sec-fetch-site")
+            .is_some_and(|v| v == "cross-site");
+        if (!same_origin && !allowed && request.headers().contains_key(header::ORIGIN))
+            || (cross_site && !allowed)
+        {
+            return finish(text_response(
+                StatusCode::FORBIDDEN,
+                "cross_origin_write_forbidden\n",
+            ));
+        }
+        if state.policy.read_only {
+            return finish(text_response(StatusCode::FORBIDDEN, "read_only\n"));
+        }
+    }
+    finish(next.run(request).await)
+}
+
+fn apply_cors(response: &mut Response<Body>, origin: Option<&str>, allow: &[String]) {
+    let Some(origin) = origin else {
+        return;
+    };
+    if !allow.iter().any(|allowed| allowed == origin) {
+        return;
+    }
+    let Ok(value) = HeaderValue::from_str(origin) else {
+        return;
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("authorization, content-type, if-match"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, HEAD, PUT, POST, DELETE, PATCH"),
+    );
+    headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+    headers.insert(
+        header::ACCESS_CONTROL_EXPOSE_HEADERS,
+        HeaderValue::from_static("WWW-Authenticate, ETag"),
+    );
+}
+
+/// Read the credential the config points at.
+///
+/// The value comes from a file or from the environment, never from the config
+/// text, and the error names the path that failed rather than the bytes it
+/// held.
+pub fn resolve_admin_auth(config: &AdminConfig) -> anyhow::Result<AdminAuthState> {
+    match config.auth {
+        AdminAuth::None => Ok(AdminAuthState::None),
+        AdminAuth::Token => {
+            let token = read_secret(
+                config.token_file.as_deref(),
+                "PRX_ADMIN_TOKEN",
+                "admin token",
+            )?;
+            if token.is_empty() {
+                bail!("admin token is empty");
+            }
+            Ok(AdminAuthState::Token(token))
+        }
+        AdminAuth::Basic => {
+            let line = read_secret(
+                config.basic_file.as_deref(),
+                "PRX_ADMIN_BASIC",
+                "admin basic credential",
+            )?;
+            let (user, password) = line
+                .split_once(':')
+                .context("admin basic credential must be user:password on a single line")?;
+            if user.is_empty() || password.is_empty() {
+                bail!("admin basic credential must be user:password on a single line");
+            }
+            Ok(AdminAuthState::Basic {
+                user: user.to_string(),
+                password: password.to_string(),
+            })
+        }
+    }
+}
+
+fn read_secret(path: Option<&str>, env_var: &str, what: &str) -> anyhow::Result<String> {
+    if let Some(path) = path {
+        let text = fs::read_to_string(path)
+            .with_context(|| format!("failed to read {what} from {path}"))?;
+        return Ok(text.lines().next().unwrap_or("").trim().to_string());
+    }
+    match std::env::var(env_var) {
+        Ok(value) => Ok(value.trim().to_string()),
+        Err(_) => bail!("{what} is not set; set {env_var} or configure a file for it"),
+    }
+}
+
 fn build_router(state: AdminState) -> Router {
     Router::new()
         // Config endpoints
@@ -2871,11 +3167,31 @@ fn build_router(state: AdminState) -> Router {
         // WebUI
         .route("/", get(get_webui_root))
         .route("/{*path}", get(get_webui_path))
+        .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
 }
 
 pub fn bind_admin_listener(listen: &str) -> anyhow::Result<TcpListener> {
     TcpListener::bind(listen).with_context(|| format!("failed to bind admin listener on {listen}"))
+}
+
+/// Refuse to start when the control plane would be reachable with no
+/// credential. Returns the listen address to bind.
+pub fn resolve_admin_listen(
+    config: &AdminConfig,
+    from_env: Option<&str>,
+) -> anyhow::Result<String> {
+    let listen = from_env
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(config.listen.trim())
+        .to_string();
+    if config.auth == AdminAuth::None && !crate::config::is_loopback_listen(&listen) {
+        bail!(
+            "refusing to start: admin.auth is none but the admin API would listen on {listen}, which is not a loopback address; set admin.auth to token or basic, or bind it to 127.0.0.1 or ::1"
+        );
+    }
+    Ok(listen)
 }
 
 pub struct AdminAxumService {
@@ -2886,6 +3202,12 @@ pub struct AdminAxumService {
 }
 
 impl AdminAxumService {
+    pub fn with_security(mut self, auth: AdminAuthState, policy: AdminPolicy) -> Self {
+        self.state.auth = auth;
+        self.state.policy = policy;
+        self
+    }
+
     pub fn new(
         listen: String,
         listener: TcpListener,
@@ -2902,6 +3224,8 @@ impl AdminAxumService {
             state: AdminState {
                 config_admin: ConfigAdmin::new(config_path),
                 active_config,
+                auth: AdminAuthState::None,
+                policy: AdminPolicy::default(),
                 acme_status,
                 tls_resolver,
                 acme_renew,
@@ -3395,6 +3719,204 @@ is_default = true
         assert_eq!(content, next);
     }
 
+    // All current mutations/probes, plus legacy-looking paths, must hit the
+    // guard before routing, parsing a payload, or touching config/live state.
+    const WRITE_ENDPOINTS: &[(&str, &str)] = &[
+        ("PUT", "/web/config"),
+        ("POST", "/web/config/validate"),
+        ("POST", "/web/config/edit"),
+        ("POST", "/web/tls/acme/renew"),
+        ("POST", "/web/health/routes"),
+        ("POST", "/web/routes/test"),
+        ("POST", "/web/upstreams/test"),
+        ("DELETE", "/web/cache"),
+        ("POST", "/admin/services"),
+        ("PUT", "/admin/services/example"),
+        ("DELETE", "/admin/services/example"),
+        ("POST", "/admin/routes"),
+        ("PUT", "/admin/routes/example"),
+        ("DELETE", "/admin/routes/example"),
+        ("POST", "/web/services"),
+        ("PUT", "/web/services/example"),
+        ("DELETE", "/web/services/example"),
+        ("POST", "/web/routes"),
+        ("PUT", "/web/routes/example"),
+        ("DELETE", "/web/routes/example"),
+    ];
+
+    fn ephemeral_credential() -> String {
+        use rand::Rng;
+        rand::rng()
+            .sample_iter(rand::distr::Alphanumeric)
+            .take(48)
+            .map(char::from)
+            .collect()
+    }
+
+    async fn guarded_request(
+        state: AdminState,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+    ) -> Response<Body> {
+        use tower::ServiceExt;
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", "127.0.0.1:9091");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        build_router(state)
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn admin_auth_every_write_requires_token_before_payload_or_origin_checks() {
+        let (_dir, path) = seeded(&sample_config("127.0.0.1:8080"));
+        let mut state = admin_state(&path);
+        state.auth = AdminAuthState::Token(ephemeral_credential());
+        for &(method, path) in WRITE_ENDPOINTS {
+            for headers in [vec![], vec![("origin", "https://untrusted.example")]] {
+                let response = guarded_request(state.clone(), method, path, &headers).await;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::UNAUTHORIZED,
+                    "{method} {path}"
+                );
+                assert!(response.headers().get(header::WWW_AUTHENTICATE).is_some());
+                assert_eq!(response_text(response).await, "unauthorized\n");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_auth_ui_shell_is_public_but_reads_are_private() {
+        let (_dir, path) = seeded(&sample_config("127.0.0.1:8080"));
+        let mut state = admin_state(&path);
+        state.auth = AdminAuthState::Token(ephemeral_credential());
+        for path in ["/", "/index.html", "/services"] {
+            assert_eq!(
+                guarded_request(state.clone(), "GET", path, &[])
+                    .await
+                    .status(),
+                StatusCode::OK
+            );
+        }
+        for path in [
+            "/web/config",
+            "/admin/services",
+            "/admin/routes",
+            "/web/health/routes",
+            "/web/stats",
+            "/web/stats/stream",
+            "/web/services/status",
+            "/web/tls/status",
+            "/web/cache",
+        ] {
+            assert_eq!(
+                guarded_request(state.clone(), "GET", path, &[])
+                    .await
+                    .status(),
+                StatusCode::UNAUTHORIZED,
+                "{path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_auth_same_origin_writes_and_explicit_preflight_work() {
+        let (_dir, path) = seeded(&sample_config("127.0.0.1:8080"));
+        let mut state = admin_state(&path);
+        let credential = ephemeral_credential();
+        let authorization = format!("Bearer {credential}");
+        state.auth = AdminAuthState::Token(credential);
+        // An empty payload reaches validation (400), rather than CSRF denial.
+        let response = guarded_request(
+            state.clone(),
+            "POST",
+            "/web/config/validate",
+            &[
+                ("authorization", &authorization),
+                ("origin", "http://127.0.0.1:9091"),
+            ],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        state.policy.allow_origins = vec!["https://ops.example".into()];
+        let response = guarded_request(
+            state.clone(),
+            "OPTIONS",
+            "/web/config",
+            &[
+                ("origin", "https://ops.example"),
+                ("access-control-request-method", "PUT"),
+                (
+                    "access-control-request-headers",
+                    "Authorization, Content-Type, If-Match",
+                ),
+            ],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+            "https://ops.example"
+        );
+        // An allowed origin must be able to see a 401 and return to login.
+        let response = guarded_request(
+            state,
+            "PUT",
+            "/web/config",
+            &[("origin", "https://ops.example")],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+            "https://ops.example"
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_auth_read_only_denies_every_write_and_leaves_file_unchanged() {
+        let text = sample_config("127.0.0.1:8080");
+        let (_dir, path) = seeded(&text);
+        let mut state = admin_state(&path);
+        let credential = ephemeral_credential();
+        let authorization = format!("Bearer {credential}");
+        state.auth = AdminAuthState::Token(credential);
+        state.policy.read_only = true;
+        for &(method, endpoint) in WRITE_ENDPOINTS {
+            assert_eq!(
+                guarded_request(
+                    state.clone(),
+                    method,
+                    endpoint,
+                    &[("authorization", &authorization)]
+                )
+                .await
+                .status(),
+                StatusCode::FORBIDDEN,
+                "{method} {endpoint}"
+            );
+        }
+        assert_eq!(
+            guarded_request(
+                state,
+                "GET",
+                "/web/config",
+                &[("authorization", &authorization)]
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), text);
+    }
+
     // ---- validate, ETag and If-Match (T203/T204, for the editor in T307) ----
 
     fn admin_state(config_path: &Path) -> AdminState {
@@ -3402,6 +3924,8 @@ is_default = true
         AdminState {
             config_admin: ConfigAdmin::new(config_path.to_path_buf()),
             active_config: Arc::new(ArcSwap::from_pointee(RuntimeConfig::from_config(parsed))),
+            auth: AdminAuthState::None,
+            policy: AdminPolicy::default(),
             acme_status: Arc::new(std::sync::RwLock::new(crate::acme::AcmeStatus::default())),
             tls_resolver: None,
             acme_renew: None,
@@ -3771,5 +4295,60 @@ log_level = "info"
         let body = response_text(response).await;
         assert!(body.starts_with("invalid_config: line "), "{body}");
         assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
+    }
+}
+
+#[cfg(test)]
+mod admin_security_tests {
+    use super::*;
+
+    #[test]
+    fn startup_refuses_open_admin_on_a_public_listen() {
+        let config = AdminConfig {
+            listen: "0.0.0.0:9091".into(),
+            auth: AdminAuth::None,
+            ..AdminConfig::default()
+        };
+        let err = resolve_admin_listen(&config, None).expect_err("must refuse");
+        assert!(err.to_string().contains("refusing to start"), "{err}");
+    }
+
+    #[test]
+    fn env_listen_override_cannot_open_an_unauthenticated_admin() {
+        let config = AdminConfig::default();
+        assert!(resolve_admin_listen(&config, Some("0.0.0.0:9091")).is_err());
+        assert!(resolve_admin_listen(&config, Some("127.0.0.1:9091")).is_ok());
+    }
+
+    #[test]
+    fn token_error_names_the_source_never_the_secret() {
+        let secret = "s3cr3t-value-never-echo";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("admin.token");
+        fs::write(
+            &path,
+            format!(
+                "{secret}
+"
+            ),
+        )
+        .expect("write");
+        let config = AdminConfig {
+            auth: AdminAuth::Token,
+            token_file: Some(path.to_string_lossy().into_owned()),
+            ..AdminConfig::default()
+        };
+        let state = resolve_admin_auth(&config).expect("token should load");
+        assert!(matches!(&state, AdminAuthState::Token(t) if t == secret));
+        let missing = AdminConfig {
+            auth: AdminAuth::Token,
+            token_file: Some(dir.path().join("missing").to_string_lossy().into_owned()),
+            ..AdminConfig::default()
+        };
+        let err = format!(
+            "{:#}",
+            resolve_admin_auth(&missing).err().expect("missing file")
+        );
+        assert!(!err.contains(secret));
     }
 }

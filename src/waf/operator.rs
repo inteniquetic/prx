@@ -38,7 +38,7 @@ pub fn evaluate_operator(
     if op.negated { !matched } else { matched }
 }
 
-fn expand_macros(text: &str, resolver: &impl Fn(&str) -> Option<String>) -> String {
+pub(super) fn expand_macros(text: &str, resolver: &impl Fn(&str) -> Option<String>) -> String {
     if !text.contains("%{") {
         return text.to_string();
     }

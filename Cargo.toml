@@ -17,6 +17,8 @@ arc-swap = "1"
 async-trait = "0.1"
 axum = "0.8"
 bytes = "1"
+base64 = "0.22"
+subtle = "2.6"
 http = "1"
 include_dir = "0.7"
 notify = "8"
@@ -45,6 +47,7 @@ libinjectionrs = "0.1.1"
 aho-corasick = "1.1.5"
 
 [dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
 bytes = "1"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 futures-util = "0.3.34"

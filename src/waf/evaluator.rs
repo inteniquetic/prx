@@ -1,7 +1,16 @@
-use crate::waf::rule::{Operator, Rule, RuleLink, RuleSet, Rx};
+use crate::waf::rule::{Disruptive, Operator, Rule, RuleEngine, RuleLink, RuleSet, Rx};
 use crate::waf::vars::Transaction;
 use std::borrow::Cow;
 use std::sync::Arc;
+
+/// Enforcement result, separate from whether a non-disruptive rule matched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WafDecision {
+    Allow,
+    Deny(u16),
+    Drop,
+    Redirect(String),
+}
 
 pub struct Evaluator {
     ruleset: Arc<RuleSet>,
@@ -12,23 +21,36 @@ impl Evaluator {
         Self { ruleset }
     }
 
-    pub fn evaluate_request_head<'a>(&'a self, trx: &'a Transaction<'a>) -> Option<String> {
+    pub fn evaluate_request_head<'a>(&'a self, trx: &'a Transaction<'a>) -> WafDecision {
         self.evaluate_phase(0, trx)
     }
 
-    fn evaluate_phase<'a>(
+    /// Evaluate a zero-based phase with the same transaction across phases.
+    pub fn evaluate_phase<'a>(
         &'a self,
         phase_index: usize,
         trx: &'a Transaction<'a>,
-    ) -> Option<String> {
+    ) -> WafDecision {
+        if self.ruleset.settings.rule_engine == Some(RuleEngine::Off) {
+            return WafDecision::Allow;
+        }
+        let detection = self.ruleset.settings.rule_engine == Some(RuleEngine::DetectionOnly);
         for rule in &self.ruleset.phases[phase_index] {
             if self.evaluate_rule(rule, trx) {
                 // Rule matched, trigger actions
                 self.process_actions(rule, trx);
-                return Some(format!("Rule {} matched", rule.id));
+                let decision = match &rule.disruptive {
+                    Disruptive::Deny => WafDecision::Deny(rule.status.unwrap_or(403)),
+                    Disruptive::Drop => WafDecision::Drop,
+                    Disruptive::Redirect(url) => WafDecision::Redirect(url.clone()),
+                    _ => WafDecision::Allow,
+                };
+                if !detection && decision != WafDecision::Allow {
+                    return decision;
+                }
             }
         }
-        None
+        WafDecision::Allow
     }
 
     fn process_actions(&self, rule: &Rule, trx: &Transaction) {
@@ -38,7 +60,29 @@ impl Evaluator {
                 && set_var.target.to_ascii_uppercase().starts_with("TX.")
             {
                 let name = &set_var.target[3..];
-                trx.set_var(name, set_var.value.clone());
+                use crate::waf::rule::SetVarOp;
+                let value = crate::waf::operator::expand_macros(&set_var.value, &|key| {
+                    Self::resolve_macro(trx, key)
+                });
+                match set_var.op {
+                    SetVarOp::Set => trx.set_var(name, value),
+                    SetVarOp::Add | SetVarOp::Sub => {
+                        let current = trx
+                            .get_var(name)
+                            .and_then(|v| v.parse::<i64>().ok())
+                            .unwrap_or(0);
+                        let delta = value.parse::<i64>().unwrap_or(0);
+                        let next = if set_var.op == SetVarOp::Add {
+                            current.saturating_add(delta)
+                        } else {
+                            current.saturating_sub(delta)
+                        };
+                        trx.set_var(name, next.to_string());
+                    }
+                    SetVarOp::Unset => {
+                        trx.tx.borrow_mut().remove(&name.to_ascii_uppercase());
+                    }
+                }
             }
         }
     }
@@ -53,6 +97,14 @@ impl Evaluator {
     }
 
     fn evaluate_link<'a>(&self, link: &'a RuleLink, trx: &'a Transaction<'a>) -> bool {
+        if link.targets.is_empty() {
+            return self.evaluate_operator(
+                &link.operator,
+                link.rx.as_ref(),
+                Cow::Borrowed(b""),
+                trx,
+            );
+        }
         let mut matched = false;
         for target in &link.targets {
             // Use the caching extractor
@@ -64,7 +116,7 @@ impl Evaluator {
             );
 
             // Evaluate operator
-            if self.evaluate_operator(&link.operator, link.rx.as_ref(), transformed) {
+            if self.evaluate_operator(&link.operator, link.rx.as_ref(), transformed, trx) {
                 matched = !target.exclude;
                 break;
             } else if target.exclude {
@@ -73,19 +125,26 @@ impl Evaluator {
         matched
     }
 
+    fn resolve_macro(trx: &Transaction, key: &str) -> Option<String> {
+        let (collection, name) = key.split_once('.')?;
+        collection
+            .eq_ignore_ascii_case("tx")
+            .then(|| trx.get_var(name))
+            .flatten()
+    }
+
     fn evaluate_operator(
         &self,
         operator: &Operator,
         rx: Option<&Rx>,
         value: Cow<'_, [u8]>,
+        trx: &Transaction,
     ) -> bool {
-        // Need to provide macro resolver, captures, data_dir
-        // For now, this is a placeholder or I need to pass down more context.
         crate::waf::operator::evaluate_operator(
             operator,
             rx,
             value.as_ref(),
-            |_| None,
+            |key| Self::resolve_macro(trx, key),
             &mut [None, None, None, None, None, None, None, None, None, None],
             None,
         )
@@ -96,6 +155,29 @@ impl Evaluator {
 mod tests {
     use super::*;
     use pingora::http::RequestHeader;
+
+    #[test]
+    fn score_accumulates_until_final_phase_default_action() {
+        let loaded = crate::waf::load_text(&[(
+            "test",
+            r#"
+SecDefaultAction "phase:1,pass"
+SecDefaultAction "phase:2,deny,status:406"
+SecAction "id:1,phase:1,pass,setvar:tx.score=0,setvar:tx.threshold=5,setvar:tx.critical=3"
+SecAction "id:2,phase:1,pass,setvar:tx.score=+%{tx.critical}"
+SecAction "id:3,phase:2,pass,setvar:tx.score=+%{tx.critical}"
+SecRule TX:score "@ge %{tx.threshold}" "id:4,phase:2,block"
+"#,
+        )]);
+        assert_eq!(loaded.summary.rules, 4, "{loaded}");
+        let evaluator = Evaluator::new(Arc::new(loaded.ruleset));
+        let head = RequestHeader::build("GET", b"/", None).unwrap();
+        let trx = Transaction::new(&head, b"");
+        assert_eq!(evaluator.evaluate_request_head(&trx), WafDecision::Allow);
+        assert_eq!(trx.get_var("score").as_deref(), Some("3"));
+        assert_eq!(evaluator.evaluate_phase(1, &trx), WafDecision::Deny(406));
+        assert_eq!(trx.get_var("score").as_deref(), Some("6"));
+    }
 
     #[test]
     fn setvar_only_updates_tx_and_accepts_mixed_case_prefixes() {

@@ -54,6 +54,8 @@ export type ApplyResult =
   | { status: 'conflict'; expectedEtag: string; currentEtag: string; currentToml: string }
   | { status: 'rejected'; message: string };
 
+import { adminFetch } from './auth';
+
 const fetchWithTimeout = async (
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -62,7 +64,7 @@ const fetchWithTimeout = async (
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(input, { ...init, signal: controller.signal });
+    const response = await adminFetch(input, { ...init, signal: controller.signal });
     reportSuccess();
     return response;
   } catch (error) {

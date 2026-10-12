@@ -8,7 +8,7 @@ use tracing_subscriber::EnvFilter;
 
 use prx::{
     acme::{AcmeStatus, ChallengeStore, load_stored_certificate, spawn_acme},
-    admin::{AdminAxumService, DEFAULT_ADMIN_LISTEN, bind_admin_listener},
+    admin::{self, AdminAxumService, bind_admin_listener},
     config::PrxConfig,
     health::spawn_health_checker,
     proxy::PrxProxy,
@@ -184,22 +184,30 @@ fn run() -> anyhow::Result<()> {
         tls_listen, "proxy server listeners are enabled"
     );
 
-    let admin_listen = env::var("PRX_ADMIN_LISTEN")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_ADMIN_LISTEN.to_string());
+    let admin_listen = admin::resolve_admin_listen(
+        &app_config.admin,
+        env::var("PRX_ADMIN_LISTEN").ok().as_deref(),
+    )
+    .context("refusing to start the admin API")?;
+    let admin_auth = admin::resolve_admin_auth(&app_config.admin)
+        .context("failed to load the admin credential")?;
     let admin_listener = bind_admin_listener(&admin_listen)
         .with_context(|| format!("failed to start admin server on {admin_listen}"))?;
-    server.add_service(AdminAxumService::new(
-        admin_listen.clone(),
-        admin_listener,
-        config_path.clone(),
-        runtime_config.clone(),
-        acme_status.clone(),
-        tls_resolver.clone(),
-        acme_running.then(|| acme_renew.clone()),
-    ));
+    server.add_service(
+        AdminAxumService::new(
+            admin_listen.clone(),
+            admin_listener,
+            config_path.clone(),
+            runtime_config.clone(),
+            acme_status.clone(),
+            tls_resolver.clone(),
+            acme_running.then(|| acme_renew.clone()),
+        )
+        .with_security(
+            admin_auth,
+            admin::AdminPolicy::from_config(&app_config.admin),
+        ),
+    );
     spawn_config_watcher(
         config_path.clone(),
         Duration::from_millis(app_config.server.config_reload_debounce_ms.max(50)),

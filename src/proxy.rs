@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::waf::evaluator::Evaluator;
+use crate::waf::evaluator::{Evaluator, WafDecision};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
@@ -243,6 +243,25 @@ impl PrxProxy {
                 .await?;
         }
         Ok(true)
+    }
+
+    async fn enforce_waf(session: &mut Session, decision: WafDecision) -> Result<bool> {
+        match decision {
+            WafDecision::Allow => Ok(false),
+            WafDecision::Deny(status) => Self::respond_text(session, status, "forbidden\n").await,
+            WafDecision::Drop => {
+                session.set_keepalive(None);
+                session.shutdown().await;
+                Ok(true)
+            }
+            WafDecision::Redirect(url) => {
+                Self::respond_from_plugin(
+                    session,
+                    PluginResponse::new(302).with_header("location", url),
+                )
+                .await
+            }
+        }
     }
 
     async fn respond_text(session: &mut Session, status: u16, body: &'static str) -> Result<bool> {
@@ -652,6 +671,20 @@ impl ProxyHttp for PrxProxy {
                     ctx.route_name = Some(route.name.clone());
                     debug!(route = %route.name, "matched route");
 
+                    // T513: decide before selecting/contacting an upstream or serving cache.
+                    // Moving phase 1 here is required for early enforcement; T512 owns
+                    // scheduling the remaining phases and carrying TX between hooks.
+                    if !snapshot.ruleset.phases[0].is_empty() {
+                        let decision = {
+                            let evaluator = Evaluator::new(snapshot.ruleset.clone());
+                            let trx = Transaction::new(session.req_header(), b"");
+                            evaluator.evaluate_request_head(&trx)
+                        };
+                        if Self::enforce_waf(session, decision).await? {
+                            return Ok(true);
+                        }
+                    }
+
                     // Rate limit, concurrency, the route's own plugins and
                     // the cache lookup are all links in one chain now, in the
                     // order `RouteRuntime::from_config` built it (T502).
@@ -686,9 +719,9 @@ impl ProxyHttp for PrxProxy {
 
     async fn request_body_filter(
         &self,
-        session: &mut Session,
+        _session: &mut Session,
         body: &mut Option<Bytes>,
-        end_of_stream: bool,
+        _end_of_stream: bool,
         ctx: &mut Self::CTX,
     ) -> Result<()> {
         let Some(snapshot) = &ctx.snapshot else {
@@ -732,13 +765,8 @@ impl ProxyHttp for PrxProxy {
             }
         }
 
-        if end_of_stream {
-            let evaluator = Evaluator::new(snapshot.ruleset.clone());
-            let trx = Transaction::new(session.req_header(), &ctx.buffered_body);
-            if let Some(reason) = evaluator.evaluate_request_head(&trx) {
-                warn!("WAF matched: {}", reason);
-            }
-        }
+        // Phase 1 now runs in request_filter, before upstream contact.
+        // Body/response phase scheduling remains T512.
 
         Ok(())
     }
@@ -1388,6 +1416,7 @@ mod tests {
     fn build_runtime(max_retries: usize, upstream_count: usize) -> Arc<RuntimeConfig> {
         Arc::new(RuntimeConfig::from_config(PrxConfig {
             server: ServerConfig::default(),
+            admin: Default::default(),
             observability: ObservabilityConfig::default(),
             headers: Default::default(),
             compression: Default::default(),
@@ -1411,6 +1440,7 @@ mod tests {
     fn runtime_with(service: ServiceConfig) -> Arc<RuntimeConfig> {
         Arc::new(RuntimeConfig::from_config(PrxConfig {
             server: ServerConfig::default(),
+            admin: Default::default(),
             observability: ObservabilityConfig::default(),
             headers: Default::default(),
             compression: Default::default(),

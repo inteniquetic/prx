@@ -1110,6 +1110,7 @@ mod tests {
     fn runtime_from_parts(services: Vec<ServiceConfig>, routes: Vec<RouteConfig>) -> RuntimeConfig {
         RuntimeConfig::from_config(PrxConfig {
             server: ServerConfig::default(),
+            admin: Default::default(),
             observability: ObservabilityConfig::default(),
             headers: Default::default(),
             compression: Default::default(),
@@ -1324,6 +1325,7 @@ mod tests {
 
         RuntimeConfig::from_config(PrxConfig {
             server: ServerConfig::default(),
+            admin: Default::default(),
             observability: ObservabilityConfig::default(),
             headers: Default::default(),
             compression: Default::default(),

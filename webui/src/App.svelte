@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import LoginScreen from './lib/components/layout/LoginScreen.svelte';
+  import { loginRequired } from './lib/api/auth';
   import { get } from 'svelte/store';
   import AppShell from './lib/components/layout/AppShell.svelte';
   import DashboardPage from './lib/components/pages/DashboardPage.svelte';
@@ -282,6 +284,9 @@
 
 <svelte:window on:beforeunload={onBeforeUnload} />
 
+{#if $loginRequired}
+  <LoginScreen />
+{:else}
 <AppShell
   config={$configStore}
   badges={navBadges}
@@ -352,6 +357,7 @@
     {/if}
   </svelte:boundary>
 </AppShell>
+{/if}
 
 <SetupWizard
   bind:open={wizardOpen}

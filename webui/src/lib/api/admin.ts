@@ -11,6 +11,8 @@ const ADMIN_SERVICES_ENDPOINT = '/admin/services';
 const ADMIN_ROUTES_ENDPOINT = '/admin/routes';
 const REQUEST_TIMEOUT_MS = 10000;
 
+import { adminFetch } from './auth';
+
 const fetchWithTimeout = async (
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -20,7 +22,7 @@ const fetchWithTimeout = async (
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(input, {
+    const response = await adminFetch(input, {
       ...init,
       signal: controller.signal
     });

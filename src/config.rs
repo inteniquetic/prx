@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 pub struct PrxConfig {
     #[serde(default)]
     pub server: ServerConfig,
+    /// The control plane: where the admin API listens and how it is guarded.
+    #[serde(default)]
+    pub admin: AdminConfig,
     #[serde(default)]
     pub observability: ObservabilityConfig,
     #[serde(default)]
@@ -88,6 +91,7 @@ impl PrxConfig {
         let service_names = self.check_services(&mut out);
         self.check_routes(&service_names, &mut out);
         self.check_plugins(&mut out);
+        self.check_admin(&mut out);
         self.check_globals(&mut out);
         out
     }
@@ -714,6 +718,33 @@ impl PrxConfig {
         }
     }
 
+    fn check_admin(&self, out: &mut Vec<ConfigIssue>) {
+        if self.admin.auth == AdminAuth::None && !is_loopback_listen(&self.admin.listen) {
+            out.push(
+                ConfigIssue::error(
+                    "admin_open_on_public_listen",
+                    "admin.listen",
+                    "admin.auth is none but admin.listen is not a loopback address; set auth to token or basic, or bind the admin API to 127.0.0.1 or ::1",
+                )
+                .with_hint(
+                    "a control plane that can rewrite the proxy config must not be reachable without a credential",
+                ),
+            );
+        }
+        for (index, origin) in self.admin.allow_origins.iter().enumerate() {
+            let trimmed = origin.trim();
+            if trimmed == "*" || trimmed.is_empty() || !origin_is_explicit(trimmed) {
+                out.push(ConfigIssue::error(
+                    "admin_origin_not_explicit",
+                    format!("admin.allow_origins[{index}]"),
+                    format!(
+                        "admin.allow_origins[{index}] must be an explicit origin such as https://ops.example.com; '*' and bare hosts are not allowed"
+                    ),
+                ));
+            }
+        }
+    }
+
     fn check_globals(&self, out: &mut Vec<ConfigIssue>) {
         if self.compression.enabled && !(1..=11).contains(&self.compression.level) {
             out.push(ConfigIssue::error(
@@ -867,6 +898,65 @@ pub fn extract_variables(value: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// How the admin API checks a caller.
+///
+/// `none` is only legal on a loopback listener: a control plane that can
+/// rewrite the proxy's config must not be reachable without a credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AdminAuth {
+    #[default]
+    None,
+    Token,
+    Basic,
+}
+
+/// The `[admin]` block.
+///
+/// The credential itself never lives here. `token_file` and `basic_file`
+/// point at a file (or, when unset, the `PRX_ADMIN_TOKEN` / `PRX_ADMIN_BASIC`
+/// environment variables), so a config that is shown, diffed or committed
+/// cannot carry the secret.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AdminConfig {
+    #[serde(default = "default_admin_listen")]
+    pub listen: String,
+    #[serde(default)]
+    pub auth: AdminAuth,
+    /// Path to a file holding the bearer token, one line. Ignored unless
+    /// `auth` is `token`.
+    #[serde(default)]
+    pub token_file: Option<String>,
+    /// Path to a file holding `user:password`, one line. Ignored unless
+    /// `auth` is `basic`.
+    #[serde(default)]
+    pub basic_file: Option<String>,
+    /// Origins allowed to call the API from another site. Empty means
+    /// same-origin only; `*` is never valid.
+    #[serde(default)]
+    pub allow_origins: Vec<String>,
+    /// Serve the API for reading and refuse every change.
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+fn default_admin_listen() -> String {
+    "127.0.0.1:9091".to_string()
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            listen: default_admin_listen(),
+            auth: AdminAuth::None,
+            token_file: None,
+            basic_file: None,
+            allow_origins: Vec::new(),
+            read_only: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1715,6 +1805,37 @@ fn default_weight() -> u16 {
     1
 }
 
+/// An origin the admin API may answer to: scheme, host and an optional port,
+/// nothing else. `*` is deliberately not an origin.
+fn origin_is_explicit(value: &str) -> bool {
+    let Some((scheme, rest)) = value.split_once("://") else {
+        return false;
+    };
+    if scheme != "http" && scheme != "https" {
+        return false;
+    }
+    let host_port = rest.split(['/', '?', '#', ' ']).next().unwrap_or("");
+    if host_port.is_empty() || host_port != rest {
+        return false;
+    }
+    let host = host_port
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(host_port);
+    !host.is_empty() && !host.contains('*')
+}
+
+/// Whether an admin listen address can only be reached from the same machine.
+///
+/// Anything that does not parse, or parses as a wildcard, is treated as
+/// public: the safe failure is to demand a credential.
+pub fn is_loopback_listen(listen: &str) -> bool {
+    let Ok(addr) = listen.parse::<std::net::SocketAddr>() else {
+        return false;
+    };
+    addr.ip().is_loopback()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1764,6 +1885,7 @@ mod tests {
     fn valid_config() -> PrxConfig {
         PrxConfig {
             server: ServerConfig::default(),
+            admin: Default::default(),
             observability: ObservabilityConfig::default(),
             headers: Default::default(),
             compression: Default::default(),
@@ -2017,5 +2139,46 @@ plugins = ["mark"]
     fn validate_accepts_valid_config() {
         let cfg = valid_config();
         cfg.validate().expect("valid config should pass");
+    }
+
+    #[test]
+    fn admin_none_auth_is_refused_on_a_public_listen() {
+        let mut config = valid_config();
+        config.admin.listen = "0.0.0.0:9091".into();
+        config.admin.auth = AdminAuth::None;
+        let codes = codes(&config.check());
+        assert!(codes.contains(&"admin_open_on_public_listen"), "{codes:?}");
+    }
+
+    #[test]
+    fn admin_none_auth_is_allowed_on_loopback() {
+        for listen in ["127.0.0.1:9091", "[::1]:9091"] {
+            let mut config = valid_config();
+            config.admin.listen = listen.into();
+            assert!(
+                !codes(&config.check()).contains(&"admin_open_on_public_listen"),
+                "{listen}"
+            );
+        }
+    }
+
+    #[test]
+    fn admin_cors_rejects_wildcard_and_bare_hosts() {
+        let mut config = valid_config();
+        config.admin.auth = AdminAuth::Token;
+        config.admin.allow_origins = vec![
+            "*".into(),
+            "ops.example".into(),
+            "https://ok.example".into(),
+        ];
+        let codes = codes(&config.check());
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|c| **c == "admin_origin_not_explicit")
+                .count(),
+            2,
+            "{codes:?}"
+        );
     }
 }

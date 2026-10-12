@@ -102,6 +102,8 @@ export interface StatsTick {
   events?: StatsEvent[];
 }
 
+import { adminFetch } from './auth';
+
 export const loadStats = async (signal?: AbortSignal): Promise<StatsSnapshot> => {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -109,7 +111,7 @@ export const loadStats = async (signal?: AbortSignal): Promise<StatsSnapshot> =>
   signal?.addEventListener('abort', onAbort);
 
   try {
-    const response = await fetch(STATS_ENDPOINT, {
+    const response = await adminFetch(STATS_ENDPOINT, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       cache: 'no-store',

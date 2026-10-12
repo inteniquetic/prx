@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { AdminEventSource } from '../api/auth';
 
 import {
   loadStats,
@@ -160,7 +161,7 @@ const toMessage = (error: unknown): string =>
  */
 export function startLiveStats(): () => void {
   let stopped = false;
-  let source: EventSource | null = null;
+  let source: AdminEventSource | null = null;
   let watchdog: ReturnType<typeof setInterval> | undefined;
   let poller: ReturnType<typeof setInterval> | undefined;
   let streamRetry: ReturnType<typeof setTimeout> | undefined;
@@ -212,7 +213,7 @@ export function startLiveStats(): () => void {
     if (stopped) return;
     closeStream();
 
-    const stream = new EventSource(statsStreamUrl());
+    const stream = new AdminEventSource(statsStreamUrl());
     source = stream;
 
     stream.addEventListener('open', () => {
@@ -243,7 +244,7 @@ export function startLiveStats(): () => void {
 
     stream.addEventListener('error', () => {
       if (stopped) return;
-      if (stream.readyState === EventSource.CLOSED) {
+      if (stream.readyState === AdminEventSource.CLOSED) {
         // Refused (the 16-stream cap) or blocked by something in between: the
         // browser will not retry this one, so fall back to asking and try the
         // stream again later.
