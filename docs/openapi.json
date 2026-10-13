@@ -7,8 +7,10 @@
           "ca_root_path": {
             "default": null,
             "description": "PEM file with the CA that signs the ACME server's own TLS certificate.\nNeeded for a private ACME server (step-ca, Pebble); public providers\nare trusted through the system roots.",
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "directory_url": {
             "default": "https://acme-staging-v02.api.letsencrypt.org/directory",
@@ -54,8 +56,10 @@
         "properties": {
           "certificate_expiry_epoch_s": {
             "format": "int64",
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "directory_url": {
             "type": "string"
@@ -72,18 +76,24 @@
           "last_attempt_epoch_s": {
             "description": "Epoch seconds of the last attempt, successful or not.",
             "format": "int64",
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "last_error": {
             "description": "Why the last attempt failed, when it did.",
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "last_success_epoch_s": {
             "format": "int64",
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "staging": {
             "type": "boolean"
@@ -100,8 +110,10 @@
       "AdminAcmePayload": {
         "properties": {
           "ca_root_path": {
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "directory_url": {
             "type": "string"
@@ -184,18 +196,16 @@
             "type": "array"
           },
           "auth": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/AdminAuth"
-              }
-            ],
+            "$ref": "#/components/schemas/AdminAuth",
             "default": "none"
           },
           "basic_file": {
             "default": null,
             "description": "Path to a file holding `user:password`, one line. Ignored unless\n`auth` is `basic`.",
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "listen": {
             "default": "127.0.0.1:9091",
@@ -209,8 +219,10 @@
           "token_file": {
             "default": null,
             "description": "Path to a file holding the bearer token, one line. Ignored unless\n`auth` is `token`.",
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -371,14 +383,18 @@
           "grace_period_seconds": {
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "graceful_shutdown_timeout_seconds": {
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "h2c": {
             "description": "Accept HTTP/2 over cleartext on the plain listeners.",
@@ -399,8 +415,10 @@
           "threads": {
             "format": "uint",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "tls": {
             "anyOf": [
@@ -408,10 +426,7 @@
                 "$ref": "#/components/schemas/AdminTlsPayload"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ]
           }
@@ -532,17 +547,15 @@
       "AdminTlsPayload": {
         "properties": {
           "acme": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/AdminAcmePayload"
-              }
-            ],
+            "$ref": "#/components/schemas/AdminAcmePayload",
             "description": "Automatic certificates, so the Settings page can show and edit them\nwithout a second request (T308)."
           },
           "cert_path": {
             "description": "Present only for the single-certificate form.",
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "certs": {
             "description": "The `[[server.tls.cert]]` blocks, as the file has them.",
@@ -555,8 +568,10 @@
             "type": "boolean"
           },
           "key_path": {
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "listen": {
             "type": "string"
@@ -578,8 +593,10 @@
           "connect_timeout_ms": {
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "enabled": {
             "type": "boolean"
@@ -587,14 +604,18 @@
           "idle_timeout_ms": {
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "read_timeout_ms": {
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "sni": {
             "type": "string"
@@ -605,16 +626,22 @@
           "total_connect_timeout_ms": {
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "verify_cert": {
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "verify_hostname": {
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "weight": {
             "format": "uint16",
@@ -625,8 +652,10 @@
           "write_timeout_ms": {
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -791,20 +820,26 @@
             "default": null,
             "format": "uint",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "enabled": {
             "default": null,
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "open_ms": {
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -899,8 +934,10 @@
             "type": "integer"
           },
           "hint": {
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "line": {
             "format": "uint32",
@@ -933,24 +970,18 @@
         "description": "What to do to one key.",
         "oneOf": [
           {
+            "const": "set",
             "description": "Write `value` at `path`, creating the tables it needs.",
-            "enum": [
-              "set"
-            ],
             "type": "string"
           },
           {
+            "const": "remove",
             "description": "Delete the key, or the array-of-tables element, at `path`.",
-            "enum": [
-              "remove"
-            ],
             "type": "string"
           },
           {
+            "const": "append",
             "description": "Push a new `[[path]]` element built from `value`.",
-            "enum": [
-              "append"
-            ],
             "type": "string"
           }
         ]
@@ -958,11 +989,7 @@
       "EditOp": {
         "properties": {
           "action": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/EditAction"
-              }
-            ],
+            "$ref": "#/components/schemas/EditAction",
             "default": "set"
           },
           "path": {
@@ -1068,11 +1095,7 @@
         "description": "Header rules that apply to every route, applied before the route's own.",
         "properties": {
           "request": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/HeaderRules"
-              }
-            ],
+            "$ref": "#/components/schemas/HeaderRules",
             "default": {
               "add": {},
               "remove": [],
@@ -1080,11 +1103,7 @@
             }
           },
           "response": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/HeaderRules"
-              }
-            ],
+            "$ref": "#/components/schemas/HeaderRules",
             "default": {
               "add": {},
               "remove": [],
@@ -1128,11 +1147,7 @@
             "type": "integer"
           },
           "kind": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/HealthCheckKind"
-              }
-            ],
+            "$ref": "#/components/schemas/HealthCheckKind",
             "default": "tcp"
           },
           "path": {
@@ -1159,17 +1174,13 @@
       "HealthCheckKind": {
         "oneOf": [
           {
+            "const": "tcp",
             "description": "Open a TCP connection and close it again.",
-            "enum": [
-              "tcp"
-            ],
             "type": "string"
           },
           {
+            "const": "http",
             "description": "Send a GET and check the status code.",
-            "enum": [
-              "http"
-            ],
             "type": "string"
           }
         ]
@@ -1193,17 +1204,13 @@
             "type": "string"
           },
           {
+            "const": "least_conn",
             "description": "Send the request to whichever of two random upstreams has fewer\nrequests in flight. Power of two choices avoids scanning every\nupstream while getting most of the benefit of true least-connections.",
-            "enum": [
-              "least_conn"
-            ],
             "type": "string"
           },
           {
+            "const": "p2c_ewma",
             "description": "Like `least_conn`, but weighted by a moving average of each upstream's\nlatency, so a slow-but-accepting upstream is avoided too.",
-            "enum": [
-              "p2c_ewma"
-            ],
             "type": "string"
           }
         ]
@@ -1220,8 +1227,10 @@
           },
           "prometheus_listen": {
             "default": null,
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -1252,11 +1261,7 @@
       "PrxConfig": {
         "properties": {
           "admin": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/AdminConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/AdminConfig",
             "default": {
               "allow_origins": [],
               "auth": "none",
@@ -1268,11 +1273,7 @@
             "description": "The control plane: where the admin API listens and how it is guarded."
           },
           "compression": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/CompressionConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/CompressionConfig",
             "default": {
               "decompress_upstream": false,
               "enabled": false,
@@ -1280,11 +1281,7 @@
             }
           },
           "headers": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/HeadersConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/HeadersConfig",
             "default": {
               "request": {
                 "add": {},
@@ -1299,11 +1296,7 @@
             }
           },
           "observability": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/ObservabilityConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/ObservabilityConfig",
             "default": {
               "access_log": true,
               "log_level": "info",
@@ -1326,11 +1319,7 @@
             "type": "array"
           },
           "server": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/ServerConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/ServerConfig",
             "default": {
               "config_reload_debounce_ms": 250,
               "grace_period_seconds": null,
@@ -1353,11 +1342,7 @@
             "type": "array"
           },
           "waf": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/WafConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/WafConfig",
             "description": "SecLang rules for the WAF. Empty unless `[waf] rules_file` is set."
           }
         },
@@ -1420,11 +1405,7 @@
       "RouteConfig": {
         "properties": {
           "cache": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/CacheConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/CacheConfig",
             "default": {
               "add_status_header": true,
               "cache_status_codes": [
@@ -1447,11 +1428,7 @@
             }
           },
           "concurrency_limit": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/ConcurrencyLimitConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/ConcurrencyLimitConfig",
             "default": {
               "max_concurrent": 0,
               "response_status": 503
@@ -1464,8 +1441,10 @@
           },
           "host": {
             "default": null,
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "is_default": {
             "default": false,
@@ -1495,11 +1474,7 @@
             "type": "array"
           },
           "rate_limit": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/RateLimitConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/RateLimitConfig",
             "default": {
               "burst": 0,
               "enabled": false,
@@ -1512,11 +1487,7 @@
             }
           },
           "request_headers": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/HeaderRules"
-              }
-            ],
+            "$ref": "#/components/schemas/HeaderRules",
             "default": {
               "add": {},
               "remove": [],
@@ -1524,11 +1495,7 @@
             }
           },
           "response_headers": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/HeaderRules"
-              }
-            ],
+            "$ref": "#/components/schemas/HeaderRules",
             "default": {
               "add": {},
               "remove": [],
@@ -1628,8 +1595,10 @@
             "type": "string"
           },
           "error": {
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "healthy": {
             "type": "boolean"
@@ -1638,14 +1607,18 @@
             "description": "How long ago the prober last checked, when the verdict came from it.",
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "latency_ms": {
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "source": {
             "description": "Where this verdict came from: the background prober, or a TCP connect\nopened just to answer this request.",
@@ -1673,10 +1646,7 @@
                 "$ref": "#/components/schemas/CacheConfig"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ],
             "default": null
@@ -1687,52 +1657,61 @@
                 "$ref": "#/components/schemas/ConcurrencyLimitConfig"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ],
             "default": null
           },
           "enabled": {
             "default": null,
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "host": {
             "default": null,
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "is_default": {
             "default": null,
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "methods": {
             "default": null,
             "items": {
               "type": "string"
             },
-            "nullable": true,
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "name": {
             "type": "string"
           },
           "path_prefix": {
             "default": null,
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "plugins": {
             "default": null,
             "items": {
               "type": "string"
             },
-            "nullable": true,
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "rate_limit": {
             "anyOf": [
@@ -1740,10 +1719,7 @@
                 "$ref": "#/components/schemas/RateLimitConfig"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ],
             "default": null
@@ -1754,10 +1730,7 @@
                 "$ref": "#/components/schemas/HeaderRules"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ],
             "default": null
@@ -1768,10 +1741,7 @@
                 "$ref": "#/components/schemas/HeaderRules"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ],
             "default": null
@@ -1798,18 +1768,24 @@
           },
           "p50_ms": {
             "format": "double",
-            "nullable": true,
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "p95_ms": {
             "format": "double",
-            "nullable": true,
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "p99_ms": {
             "format": "double",
-            "nullable": true,
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "requests": {
             "format": "uint64",
@@ -1894,11 +1870,7 @@
             "type": "string"
           },
           "request": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/RouteTestEcho"
-              }
-            ],
+            "$ref": "#/components/schemas/RouteTestEcho",
             "description": "The request as the matcher saw it, after host normalization."
           },
           "route": {
@@ -1907,10 +1879,7 @@
                 "$ref": "#/components/schemas/RouteTestRoutePayload"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ]
           },
@@ -1920,10 +1889,7 @@
                 "$ref": "#/components/schemas/RouteTestServicePayload"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ]
           }
@@ -1989,8 +1955,10 @@
             "type": "string"
           },
           "would_pick": {
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2074,8 +2042,10 @@
           "cache_hit_ratio": {
             "description": "`None` when no route has caching turned on.",
             "format": "double",
-            "nullable": true,
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "epoch_ms": {
             "format": "uint64",
@@ -2099,18 +2069,24 @@
           "p50_ms": {
             "description": "`None` while no request finished in the window: a percentile over zero\nrequests is not zero milliseconds.",
             "format": "double",
-            "nullable": true,
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "p95_ms": {
             "format": "double",
-            "nullable": true,
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "p99_ms": {
             "format": "double",
-            "nullable": true,
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "rps": {
             "format": "double",
@@ -2176,15 +2152,19 @@
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "graceful_shutdown_timeout_seconds": {
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "h2c": {
             "default": true,
@@ -2212,8 +2192,10 @@
             "default": null,
             "format": "uint",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "tls": {
             "anyOf": [
@@ -2221,10 +2203,7 @@
                 "$ref": "#/components/schemas/TlsConfig"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ],
             "default": null
@@ -2235,11 +2214,7 @@
       "ServiceConfig": {
         "properties": {
           "circuit_breaker": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/CircuitBreakerConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/CircuitBreakerConfig",
             "default": {
               "consecutive_failures": 3,
               "enabled": false,
@@ -2247,11 +2222,7 @@
             }
           },
           "health_check": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/HealthCheckConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/HealthCheckConfig",
             "default": {
               "enabled": false,
               "expected_status": [
@@ -2267,11 +2238,7 @@
             "description": "Probe upstreams in the background instead of waiting for a real request\nto discover that one is down."
           },
           "lb": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/LbStrategy"
-              }
-            ],
+            "$ref": "#/components/schemas/LbStrategy",
             "default": "round_robin"
           },
           "max_retries": {
@@ -2323,11 +2290,7 @@
             "type": "boolean"
           },
           "sticky": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/StickyConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/StickyConfig",
             "default": {
               "enabled": false,
               "mode": "cookie",
@@ -2344,11 +2307,7 @@
             "type": "array"
           },
           "upstream_h2": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/UpstreamH2"
-              }
-            ],
+            "$ref": "#/components/schemas/UpstreamH2",
             "default": "never",
             "description": "Which HTTP version to speak to the upstreams of this service."
           }
@@ -2393,10 +2352,7 @@
                 "$ref": "#/components/schemas/CircuitBreakerRequestPayload"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ]
           },
@@ -2406,25 +2362,26 @@
                 "$ref": "#/components/schemas/HealthCheckConfig"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ],
             "default": null
           },
           "lb": {
             "default": null,
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "max_retries": {
             "default": null,
             "format": "uint",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "name": {
             "type": "string"
@@ -2433,40 +2390,52 @@
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "retry_backoff_ms": {
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "retry_budget_min_per_window": {
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "retry_budget_ratio": {
             "default": null,
             "format": "double",
-            "nullable": true,
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "retry_budget_window_ms": {
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "retry_idempotent_only": {
             "default": null,
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "sticky": {
             "anyOf": [
@@ -2474,10 +2443,7 @@
                 "$ref": "#/components/schemas/StickyConfig"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ],
             "default": null
@@ -2488,10 +2454,7 @@
                 "$ref": "#/components/schemas/UpstreamH2"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ],
             "default": null
@@ -2586,8 +2549,10 @@
           },
           "target": {
             "description": "The route, service or domain the event is about, when there is one.",
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2683,11 +2648,7 @@
             "type": "boolean"
           },
           "mode": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/StickyMode"
-              }
-            ],
+            "$ref": "#/components/schemas/StickyMode",
             "default": "cookie"
           },
           "name": {
@@ -2708,24 +2669,18 @@
       "StickyMode": {
         "oneOf": [
           {
+            "const": "cookie",
             "description": "prx sets a cookie naming the upstream and honors it on later requests.",
-            "enum": [
-              "cookie"
-            ],
             "type": "string"
           },
           {
+            "const": "client_ip",
             "description": "Hash the client address.",
-            "enum": [
-              "client_ip"
-            ],
             "type": "string"
           },
           {
+            "const": "header",
             "description": "Hash the value of a request header.",
-            "enum": [
-              "header"
-            ],
             "type": "string"
           }
         ]
@@ -2783,11 +2738,7 @@
       "TlsConfig": {
         "properties": {
           "acme": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/AcmeConfig"
-              }
-            ],
+            "$ref": "#/components/schemas/AcmeConfig",
             "default": {
               "ca_root_path": null,
               "directory_url": "https://acme-staging-v02.api.letsencrypt.org/directory",
@@ -2810,8 +2761,10 @@
           "cert_path": {
             "default": null,
             "description": "Single-certificate form, kept so existing configs keep working. Prefer\n`[[server.tls.cert]]`, which supports more than one domain.",
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "enable_h2": {
             "default": true,
@@ -2819,8 +2772,10 @@
           },
           "key_path": {
             "default": null,
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "listen": {
             "type": "string"
@@ -2859,8 +2814,10 @@
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "enabled": {
             "default": true,
@@ -2871,20 +2828,26 @@
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "read_timeout_ms": {
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "sni": {
             "default": null,
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "tls": {
             "default": false,
@@ -2894,18 +2857,24 @@
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "verify_cert": {
             "default": null,
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "verify_hostname": {
             "default": null,
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "weight": {
             "default": 1,
@@ -2918,8 +2887,10 @@
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2931,24 +2902,18 @@
         "description": "How prx talks to a service's upstreams.\n\ngRPC needs `always`: it requires end-to-end HTTP/2 because it carries its\nstatus in trailers, which HTTP/1.1 cannot express.",
         "oneOf": [
           {
+            "const": "never",
             "description": "HTTP/1.1 only.",
-            "enum": [
-              "never"
-            ],
             "type": "string"
           },
           {
+            "const": "always",
             "description": "HTTP/2 only. Over TLS this is negotiated with ALPN; over cleartext prx\ntrusts that the upstream speaks h2c.",
-            "enum": [
-              "always"
-            ],
             "type": "string"
           },
           {
+            "const": "auto",
             "description": "Prefer HTTP/2, fall back to HTTP/1.1. Over cleartext there is no ALPN to\nnegotiate with, so this behaves like `never`.",
-            "enum": [
-              "auto"
-            ],
             "type": "string"
           }
         ]
@@ -2988,69 +2953,91 @@
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "enabled": {
             "default": null,
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "idle_timeout_ms": {
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "read_timeout_ms": {
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "sni": {
             "default": null,
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "tls": {
             "default": null,
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "total_connect_timeout_ms": {
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "verify_cert": {
             "default": null,
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "verify_hostname": {
             "default": null,
-            "nullable": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "weight": {
             "default": null,
             "format": "uint16",
             "maximum": 65535,
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "write_timeout_ms": {
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -3069,10 +3056,8 @@
             "type": "string"
           },
           {
+            "const": "drained",
             "description": "Turned off in the config — not a failure, and not counted as one.",
-            "enum": [
-              "drained"
-            ],
             "type": "string"
           }
         ]
@@ -3092,8 +3077,10 @@
             "description": "Milliseconds until the breaker closes again, when it is open.",
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "consecutive_failures": {
             "format": "uint",
@@ -3117,8 +3104,10 @@
           "last_probe_ms_ago": {
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "probe_healthy": {
             "type": "boolean"
@@ -3159,8 +3148,10 @@
             "default": null,
             "format": "uint64",
             "minimum": 0,
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -3177,18 +3168,17 @@
                 "$ref": "#/components/schemas/AdminConfigPayload"
               },
               {
-                "enum": [
-                  null
-                ],
-                "nullable": true
+                "type": "null"
               }
             ],
             "description": "The config as the API would report it, when it is valid — so the editor\ncan say what changed without parsing TOML in the browser."
           },
           "current_etag": {
             "description": "The ETag of the file on disk at the moment of validation. A draft whose\nbase no longer matches this was overtaken by someone else.",
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "errors": {
             "items": {
@@ -3275,19 +3265,25 @@
           "inbound_anomaly_threshold": {
             "description": "Summed anomaly score at which a request is blocked. Must be positive.\nUnset means 5.",
             "format": "int64",
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "paranoia_level": {
             "description": "CRS paranoia level, 1 to 4. Only rules at or below this level count\ntoward blocking. Unset means 1. Kept as `i64` so that out-of-range\nvalues reach `check` as a `ConfigIssue` instead of a parse error.",
             "format": "int64",
-            "nullable": true,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "rules_file": {
             "description": "A SecLang rules file. A relative path resolves against the directory\nof the config file.",
-            "nullable": true,
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -3305,10 +3301,11 @@
     "title": "prx admin API",
     "version": "0.1.0"
   },
-  "openapi": "3.0.3",
+  "openapi": "3.1.0",
   "paths": {
     "/admin/routes": {
       "get": {
+        "operationId": "get_admin_routes",
         "responses": {
           "200": {
             "content": {
@@ -3333,6 +3330,7 @@
         "summary": "List routes"
       },
       "post": {
+        "operationId": "post_admin_routes",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3366,6 +3364,7 @@
     },
     "/admin/routes/{name}": {
       "delete": {
+        "operationId": "delete_admin_routes_name",
         "parameters": [
           {
             "in": "path",
@@ -3390,6 +3389,7 @@
         "summary": "Delete a route"
       },
       "get": {
+        "operationId": "get_admin_routes_name",
         "parameters": [
           {
             "in": "path",
@@ -3421,6 +3421,7 @@
         "summary": "One route"
       },
       "put": {
+        "operationId": "put_admin_routes_name",
         "parameters": [
           {
             "in": "path",
@@ -3464,6 +3465,7 @@
     },
     "/admin/services": {
       "get": {
+        "operationId": "get_admin_services",
         "responses": {
           "200": {
             "content": {
@@ -3488,6 +3490,7 @@
         "summary": "List services"
       },
       "post": {
+        "operationId": "post_admin_services",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3521,6 +3524,7 @@
     },
     "/admin/services/{name}": {
       "delete": {
+        "operationId": "delete_admin_services_name",
         "parameters": [
           {
             "in": "path",
@@ -3545,6 +3549,7 @@
         "summary": "Delete a service"
       },
       "get": {
+        "operationId": "get_admin_services_name",
         "parameters": [
           {
             "in": "path",
@@ -3576,6 +3581,7 @@
         "summary": "One service"
       },
       "put": {
+        "operationId": "put_admin_services_name",
         "parameters": [
           {
             "in": "path",
@@ -3619,6 +3625,7 @@
     },
     "/web/audit": {
       "get": {
+        "operationId": "get_web_audit",
         "responses": {
           "200": {
             "description": "OK"
@@ -3635,6 +3642,7 @@
     },
     "/web/cache": {
       "delete": {
+        "operationId": "delete_web_cache",
         "responses": {
           "200": {
             "description": "OK"
@@ -3649,6 +3657,7 @@
         "summary": "Purge a route's cache"
       },
       "get": {
+        "operationId": "get_web_cache",
         "responses": {
           "200": {
             "content": {
@@ -3675,6 +3684,7 @@
     },
     "/web/config": {
       "get": {
+        "operationId": "get_web_config",
         "responses": {
           "200": {
             "content": {
@@ -3696,6 +3706,7 @@
         "summary": "The running config (JSON, or TOML with ?format=toml)"
       },
       "put": {
+        "operationId": "put_web_config",
         "requestBody": {
           "content": {
             "text/plain": {
@@ -3728,6 +3739,7 @@
     },
     "/web/config/edit": {
       "post": {
+        "operationId": "post_web_config_edit",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3761,6 +3773,7 @@
     },
     "/web/config/history": {
       "get": {
+        "operationId": "get_web_config_history",
         "responses": {
           "200": {
             "content": {
@@ -3787,6 +3800,7 @@
     },
     "/web/config/history/{id}": {
       "get": {
+        "operationId": "get_web_config_history_id",
         "parameters": [
           {
             "in": "path",
@@ -3813,6 +3827,7 @@
     },
     "/web/config/rollback/{id}": {
       "post": {
+        "operationId": "post_web_config_rollback_id",
         "parameters": [
           {
             "in": "path",
@@ -3848,6 +3863,7 @@
     },
     "/web/config/validate": {
       "post": {
+        "operationId": "post_web_config_validate",
         "requestBody": {
           "content": {
             "text/plain": {
@@ -3880,6 +3896,7 @@
     },
     "/web/health/routes": {
       "get": {
+        "operationId": "get_web_health_routes",
         "responses": {
           "200": {
             "content": {
@@ -3901,6 +3918,7 @@
         "summary": "Last route health result"
       },
       "post": {
+        "operationId": "post_web_health_routes",
         "requestBody": {
           "content": {
             "text/plain": {
@@ -3933,6 +3951,7 @@
     },
     "/web/routes/test": {
       "post": {
+        "operationId": "post_web_routes_test",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3966,6 +3985,7 @@
     },
     "/web/schema": {
       "get": {
+        "operationId": "get_web_schema",
         "responses": {
           "200": {
             "description": "OK"
@@ -3982,6 +4002,7 @@
     },
     "/web/services/status": {
       "get": {
+        "operationId": "get_web_services_status",
         "responses": {
           "200": {
             "content": {
@@ -4005,6 +4026,7 @@
     },
     "/web/stats": {
       "get": {
+        "operationId": "get_web_stats",
         "responses": {
           "200": {
             "content": {
@@ -4028,6 +4050,7 @@
     },
     "/web/stats/stream": {
       "get": {
+        "operationId": "get_web_stats_stream",
         "responses": {
           "200": {
             "description": "OK"
@@ -4044,6 +4067,7 @@
     },
     "/web/tls/acme/renew": {
       "post": {
+        "operationId": "post_web_tls_acme_renew",
         "requestBody": {
           "content": {
             "text/plain": {
@@ -4069,6 +4093,7 @@
     },
     "/web/tls/status": {
       "get": {
+        "operationId": "get_web_tls_status",
         "responses": {
           "200": {
             "content": {
@@ -4092,6 +4117,7 @@
     },
     "/web/upstreams/test": {
       "post": {
+        "operationId": "post_web_upstreams_test",
         "requestBody": {
           "content": {
             "application/json": {
@@ -4120,6 +4146,11 @@
   "security": [
     {
       "bearer": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "/"
     }
   ]
 }

@@ -26,7 +26,7 @@
 - [x] เพิ่ม field ใหม่ใน `src/config.rs` แล้วไม่ regenerate → CI แดง (`generated_documents_are_up_to_date` + job `schema`)
 - [x] `webui` build ผ่านด้วย types ที่ generate มา ไม่มี `any` ใน API layer (`config.ts` ใช้ alias ของ `api.d.ts`)
 - [x] `GET /web/schema` คืน JSON Schema ที่ validate `Prx.toml` ปัจจุบันผ่าน (`npm run schema:check`)
-- [~] `docs/openapi.json` มี 21 path ที่ทดสอบว่า route จริง; ยังไม่ได้เปิดใน Swagger UI จริง
+- [x] `docs/openapi.json` เป็น OpenAPI 3.1 ผ่าน `redocly lint` (0 error) และทุก path ทดสอบว่า route จริง; ไม่ได้เปิดใน Swagger UI ด้วยมือ
 
 ## Out of scope
 
