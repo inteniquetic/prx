@@ -1,0 +1,66 @@
+# Config for `npm run smoke`. It carries a block for every part of a service
+# and route that the UI writes back, so the TOML round trip at the end of the
+# smoke has something to lose. The smoke saves over the file it runs against:
+# copy this somewhere first.
+#
+#   cp webui/scripts/smoke.toml /tmp/prx-smoke.toml
+#   PRX_CONFIG=/tmp/prx-smoke.toml cargo run --release
+
+[server]
+listen = ["127.0.0.1:18080"]
+
+[observability]
+prometheus_listen = "127.0.0.1:9090"
+
+[[service]]
+name = "api"
+lb = "least_conn"
+max_retries = 2
+retry_backoff_ms = 50
+retry_budget_ratio = 0.5
+retry_budget_window_ms = 5000
+retry_idempotent_only = false
+request_timeout_ms = 1500
+upstream_h2 = "auto"
+
+[service.health_check]
+enabled = true
+kind = "http"
+path = "/ping"
+interval_ms = 5000
+expected_status = [200, 204]
+
+[service.sticky]
+enabled = true
+mode = "header"
+name = "x-session"
+
+[service.circuit_breaker]
+enabled = true
+consecutive_failures = 5
+open_ms = 10000
+
+[[service.upstream]]
+addr = "127.0.0.1:19001"
+weight = 3
+connect_timeout_ms = 500
+
+[[service.upstream]]
+addr = "127.0.0.1:19002"
+
+[[route]]
+name = "api"
+service = "api"
+path_prefix = "/api"
+
+[route.request_headers.set]
+"x-forwarded-by" = "prx"
+
+[route.rate_limit]
+enabled = true
+requests_per_second = 50
+
+[[route]]
+name = "default"
+service = "api"
+is_default = true
