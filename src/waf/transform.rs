@@ -192,6 +192,14 @@ fn transform_remove_whitespace<'a>(input: Cow<'a, [u8]>) -> Cow<'a, [u8]> {
 
 fn transform_compress_whitespace<'a>(input: Cow<'a, [u8]>) -> Cow<'a, [u8]> {
     let is_ws = |b: u8| matches!(b, b' ' | 9 | b'\r' | b'\n' | 0x0b | 0x0c);
+    // Nothing to compress unless a whitespace byte is not a lone space.
+    let changes = input
+        .iter()
+        .enumerate()
+        .any(|(i, &b)| is_ws(b) && (b != b' ' || input.get(i + 1).is_some_and(|&n| is_ws(n))));
+    if !changes {
+        return input;
+    }
     let mut out = Vec::with_capacity(input.len());
     let mut in_ws = false;
     for &b in input.as_ref() {
@@ -264,6 +272,14 @@ fn transform_remove_comments_char<'a>(input: Cow<'a, [u8]>) -> Cow<'a, [u8]> {
 }
 
 fn transform_normalize_path<'a>(input: Cow<'a, [u8]>, win: bool) -> Cow<'a, [u8]> {
+    // Only a dot segment, a doubled slash, or (for the Windows form) a
+    // backslash can change a path.
+    let touches = input.contains(&b'.')
+        || input.windows(2).any(|w| w == b"//")
+        || (win && input.contains(&b'\\'));
+    if !touches {
+        return input;
+    }
     let mut s = input.to_vec();
     if win {
         for b in &mut s {
@@ -602,6 +618,32 @@ mod tests {
         assert_eq!(
             transform("hexDecode", Cow::Borrowed(b"414243")).as_ref(),
             b"ABC"
+        );
+    }
+
+    #[test]
+    fn unchanged_input_is_not_copied() {
+        let borrowed = |out: Cow<'_, [u8]>| matches!(out, Cow::Borrowed(_));
+        assert!(borrowed(transform(
+            "compresswhitespace",
+            Cow::Borrowed(b"a b c")
+        )));
+        assert!(borrowed(transform(
+            "normalizepath",
+            Cow::Borrowed(b"/a/b/c/")
+        )));
+        // ...and changed input still is.
+        assert_eq!(
+            transform("compresswhitespace", Cow::Borrowed(b"a  b\tc")).as_ref(),
+            b"a b c"
+        );
+        assert_eq!(
+            transform("normalizepath", Cow::Borrowed(b"/a//b/./c/../d")).as_ref(),
+            b"/a/b/d"
+        );
+        assert_eq!(
+            transform("normalizepathwin", Cow::Borrowed(b"a\\b\\..\\c")).as_ref(),
+            b"a/c"
         );
     }
 }

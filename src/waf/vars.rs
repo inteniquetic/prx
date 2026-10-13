@@ -370,6 +370,17 @@ pub fn values<'a>(trx: &'a Transaction<'a>, collection: &str, key: &Key) -> Vec<
                 .unwrap_or_default();
             owned(pairs, key, name.ends_with("_NAMES"))
         }
+        // The overwhelmingly common `TX:name` is one lookup, not a copy of the
+        // whole collection that is then filtered down to one entry.
+        "TX" if matches!(key, Key::Name(_)) => {
+            let Key::Name(wanted) = key else {
+                unreachable!()
+            };
+            match trx.get_var(wanted) {
+                Some(value) => vec![(wanted.clone(), Cow::Owned(value.into_bytes()))],
+                None => Vec::new(),
+            }
+        }
         "TX" => {
             let pairs = trx
                 .tx

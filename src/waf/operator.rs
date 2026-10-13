@@ -23,6 +23,10 @@ use super::rule::{Operator, Rx};
 static PM_CACHE: Lazy<RwLock<HashMap<String, AhoCorasick>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
+/// `@pm` automata by the word list as written.
+static PM_WORDS: Lazy<RwLock<HashMap<String, AhoCorasick>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
 /// Evaluates an operator against an input byte slice.
 ///
 /// Returns true if the operator matches (taking `negated` into account).
@@ -133,12 +137,12 @@ fn eval_core(
         }
         "pm" => {
             // The automaton is built once per distinct word list, not per call.
-            let key = format!("pm\0{}", op.argument);
-            let cached = PM_CACHE.read().ok().and_then(|c| c.get(&key).cloned());
+            let key = op.argument.as_str();
+            let cached = PM_WORDS.read().ok().and_then(|c| c.get(key).cloned());
             let ac = cached.or_else(|| {
                 let words: Vec<&str> = op.argument.split_whitespace().collect();
                 let ac = build_pm(&words)?;
-                PM_CACHE.write().ok()?.insert(key, ac.clone());
+                PM_WORDS.write().ok()?.insert(key.to_string(), ac.clone());
                 Some(ac)
             });
             ac.is_some_and(|ac| ac.is_match(input))
@@ -147,12 +151,15 @@ fn eval_core(
             let path_str = expand_macros(&op.argument, resolver);
             // Keyed by what the rule wrote, so a hit skips the `exists()` probes
             // that resolving the path would make on every request.
-            let key = format!("file\0{path_str}\0{data_dir:?}");
-            let cached = PM_CACHE.read().ok().and_then(|c| c.get(&key).cloned());
+            let key: std::borrow::Cow<str> = match data_dir {
+                None => std::borrow::Cow::Borrowed(&*path_str),
+                Some(dir) => format!("{}\0{path_str}", dir.display()).into(),
+            };
+            let cached = PM_CACHE.read().ok().and_then(|c| c.get(&*key).cloned());
             let ac = cached.or_else(|| {
                 let path = resolve_data_path(&path_str, data_dir);
                 let ac = get_or_load_pm_file(&path)?;
-                PM_CACHE.write().ok()?.insert(key, ac.clone());
+                PM_CACHE.write().ok()?.insert(key.into_owned(), ac.clone());
                 Some(ac)
             });
             ac.is_some_and(|ac| ac.is_match(input))

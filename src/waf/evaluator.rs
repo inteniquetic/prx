@@ -237,6 +237,14 @@ impl Evaluator {
         trx: &'a Transaction<'a>,
         capture: bool,
     ) -> bool {
+        // A plain @rx has no use for capture groups, and asking the regex engine
+        // for them costs a slot allocation per call.
+        if !capture
+            && operator.is_rx()
+            && let Some(rx) = rx
+        {
+            return rx.regex.is_match(value.as_ref()) != operator.negated;
+        }
         let mut captures: [Option<String>; 10] = Default::default();
         let matched = crate::waf::operator::evaluate_operator(
             operator,
