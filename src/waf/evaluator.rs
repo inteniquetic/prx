@@ -151,24 +151,46 @@ impl Evaluator {
                 capture,
             );
         }
-        let mut matched = false;
-        for target in &link.targets {
-            // Use the caching extractor
-            let extracted = crate::waf::vars::get_variable(trx, &target.collection, &target.key);
-            // Apply transformations
-            let transformed = crate::waf::transform::apply_chain(
-                &self.ruleset.transform_chains[link.transforms],
-                extracted,
-            );
-
-            // Evaluate operator
-            if self.evaluate_operator(&link.operator, link.rx.as_ref(), transformed, trx, capture) {
-                matched = !target.exclude;
-                break;
-            } else if target.exclude {
+        // Exclusions (`!ARGS:id`) remove values from the same collection.
+        let excluded = |collection: &str, name: &str| {
+            link.targets.iter().any(|t| {
+                t.exclude
+                    && t.collection.eq_ignore_ascii_case(collection)
+                    && match &t.key {
+                        crate::waf::rule::Key::Name(n) => n.eq_ignore_ascii_case(name),
+                        crate::waf::rule::Key::Regex(rx) => rx.regex.is_match(name.as_bytes()),
+                        crate::waf::rule::Key::All => true,
+                    }
+            })
+        };
+        for target in link.targets.iter().filter(|t| !t.exclude) {
+            let mut found = crate::waf::vars::values(trx, &target.collection, &target.key);
+            found.retain(|(name, _)| !excluded(&target.collection, name));
+            if target.count {
+                // `&ARGS` is how many there are, and is evaluated even at zero.
+                let count = Cow::Owned(found.len().to_string().into_bytes());
+                if self.evaluate_operator(&link.operator, link.rx.as_ref(), count, trx, capture) {
+                    return true;
+                }
+                continue;
+            }
+            for (_, value) in found {
+                let transformed = crate::waf::transform::apply_chain(
+                    &self.ruleset.transform_chains[link.transforms],
+                    value,
+                );
+                if self.evaluate_operator(
+                    &link.operator,
+                    link.rx.as_ref(),
+                    transformed,
+                    trx,
+                    capture,
+                ) {
+                    return true;
+                }
             }
         }
-        matched
+        false
     }
 
     fn resolve_macro(trx: &Transaction, key: &str) -> Option<String> {

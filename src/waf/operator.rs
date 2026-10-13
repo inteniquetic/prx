@@ -140,12 +140,14 @@ fn eval_core(
                 false
             }
         }
-        "validateByteRange" => validate_byte_range(input, &op.argument),
+        // The three validate* operators match on a violation, as in ModSecurity:
+        // a rule such as 920270 fires on a byte outside the range.
+        "validateByteRange" => !validate_byte_range(input, &op.argument),
         "ipMatch" => ip_match(input, &expand_macros(&op.argument, resolver)),
         "detectSQLi" => libinjectionrs::detect_sqli(input).is_injection(),
         "detectXSS" => libinjectionrs::detect_xss(input).is_injection(),
-        "validateUrlEncoding" => validate_url_encoding(input),
-        "validateUtf8Encoding" => std::str::from_utf8(input).is_ok(),
+        "validateUrlEncoding" => !validate_url_encoding(input),
+        "validateUtf8Encoding" => std::str::from_utf8(input).is_err(),
         _ => false,
     }
 }
@@ -554,5 +556,24 @@ mod tests {
             captures,
             None
         ));
+    }
+
+    #[test]
+    fn validate_operators_match_on_a_violation() {
+        let run = |name: &str, arg: &str, input: &[u8]| {
+            let op = Operator {
+                name: name.into(),
+                negated: false,
+                argument: arg.into(),
+            };
+            let captures = &mut [None, None, None, None, None, None, None, None, None, None];
+            evaluate_operator(&op, None, input, |_| None, captures, None)
+        };
+        assert!(!run("validateByteRange", "1-255", b"plain text"));
+        assert!(run("validateByteRange", "1-255", b"a\0b"));
+        assert!(!run("validateUrlEncoding", "", b"a%41b"));
+        assert!(run("validateUrlEncoding", "", b"a%4"));
+        assert!(!run("validateUtf8Encoding", "", "ก".as_bytes()));
+        assert!(run("validateUtf8Encoding", "", &[0xff, 0xfe]));
     }
 }

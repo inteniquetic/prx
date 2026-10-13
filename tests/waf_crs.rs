@@ -225,3 +225,55 @@ fn every_crs_file_survives_a_round_trip() {
         );
     }
 }
+
+/// CRS end to end on requests that only a working extractor can tell apart:
+/// a browser-shaped request must pass and a SQLi must not. Before the
+/// extractor covered REQUEST_LINE/REQUEST_URI/&TX and the validate* operators
+/// matched on violations, the first was denied by 920270 and the second let
+/// through because the paranoia-level gate skipped every detection file.
+#[test]
+fn crs_allows_a_browser_request_and_denies_sqli() {
+    use pingora::http::RequestHeader;
+    use prx::waf::evaluator::{Evaluator, WafDecision};
+    use prx::waf::vars::Transaction;
+    use std::sync::Arc;
+
+    let Some(root) = crs() else { return };
+    let waf = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/waf");
+    let loaded = load(&[
+        waf.join("main.conf"),
+        root.join("crs-setup.conf"),
+        root.join("rules/*.conf"),
+    ]);
+    let evaluator = Evaluator::new(Arc::new(loaded.ruleset));
+    let verdict = |uri: &str| {
+        let mut head = RequestHeader::build("GET", uri.as_bytes(), None).unwrap();
+        for (name, value) in [
+            ("Host", "bench.local"),
+            (
+                "User-Agent",
+                "Mozilla/5.0 (X11; Linux x86_64) Chrome/126.0 Safari/537.36",
+            ),
+            ("Accept", "text/html,*/*;q=0.8"),
+            ("Accept-Language", "en-US,en;q=0.9"),
+            ("Cookie", "sid=9f8a7c6b5d4e3f2a; theme=dark"),
+        ] {
+            head.insert_header(name, value).unwrap();
+        }
+        let trx = Transaction::new(&head, b"");
+        let mut decision = WafDecision::Allow;
+        for phase in 0..2 {
+            decision = evaluator.evaluate_phase(phase, &trx);
+            if decision != WafDecision::Allow {
+                break;
+            }
+        }
+        decision
+    };
+    assert_eq!(verdict("/1k"), WafDecision::Allow);
+    assert_eq!(verdict("/search?q=hello+world"), WafDecision::Allow);
+    assert_eq!(
+        verdict("/1k?q=1%27%20UNION%20SELECT%20password%20FROM%20users--"),
+        WafDecision::Deny(403)
+    );
+}
