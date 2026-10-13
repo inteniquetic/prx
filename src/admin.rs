@@ -3657,6 +3657,62 @@ is_default = true
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
+    #[tokio::test]
+    async fn route_save_keeps_comments_and_untouched_sections_byte_for_byte() {
+        // A hand-written file: comments above sections and keys, and sections
+        // (headers, compression, retry_budget, health_check) that the struct
+        // would only write back with defaults if the file were re-rendered.
+        const COMMENTED: &str = r#"# The proxy everything else hangs off.
+[server]
+# Two ports, because the load balancer in front needs both.
+listen = ["127.0.0.1:18080"]
+
+[observability]
+# Info keeps the access log readable.
+log_level = "info"
+access_log = true
+
+[[service]]
+name = "api"
+
+[[service.upstream]]
+addr = "127.0.0.1:9000"
+weight = 1
+
+[[route]]
+# Everything under the root goes to the api service.
+name = "api"
+service = "api"
+path_prefix = "/"
+is_default = true
+"#;
+        let (_dir, config_path) = seeded(COMMENTED);
+        let state = admin_state(&config_path);
+
+        let body = serde_json::json!({
+            "name": "api",
+            "service": "api",
+            "path_prefix": "/v2",
+            "is_default": true,
+        })
+        .to_string();
+        let response =
+            update_route(State(state), AxumPath("api".to_string()), Body::from(body)).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{}",
+            response_text(response).await
+        );
+
+        let after = fs::read_to_string(&config_path).expect("config should be readable");
+        assert_eq!(
+            after,
+            COMMENTED.replace("path_prefix = \"/\"", "path_prefix = \"/v2\""),
+            "a route save must change only the key it was asked to change"
+        );
+    }
+
     fn sample_config(listen: &str) -> String {
         format!(
             r#"[server]
