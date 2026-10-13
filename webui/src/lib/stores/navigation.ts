@@ -84,8 +84,7 @@ export const navItems: NavItem[] = [
     labelKey: 'nav.audit',
     icon: ScrollTextIcon,
     path: '/audit',
-    section: 'operations',
-    pending: 'T206'
+    section: 'operations'
   }
 ];
 

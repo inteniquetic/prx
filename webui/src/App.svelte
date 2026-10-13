@@ -5,7 +5,7 @@
   import { get } from 'svelte/store';
   import AppShell from './lib/components/layout/AppShell.svelte';
   import DashboardPage from './lib/components/pages/DashboardPage.svelte';
-  import PlaceholderPage from './lib/components/pages/PlaceholderPage.svelte';
+  import AuditPage from './lib/components/pages/AuditPage.svelte';
   import RoutesPage from './lib/components/pages/RoutesPage.svelte';
   import ServicesPage from './lib/components/pages/ServicesPage.svelte';
   import SettingsPage from './lib/components/pages/SettingsPage.svelte';
@@ -346,12 +346,7 @@
     {:else if $currentPage === 'tls'}
     <TlsPage onapplied={() => void reloadFromServer()} />
     {:else if $currentPage === 'audit'}
-    <PlaceholderPage
-      title={$t('audit.title')}
-      subtitle={$t('audit.subtitle')}
-      task="T206"
-      description={$t('audit.body')}
-    />
+    <AuditPage onapplied={() => void reloadFromServer()} />
     {:else if $currentPage === 'settings'}
     <SettingsPage {reviewRequest} onapplied={() => void reloadFromServer()} />
     {/if}
