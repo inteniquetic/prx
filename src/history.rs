@@ -32,6 +32,24 @@ pub fn fingerprint(bytes: &[u8]) -> String {
     format!("{:x}-{:016x}", bytes.len(), hasher.finish())
 }
 
+/// Fingerprint of the config text the running config was last built from, by
+/// whoever built it (the admin API or the file watcher). The watcher uses it to
+/// not reload what is already live: a second reload would rebuild the runtime
+/// and with it every circuit breaker and health state.
+static APPLIED: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn mark_applied(bytes: &[u8]) {
+    if let Ok(mut applied) = APPLIED.lock() {
+        *applied = Some(fingerprint(bytes));
+    }
+}
+
+pub fn is_applied(bytes: &[u8]) -> bool {
+    APPLIED
+        .lock()
+        .is_ok_and(|applied| applied.as_deref() == Some(fingerprint(bytes).as_str()))
+}
+
 fn private_file(path: &Path) -> std::io::Result<fs::File> {
     let mut options = OpenOptions::new();
     options.create(true).append(true);

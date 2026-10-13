@@ -43,10 +43,10 @@
 
 ## Acceptance criteria
 
-- [ ] จำลอง apply ล้มเหลวกลางทาง → runtime ยังใช้ config เดิม ไฟล์เดิมไม่ถูกแตะ traffic ไม่ขาด
+- [x] จำลอง apply ล้มเหลวกลางทาง → runtime ยังใช้ config เดิม ไฟล์เดิมไม่ถูกแตะ traffic ไม่ขาด
 - [x] apply สองครั้งพร้อมกัน → ครั้งหลังได้ 409 ไม่ใช่เขียนทับเงียบๆ (ต้องส่ง `If-Match` มา)
-- [ ] apply จาก API ไม่ทำให้เกิด reload ซ้ำจาก watcher (เทสต์นับจำนวน reload)
-- [ ] ระหว่าง apply มี load ยิงอยู่ → error rate = 0
+- [x] apply จาก API ไม่ทำให้เกิด reload ซ้ำจาก watcher (เทสต์นับจำนวน reload)
+- [x] ระหว่าง apply มี load ยิงอยู่ → error rate = 0
 
 ## Out of scope
 

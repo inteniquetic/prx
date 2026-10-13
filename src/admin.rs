@@ -156,12 +156,24 @@ impl ConfigAdmin {
             )
         })?;
 
-        Self::atomic_replace(&self.config_path, toml_text.as_bytes()).with_context(|| {
-            format!(
-                "failed to atomically write config to {}",
-                self.config_path.to_string_lossy()
-            )
-        })?;
+        // Judge the new text before the file is touched at all: the file
+        // watcher and a crash both see whatever is on disk.
+        PrxConfig::from_text_at(toml_text, &self.config_path)?;
+
+        // Marked before the rename: the watcher's event can land before this
+        // thread gets any further, and it must find these bytes already live.
+        crate::history::mark_applied(toml_text.as_bytes());
+        if let Err(err) = Self::atomic_replace(&self.config_path, toml_text.as_bytes())
+            .with_context(|| {
+                format!(
+                    "failed to atomically write config to {}",
+                    self.config_path.to_string_lossy()
+                )
+            })
+        {
+            crate::history::mark_applied(&previous_bytes);
+            return Err(err);
+        }
 
         match PrxConfig::from_file(&self.config_path) {
             Ok(verified) => {
@@ -170,6 +182,7 @@ impl ConfigAdmin {
                 Ok(())
             }
             Err(err) => {
+                crate::history::mark_applied(&previous_bytes);
                 let rollback_result = Self::atomic_replace(&self.config_path, &previous_bytes)
                     .with_context(|| {
                         format!(
@@ -248,13 +261,19 @@ impl ConfigAdmin {
             }
         };
 
-        // Atomically write the new config
-        Self::atomic_replace(&self.config_path, toml_text.as_bytes()).with_context(|| {
-            format!(
-                "failed to atomically write config to {}",
-                self.config_path.to_string_lossy()
-            )
-        })?;
+        // Atomically write the new config. Marked first, for the watcher.
+        crate::history::mark_applied(toml_text.as_bytes());
+        if let Err(err) = Self::atomic_replace(&self.config_path, toml_text.as_bytes())
+            .with_context(|| {
+                format!(
+                    "failed to atomically write config to {}",
+                    self.config_path.to_string_lossy()
+                )
+            })
+        {
+            crate::history::mark_applied(&previous_for_history);
+            return Err(err);
+        }
 
         // Update the active config
         active_config.store(Arc::new(RuntimeConfig::from_config(config)));

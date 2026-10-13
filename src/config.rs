@@ -120,9 +120,16 @@ impl PrxConfig {
     pub fn from_file(path: &Path) -> anyhow::Result<Self> {
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read config file at {}", path.to_string_lossy()))?;
+        Self::from_text_at(&content, path)
+    }
+
+    /// [`Self::from_file`] for text that is not on disk yet: what a write
+    /// would produce, judged as if it lived at `path`, so a relative
+    /// `rules_file` resolves the same way.
+    pub fn from_text_at(content: &str, path: &Path) -> anyhow::Result<Self> {
         // The base directory has to be known before validation: `check_waf`
         // resolves a relative rules_file against it.
-        let mut config = Self::parse_toml(&content).with_context(|| {
+        let mut config = Self::parse_toml(content).with_context(|| {
             format!(
                 "failed to parse TOML config from {}",
                 path.to_string_lossy()
