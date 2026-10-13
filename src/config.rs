@@ -368,7 +368,7 @@ impl PrxConfig {
                     ("idle_timeout_ms", upstream.idle_timeout_ms),
                 ] {
                     if let Some(ms) = value.filter(|ms| *ms > HIGH_TIMEOUT_MS) {
-                        out.push(timeout_warning(&name, upstream_at(field), field, ms));
+                        out.push(timeout_warning(name, upstream_at(field), field, ms));
                     }
                 }
             }
