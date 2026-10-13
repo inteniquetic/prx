@@ -38,5 +38,6 @@
 - `bench/results/baseline/micro-bench.json` — baseline ของ criterion (25 benchmarks)
 - README หลัก link ไป `docs/BENCHMARKS.md`
 
-ยังทำไม่ได้: ตัวเลข prx vs nginx vs haproxy — สภาพแวดล้อมที่พัฒนาไม่มี Docker
-ต้องรัน `scripts/bench.sh --all <scenario>` บนเครื่อง reference แล้ว copy ผลเข้า `bench/results/baseline/`
+ทำเพิ่ม: prx vs nginx vs haproxy ที่ h1-keepalive (20 วินาที, รอบเดียว) พร้อมสเปกเครื่อง
+
+ยังไม่ได้ทำ: h1-close (`bench.sh prx h1-close` ค้าง ยังไม่รู้สาเหตุ), h2, many-conns, large-body, RSS vs 1k/10k/50k

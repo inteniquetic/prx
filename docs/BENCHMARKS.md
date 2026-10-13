@@ -3,14 +3,14 @@
 เอกสารนี้คือแหล่งอ้างอิงเดียวของคำเคลมเรื่องประสิทธิภาพทั้งหมดของ prx
 ถ้าตัวเลขไหนไม่มีในนี้ = ยังไม่ได้วัด ห้ามเอาไปเคลม
 
-สถานะ: [T002](tasks/T002-baseline-report.md) — **micro-benchmark วัดแล้ว / proxy-vs-proxy ยังไม่ได้วัด**
+สถานะ: [T002](tasks/T002-baseline-report.md) — **micro-benchmark วัดแล้ว / proxy-vs-proxy วัดแล้วเฉพาะ h1-keepalive**
 อัปเดตล่าสุด: หลัง [T101](tasks/T101-zero-alloc-request-path.md) + [T102](tasks/T102-route-matcher-index.md)
 
 ## สรุปสั้น
 
 | สิ่งที่อยากรู้ | สถานะ |
 |---|---|
-| prx เร็วกว่า nginx/haproxy ไหม | **ยังไม่รู้** — ต้องรัน `scripts/bench.sh --all` บนเครื่องที่มี Docker |
+| prx เร็วกว่า nginx/haproxy ไหม | **ยังไม่ — ช้ากว่าที่ h1-keepalive** (38k vs 69k / 62k rps) วัดแค่ scenario เดียว ดู [§3](#3-proxy-vs-nginx-vs-haproxy-วัดแล้วเฉพาะ-h1-keepalive) |
 | prx + WAF เร็วกว่า nginx + ModSecurity / Coraza ไหม | **ยังไม่รู้** — harness และคู่แข่งพร้อมแล้ว ([§7](#7-waf-prx--waf-vs-nginx--modsecurity-vs-caddy--coraza-ยังไม่ได้วัด)) รอ WAF ของ prx (T505–T507) และเครื่องอ้างอิง |
 | route matching แพงแค่ไหน | วัดแล้ว: 55–84 ns ต่อ request ไม่ว่าจะมี 10 หรือ 1000 routes |
 | ปัญหา wildcard ที่เจอตอนแรก | แก้แล้ว — 59.3 µs → 81.9 ns (724×) |
@@ -95,9 +95,24 @@ host เข้า hash map (FxHash) แล้ว path เดินบน radix t
 ถ้าอยากให้ UI ตอบสนองเร็วขึ้นตอนกด Save ที่ config ใหญ่มาก ต้องไปดูตรง TOML parse
 (เกี่ยวกับ [T204](tasks/T204-atomic-apply-reload.md) และ [T307](tasks/T307-toml-editor-diff-apply.md))
 
-## 3. Proxy vs nginx vs haproxy (ยังไม่ได้วัด)
+## 3. Proxy vs nginx vs haproxy (วัดแล้วเฉพาะ h1-keepalive)
 
-harness พร้อมแล้ว (`bench/`) แต่ยังไม่มีตัวเลข เพราะสภาพแวดล้อมที่พัฒนาอยู่ไม่มี Docker
+วัดที่ commit `2dc517a`, 64 connections, **20 วินาที** (warmup 5 วินาที, สั้นกว่าค่ามาตรฐาน 60 วินาที), รันครั้งเดียวต่อ target จึงยังไม่รู้ความแปรปรวนระหว่างรอบ
+scenario อื่น (h1-close, h2, many-conns, large-body) **ยังไม่ได้วัด** — `bench.sh prx h1-close` ค้างเกิน 30 นาทีและยังไม่ได้หาสาเหตุ
+
+### Reference machine
+
+| Field | Value | Source command |
+|---|---|---|
+| CPU model | Apple M4 Pro | `sysctl -n machdep.cpu.brand_string` |
+| Core count | 12 | `sysctl -n hw.ncpu` |
+| RAM | 25769803776 bytes (~24 GiB) | `sysctl -n hw.memsize` |
+| macOS version | macOS 26.6.2 (build 25G83) | `sw_vers` |
+| Docker version | Docker Engine 29.4.0 (client 29.4.0, context: orbstack) | `docker version` |
+| OrbStack VM cores | 12 | `docker info \| grep -E 'CPUs\|Total Memory'` |
+| OrbStack VM RAM | 11.73 GiB | `docker info \| grep -E 'CPUs\|Total Memory'` |
+| oha version | 1.16.0 | `oha --version` |
+| git sha | 2dc517a | fixed per task spec |
 
 วิธีเติมตารางนี้:
 
@@ -110,12 +125,17 @@ cp bench/results/*-<sha>.json bench/results/baseline/
 
 | Scenario | Metric | prx | nginx | haproxy |
 |---|---|---|---|---|
-| h1-keepalive | RPS | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่วัด_ |
-| h1-keepalive | p99 | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่วัด_ |
-| h1-keepalive | CPU µs/req | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่วัด_ |
+| h1-keepalive | RPS | 38,250 | 69,133 | 61,962 |
+| h1-keepalive | p50 / p99 / p999 (ms) | 1.60 / 3.30 / 5.27 | 0.48 / 7.44 / 10.71 | 0.49 / 5.77 / 14.90 |
+| h1-keepalive | peak RSS | 31.0 MB | 38.2 MB | 20.5 MB |
+| h1-keepalive | CPU µs/req | 51.1 | 26.7 | 27.7 |
 | many-conns (10k) | peak RSS | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่วัด_ |
 | h2 | RPS | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่วัด_ |
 | large-body (64KB) | RPS | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่วัด_ |
+
+**อ่านผล h1-keepalive:** prx ช้ากว่า nginx 45% และ haproxy 38% ในแง่ RPS และใช้ CPU ต่อ request มากกว่า ~1.9× — เป้า "RPS ต่อ core เท่าหรือดีกว่า" **ยังไม่ถึง**
+ข้อดีที่เห็น: p99/p999 ของ prx ต่ำสุด (3.30 ms เทียบ 7.44 / 5.77) แต่ p50 สูงกว่า 3 เท่า — สอดคล้องกับ CPU ที่ถูกใช้เต็ม (97.8% เทียบ 82–88%) คืออยู่ที่ขอบ saturation
+ยังไม่ได้ระบุสาเหตุ ต้องทำ profile ก่อน ([PROFILING.md](PROFILING.md))
 
 **เป้าหมายที่ตั้งไว้** (จาก `docs/tasks/README.md`): RPS ต่อ core เท่าหรือดีกว่า,
 p99 ดีกว่า ≥ 20% ตอน connection reuse สูง, peak RSS ที่ 10k conns ต่ำกว่า ≥ 30%
