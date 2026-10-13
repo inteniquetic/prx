@@ -38,10 +38,10 @@ export const validationIssues = derived(configStore, ($config) => {
     }
     // ACME ออก cert ให้เอง จึงไม่ต้องมีไฟล์ cert/key
     const acmeOn = $config.server.tls.acme?.enabled === true;
-    if (!acmeOn && !$config.server.tls.cert_path.trim()) {
+    if (!acmeOn && !$config.server.tls.cert_path?.trim()) {
       issues.push('server.tls.cert_path ห้ามว่าง (หรือเปิด server.tls.acme)');
     }
-    if (!acmeOn && !$config.server.tls.key_path.trim()) {
+    if (!acmeOn && !$config.server.tls.key_path?.trim()) {
       issues.push('server.tls.key_path ห้ามว่าง (หรือเปิด server.tls.acme)');
     }
     if (acmeOn && $config.server.tls.acme!.domains.length === 0) {

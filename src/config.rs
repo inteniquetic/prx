@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct PrxConfig {
     #[serde(default)]
     pub server: ServerConfig,
@@ -33,7 +33,7 @@ pub struct PrxConfig {
 }
 
 /// The `[waf]` block. Absent means no rules, so the WAF does nothing.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct WafConfig {
     /// A SecLang rules file. A relative path resolves against the directory
     /// of the config file.
@@ -102,13 +102,14 @@ impl WafConfig {
 /// by `kind`: the registry checks it, not this struct. Keeping it opaque here
 /// is what stops every new plugin from having to add a field to the core
 /// config type.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct PluginConfig {
     pub name: String,
     pub kind: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default = "empty_table")]
+    #[schemars(with = "serde_json::Value")]
     pub config: toml::Value,
 }
 
@@ -913,7 +914,7 @@ impl PrxConfig {
 
 /// How much a [`ConfigIssue`] matters: an error blocks the apply, a warning
 /// does not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum IssueSeverity {
     Error,
@@ -922,7 +923,7 @@ pub enum IssueSeverity {
 
 /// One problem found in a config, addressed by field path so the editor can
 /// turn it into a mark on the right line (T203).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ConfigIssue {
     pub severity: IssueSeverity,
     /// Stable identifier, so the UI can translate the message.
@@ -1046,7 +1047,9 @@ pub fn extract_variables(value: &str) -> Vec<String> {
 ///
 /// `none` is only legal on a loopback listener: a control plane that can
 /// rewrite the proxy's config must not be reachable without a credential.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum AdminAuth {
     #[default]
@@ -1061,7 +1064,7 @@ pub enum AdminAuth {
 /// point at a file (or, when unset, the `PRX_ADMIN_TOKEN` / `PRX_ADMIN_BASIC`
 /// environment variables), so a config that is shown, diffed or committed
 /// cannot carry the secret.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct AdminConfig {
     #[serde(default = "default_admin_listen")]
     pub listen: String,
@@ -1101,7 +1104,7 @@ impl Default for AdminConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct ServerConfig {
     #[serde(default = "default_listen")]
     pub listen: Vec<String>,
@@ -1158,7 +1161,7 @@ fn default_ready_path() -> String {
     "/readyz".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct TlsConfig {
     pub listen: String,
     /// Single-certificate form, kept so existing configs keep working. Prefer
@@ -1178,7 +1181,7 @@ pub struct TlsConfig {
 }
 
 /// Automatic certificates over ACME (Let's Encrypt and compatible servers).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct AcmeConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -1248,7 +1251,7 @@ impl TlsConfig {
 }
 
 /// One certificate and the domains it answers for.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct TlsCertConfig {
     /// Domains this certificate serves. `*.example.com` also covers
     /// `example.com`. Left empty, the names are read from the certificate
@@ -1262,7 +1265,7 @@ pub struct TlsCertConfig {
     pub is_default: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct ObservabilityConfig {
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -1290,7 +1293,7 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct ServiceConfig {
     #[serde(default = "default_service_name")]
     pub name: String,
@@ -1344,7 +1347,7 @@ pub struct ServiceConfig {
 /// upstream ring, so adding or removing an upstream reshuffles some clients.
 /// Every mode falls back to normal load balancing when the chosen upstream is
 /// unavailable, so affinity never costs availability.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct StickyConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -1369,7 +1372,9 @@ impl Default for StickyConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum StickyMode {
     /// prx sets a cookie naming the upstream and honors it on later requests.
@@ -1395,7 +1400,7 @@ fn default_sticky_ttl_s() -> u64 {
 /// requests have already failed, so users see the errors. An active probe finds
 /// the same failure before a request does, and proves an upstream is healthy
 /// again before sending traffic back to it.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct HealthCheckConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -1434,7 +1439,9 @@ impl Default for HealthCheckConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum HealthCheckKind {
     /// Open a TCP connection and close it again.
@@ -1472,7 +1479,9 @@ fn default_expected_status() -> Vec<u16> {
 ///
 /// gRPC needs `always`: it requires end-to-end HTTP/2 because it carries its
 /// status in trailers, which HTTP/1.1 cannot express.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum UpstreamH2 {
     /// HTTP/1.1 only.
@@ -1551,7 +1560,7 @@ fn default_retry_budget_window_ms() -> u64 {
 /// `set` replaces any existing value, `add` appends another value, and
 /// `remove` drops the header. They are applied in that order, so a rule set
 /// can normalize a header and then append to it.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct HeaderRules {
     #[serde(default)]
     pub set: std::collections::BTreeMap<String, String>,
@@ -1571,7 +1580,7 @@ impl HeaderRules {
 ///
 /// prx uses pingora's streaming compressor, so a large response is compressed
 /// as it flows through rather than being buffered first.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct CompressionConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -1601,7 +1610,7 @@ fn default_compression_level() -> u32 {
 }
 
 /// Header rules that apply to every route, applied before the route's own.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct HeadersConfig {
     #[serde(default)]
     pub request: HeaderRules,
@@ -1609,7 +1618,7 @@ pub struct HeadersConfig {
     pub response: HeaderRules,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct RouteConfig {
     #[serde(default = "default_route_name")]
     pub name: String,
@@ -1647,7 +1656,7 @@ pub struct RouteConfig {
 ///
 /// Even a one-second TTL turns a burst of identical requests into a single
 /// upstream fetch, which is where most of the benefit comes from.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct CacheConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -1729,7 +1738,7 @@ fn default_cache_coalesce_wait_ms() -> u64 {
 /// Cheap enough to leave on: one hash and a short lock on a sharded bucket per
 /// request, with a hard cap on how many keys are tracked so a flood of unique
 /// keys cannot grow memory without bound.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct RateLimitConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -1770,7 +1779,7 @@ impl Default for RateLimitConfig {
 }
 
 /// Caps how many requests a route may have in flight at once.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct ConcurrencyLimitConfig {
     /// `0` means unlimited.
     #[serde(default)]
@@ -1816,7 +1825,7 @@ fn default_concurrency_status() -> u16 {
 }
 
 /// How a rate limit counts requests.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, schemars::JsonSchema)]
 pub enum RateLimitKey {
     /// One bucket per client address.
     ClientIp,
@@ -1852,7 +1861,7 @@ fn default_path_prefix() -> String {
     "/".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LbStrategy {
     #[default]
@@ -1868,7 +1877,7 @@ pub enum LbStrategy {
     P2cEwma,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct CircuitBreakerConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -1911,7 +1920,7 @@ fn default_cb_open_ms() -> u64 {
     30_000
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct UpstreamConfig {
     pub addr: String,
     /// `false` drains the upstream: it stays in the config, keeps being probed,

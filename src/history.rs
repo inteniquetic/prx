@@ -71,7 +71,7 @@ fn private_dir(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct Version {
     /// `<unix ms>-<fingerprint>`; what rollback is asked for.
     pub id: String,
@@ -193,7 +193,7 @@ impl History {
 
 /// One line of the audit log. No request body and no credential is ever in it;
 /// the config is referred to by fingerprint, matching a [`Version`].
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct AuditEntry<'a> {
     pub ts_ms: u64,
     pub actor: &'a str,

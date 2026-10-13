@@ -781,6 +781,14 @@ Every write attempt, refused ones included, appends one JSON line to `.prx-audit
 fingerprints and match a version's `fingerprint`. Request bodies and credentials are never logged.
 The log rotates at 5 MiB and keeps 3 files.
 
+### API documents (generated)
+
+`docs/openapi.json` (OpenAPI 3.0 of the admin API), `docs/prx.schema.json` (JSON Schema of `Prx.toml`)
+and `webui/src/lib/types/api.d.ts` (the WebUI's types) are all generated from the Rust structs
+with `make schema`; never edit them. `GET /web/schema` serves the same JSON Schema, so an editor or a
+form can validate a config against the running binary. `make schema-check` (and CI) fails when
+any of the three is stale. Add a field to a config type, run `make schema`, commit the result.
+
 ## 5) Common Validation Errors
 
 - `config must include at least one [[route]] block`

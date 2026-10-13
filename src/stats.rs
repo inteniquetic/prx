@@ -55,7 +55,7 @@ pub const MAX_STREAM_CLIENTS: usize = 16;
 const CERT_EXPIRY_WARN_SECONDS: i64 = 14 * 24 * 60 * 60;
 
 /// One second of traffic, as rates rather than counters.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, schemars::JsonSchema)]
 pub struct Sample {
     pub epoch_ms: u64,
     /// Seconds this sample covers; a late tick widens it rather than lying.
@@ -81,7 +81,7 @@ pub struct Sample {
 }
 
 /// A route's share of the last minute.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct RouteStats {
     pub name: String,
     pub requests: u64,
@@ -95,7 +95,7 @@ pub struct RouteStats {
     pub window_seconds: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum UpstreamState {
     Healthy,
@@ -105,7 +105,7 @@ pub enum UpstreamState {
     Drained,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct UpstreamHealth {
     pub addr: String,
     pub state: UpstreamState,
@@ -113,7 +113,7 @@ pub struct UpstreamHealth {
     pub ewma_ms: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ServiceHealth {
     pub name: String,
     pub healthy: u32,
@@ -121,7 +121,7 @@ pub struct ServiceHealth {
     pub upstreams: Vec<UpstreamHealth>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EventLevel {
     Info,
@@ -130,7 +130,7 @@ pub enum EventLevel {
 }
 
 /// Something worth a line in the dashboard's event strip.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct StatsEvent {
     /// Monotonic, so a reconnecting client can tell what it already has.
     pub id: u64,
@@ -149,7 +149,7 @@ pub struct StatsEvent {
 /// Only `sample` is there every time. Route and service state move slowly, so
 /// they ride along only when they changed — a dashboard left open overnight
 /// should not cost kilobytes a second.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct StatsTick {
     pub seq: u64,
     pub sample: Sample,
@@ -164,7 +164,7 @@ pub struct StatsTick {
 
 /// The first payload a dashboard reads, so the page has a chart before the
 /// stream has said anything.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct StatsSnapshot {
     pub epoch_ms: u64,
     pub interval_ms: u64,

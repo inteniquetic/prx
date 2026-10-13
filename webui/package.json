@@ -23,7 +23,9 @@
     "settings:check": "node scripts/settings-check.mjs",
     "i18n:check": "node scripts/i18n-check.mjs",
     "a11y:check": "node scripts/a11y-check.mjs",
-    "ux:check": "node scripts/ux-check.mjs"
+    "ux:check": "node scripts/ux-check.mjs",
+    "gen:api": "openapi-typescript ../docs/openapi.json -o src/lib/types/api.d.ts",
+    "schema:check": "node scripts/schema-check.mjs"
   },
   "devDependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -40,12 +42,15 @@
     "@sveltejs/vite-plugin-svelte": "^6.2.4",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^20.17.23",
+    "ajv": "^8.20.0",
     "autoprefixer": "^10.4.21",
     "axe-core": "^4.13.0",
     "bits-ui": "^2.19.2",
     "clsx": "^2.1.1",
+    "openapi-typescript": "^7.13.0",
     "playwright": "^1.63.0",
     "postcss": "^8.5.3",
+    "smol-toml": "^1.9.1",
     "svelte": "^5.57.1",
     "svelte-check": "^4.7.6",
     "svelte-sonner": "^1.2.1",

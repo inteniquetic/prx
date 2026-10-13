@@ -77,7 +77,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | [T202](T202-config-history-rollback.md) | เก็บประวัติ config + diff + rollback | M | T201 | 🟡 history + rollback + 0600 + rotate ทำแล้ว; เหลือ diff ระหว่างเวอร์ชัน |
 | [T203](T203-validate-dry-run-api.md) | `POST /web/config/validate` คืน error แบบมีพิกัด | M | — | 🟡 endpoint + error/warning ครบพร้อมพิกัด (ทำใน T307); เหลือ error code ของ TOML syntax แยกชนิด |
 | [T204](T204-atomic-apply-reload.md) | Apply แบบ atomic + auto-rollback ถ้า reload ไม่ผ่าน | M | T202, T203 | ✅ done (validate ก่อนแตะไฟล์; watcher ไม่ reload ซ้ำและ debounce แบบ trailing-edge ไม่ทิ้ง edit สุดท้าย; e2e ยิง load ระหว่าง apply 12 รอบ = 0 error)
-| [T205](T205-openapi-typed-client.md) | OpenAPI + JSON Schema + typed client ให้ WebUI | M | T203 |
+| [T205](T205-openapi-typed-client.md) | OpenAPI + JSON Schema + typed client ให้ WebUI | M | T203 | ✅ done (generate จาก Rust: schemars → openapi.json + prx.schema.json + api.d.ts; `make schema`/`schema-check`; ตรวจพบว่า type เขียนมือบอกว่า field เป็น non-null ทั้งที่ API ส่ง null)
 | [T206](T206-audit-log.md) | Audit log ใครแก้อะไรเมื่อไหร่ | S | T201 | ✅ done (ทุก write รวมที่ถูกปฏิเสธ; fingerprint ผูกกับ history) |
 | [T207](T207-live-stats-stream.md) | SSE stream สถิติสดให้ dashboard | M | T401 | ✅ done (ทำพร้อม T306; แก้ bucket ของ histogram ที่จบที่ 10 ms) |
 

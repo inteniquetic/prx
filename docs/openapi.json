@@ -1,0 +1,4125 @@
+{
+  "components": {
+    "schemas": {
+      "AcmeConfig": {
+        "description": "Automatic certificates over ACME (Let's Encrypt and compatible servers).",
+        "properties": {
+          "ca_root_path": {
+            "default": null,
+            "description": "PEM file with the CA that signs the ACME server's own TLS certificate.\nNeeded for a private ACME server (step-ca, Pebble); public providers\nare trusted through the system roots.",
+            "nullable": true,
+            "type": "string"
+          },
+          "directory_url": {
+            "default": "https://acme-staging-v02.api.letsencrypt.org/directory",
+            "type": "string"
+          },
+          "domains": {
+            "default": [],
+            "description": "Domains to request a certificate for.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "email": {
+            "default": [],
+            "description": "Contact addresses registered with the ACME account.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "renew_before_days": {
+            "default": 30,
+            "description": "Renew this many days before expiry.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "storage_dir": {
+            "default": "./acme",
+            "description": "Where the account key and issued certificate are kept.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AcmeStatus": {
+        "description": "What the admin API reports about certificate automation.",
+        "properties": {
+          "certificate_expiry_epoch_s": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "directory_url": {
+            "type": "string"
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "last_attempt_epoch_s": {
+            "description": "Epoch seconds of the last attempt, successful or not.",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "last_error": {
+            "description": "Why the last attempt failed, when it did.",
+            "nullable": true,
+            "type": "string"
+          },
+          "last_success_epoch_s": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "staging": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "directory_url",
+          "domains",
+          "staging"
+        ],
+        "type": "object"
+      },
+      "AdminAcmePayload": {
+        "properties": {
+          "ca_root_path": {
+            "nullable": true,
+            "type": "string"
+          },
+          "directory_url": {
+            "type": "string"
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "email": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "renew_before_days": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "storage_dir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "email",
+          "directory_url",
+          "domains",
+          "storage_dir",
+          "renew_before_days"
+        ],
+        "type": "object"
+      },
+      "AdminAuth": {
+        "description": "How the admin API checks a caller.\n\n`none` is only legal on a loopback listener: a control plane that can\nrewrite the proxy's config must not be reachable without a credential.",
+        "enum": [
+          "none",
+          "token",
+          "basic"
+        ],
+        "type": "string"
+      },
+      "AdminCircuitBreakerPayload": {
+        "properties": {
+          "consecutive_failures": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "open_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "consecutive_failures",
+          "open_ms"
+        ],
+        "type": "object"
+      },
+      "AdminConfig": {
+        "description": "The `[admin]` block.\n\nThe credential itself never lives here. `token_file` and `basic_file`\npoint at a file (or, when unset, the `PRX_ADMIN_TOKEN` / `PRX_ADMIN_BASIC`\nenvironment variables), so a config that is shown, diffed or committed\ncannot carry the secret.",
+        "properties": {
+          "allow_origins": {
+            "default": [],
+            "description": "Origins allowed to call the API from another site. Empty means\nsame-origin only; `*` is never valid.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "auth": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminAuth"
+              }
+            ],
+            "default": "none"
+          },
+          "basic_file": {
+            "default": null,
+            "description": "Path to a file holding `user:password`, one line. Ignored unless\n`auth` is `basic`.",
+            "nullable": true,
+            "type": "string"
+          },
+          "listen": {
+            "default": "127.0.0.1:9091",
+            "type": "string"
+          },
+          "read_only": {
+            "default": false,
+            "description": "Serve the API for reading and refuse every change.",
+            "type": "boolean"
+          },
+          "token_file": {
+            "default": null,
+            "description": "Path to a file holding the bearer token, one line. Ignored unless\n`auth` is `token`.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AdminConfigPayload": {
+        "properties": {
+          "observability": {
+            "$ref": "#/components/schemas/AdminObservabilityPayload"
+          },
+          "plugins": {
+            "description": "The [[plugin]] blocks as declared, so the UI can list what a route may\nrefer to (T501).",
+            "items": {
+              "$ref": "#/components/schemas/AdminPluginPayload"
+            },
+            "type": "array"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/AdminRoutePayload"
+            },
+            "type": "array"
+          },
+          "server": {
+            "$ref": "#/components/schemas/AdminServerPayload"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/AdminServicePayload"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "server",
+          "observability",
+          "services",
+          "routes",
+          "plugins"
+        ],
+        "type": "object"
+      },
+      "AdminObservabilityPayload": {
+        "properties": {
+          "access_log": {
+            "type": "boolean"
+          },
+          "log_level": {
+            "type": "string"
+          },
+          "prometheus_listen": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "log_level",
+          "access_log",
+          "prometheus_listen"
+        ],
+        "type": "object"
+      },
+      "AdminPluginPayload": {
+        "properties": {
+          "config": {
+            "description": "The plugin's own settings, whose shape depends on `kind`. Passed\nthrough as JSON rather than typed here, for the same reason the config\nkeeps it as a raw TOML value."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "enabled",
+          "config"
+        ],
+        "type": "object"
+      },
+      "AdminRoutePayload": {
+        "description": "A route exactly as the config holds it.\n\nThe advanced blocks travel with it because the UI is the only editor most\npeople will use: a payload that leaves out header rules, limits or cache\nsettings turns \"edit this route\" into \"lose whatever the file said about\nthem\".",
+        "properties": {
+          "cache": {
+            "$ref": "#/components/schemas/CacheConfig"
+          },
+          "concurrency_limit": {
+            "$ref": "#/components/schemas/ConcurrencyLimitConfig"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string"
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "methods": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path_prefix": {
+            "type": "string"
+          },
+          "plugins": {
+            "description": "Names of the [[plugin]] blocks this route runs, in order (T501).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rate_limit": {
+            "$ref": "#/components/schemas/RateLimitConfig"
+          },
+          "request_headers": {
+            "$ref": "#/components/schemas/HeaderRules"
+          },
+          "response_headers": {
+            "$ref": "#/components/schemas/HeaderRules"
+          },
+          "service": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "service",
+          "host",
+          "path_prefix",
+          "methods",
+          "is_default",
+          "enabled",
+          "request_headers",
+          "response_headers",
+          "rate_limit",
+          "concurrency_limit",
+          "cache",
+          "plugins"
+        ],
+        "type": "object"
+      },
+      "AdminServerPayload": {
+        "properties": {
+          "config_reload_debounce_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "grace_period_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "graceful_shutdown_timeout_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "h2c": {
+            "description": "Accept HTTP/2 over cleartext on the plain listeners.",
+            "type": "boolean"
+          },
+          "health_path": {
+            "type": "string"
+          },
+          "listen": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ready_path": {
+            "type": "string"
+          },
+          "threads": {
+            "format": "uint",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "tls": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminTlsPayload"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ]
+          }
+        },
+        "required": [
+          "listen",
+          "health_path",
+          "ready_path",
+          "config_reload_debounce_ms",
+          "h2c"
+        ],
+        "type": "object"
+      },
+      "AdminServicePayload": {
+        "description": "A service exactly as the config holds it.\n\nSame reasoning as `AdminRoutePayload`: the UI is the only editor most people\nwill use, so a payload that leaves out health checks, session affinity or\nretry budgets turns \"edit this service\" into \"lose them\".",
+        "properties": {
+          "circuit_breaker": {
+            "$ref": "#/components/schemas/AdminCircuitBreakerPayload"
+          },
+          "health_check": {
+            "$ref": "#/components/schemas/HealthCheckConfig"
+          },
+          "lb": {
+            "type": "string"
+          },
+          "max_retries": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "request_timeout_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_backoff_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_budget_min_per_window": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_budget_ratio": {
+            "format": "double",
+            "type": "number"
+          },
+          "retry_budget_window_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_idempotent_only": {
+            "type": "boolean"
+          },
+          "sticky": {
+            "$ref": "#/components/schemas/StickyConfig"
+          },
+          "upstream_h2": {
+            "$ref": "#/components/schemas/UpstreamH2"
+          },
+          "upstreams": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUpstreamPayload"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "lb",
+          "max_retries",
+          "retry_backoff_ms",
+          "retry_budget_ratio",
+          "retry_budget_min_per_window",
+          "retry_budget_window_ms",
+          "retry_idempotent_only",
+          "request_timeout_ms",
+          "upstream_h2",
+          "circuit_breaker",
+          "health_check",
+          "sticky",
+          "upstreams"
+        ],
+        "type": "object"
+      },
+      "AdminTlsCertPayload": {
+        "properties": {
+          "cert_path": {
+            "type": "string"
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "key_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "domains",
+          "cert_path",
+          "key_path",
+          "is_default"
+        ],
+        "type": "object"
+      },
+      "AdminTlsPayload": {
+        "properties": {
+          "acme": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminAcmePayload"
+              }
+            ],
+            "description": "Automatic certificates, so the Settings page can show and edit them\nwithout a second request (T308)."
+          },
+          "cert_path": {
+            "description": "Present only for the single-certificate form.",
+            "nullable": true,
+            "type": "string"
+          },
+          "certs": {
+            "description": "The `[[server.tls.cert]]` blocks, as the file has them.",
+            "items": {
+              "$ref": "#/components/schemas/AdminTlsCertPayload"
+            },
+            "type": "array"
+          },
+          "enable_h2": {
+            "type": "boolean"
+          },
+          "key_path": {
+            "nullable": true,
+            "type": "string"
+          },
+          "listen": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "listen",
+          "enable_h2",
+          "certs",
+          "acme"
+        ],
+        "type": "object"
+      },
+      "AdminUpstreamPayload": {
+        "properties": {
+          "addr": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "idle_timeout_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "read_timeout_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "sni": {
+            "type": "string"
+          },
+          "tls": {
+            "type": "boolean"
+          },
+          "total_connect_timeout_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "verify_cert": {
+            "nullable": true,
+            "type": "boolean"
+          },
+          "verify_hostname": {
+            "nullable": true,
+            "type": "boolean"
+          },
+          "weight": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "write_timeout_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "addr",
+          "enabled",
+          "tls",
+          "sni",
+          "weight"
+        ],
+        "type": "object"
+      },
+      "CacheConfig": {
+        "description": "Short-lived response cache for a route.\n\nEven a one-second TTL turns a burst of identical requests into a single\nupstream fetch, which is where most of the benefit comes from.",
+        "properties": {
+          "add_status_header": {
+            "default": true,
+            "description": "Add an `X-Cache: HIT|MISS` header to responses.",
+            "type": "boolean"
+          },
+          "cache_status_codes": {
+            "default": [
+              200,
+              203,
+              300,
+              301,
+              404
+            ],
+            "description": "Status codes worth storing.",
+            "items": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "coalesce_wait_ms": {
+            "default": 2000,
+            "description": "How long a coalesced request waits for the in-flight fetch before going\nupstream itself.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "key_query": {
+            "default": true,
+            "description": "Include the query string in the cache key.",
+            "type": "boolean"
+          },
+          "max_body_bytes": {
+            "default": 262144,
+            "description": "Responses larger than this are streamed through without being stored.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 134217728,
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_entries": {
+            "default": 10000,
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ttl_ms": {
+            "default": 2000,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "vary_headers": {
+            "default": [
+              "accept-encoding"
+            ],
+            "description": "Request headers whose values take part in the cache key, so responses\nthat differ by them are not mixed up.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "CacheRoutePayload": {
+        "properties": {
+          "bytes": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "coalesced": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "entries": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "evictions": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hits": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "misses": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "route": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "route",
+          "entries",
+          "bytes",
+          "hits",
+          "misses",
+          "coalesced",
+          "evictions"
+        ],
+        "type": "object"
+      },
+      "CircuitBreakerConfig": {
+        "properties": {
+          "consecutive_failures": {
+            "default": 3,
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "open_ms": {
+            "default": 30000,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "CircuitBreakerRequestPayload": {
+        "properties": {
+          "consecutive_failures": {
+            "default": null,
+            "format": "uint",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "enabled": {
+            "default": null,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "open_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "CompressionConfig": {
+        "description": "Response compression.\n\nprx uses pingora's streaming compressor, so a large response is compressed\nas it flows through rather than being buffered first.",
+        "properties": {
+          "decompress_upstream": {
+            "default": false,
+            "description": "Decompress an already-compressed upstream response when the client\ncannot accept that encoding. Off by default: it is expensive and rarely\nwhat an operator wants.",
+            "type": "boolean"
+          },
+          "enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "level": {
+            "default": 4,
+            "description": "Compression level. Higher costs CPU for a smaller body; 3-6 is the\nusual range for a proxy that compresses on the fly.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ConcurrencyLimitConfig": {
+        "description": "Caps how many requests a route may have in flight at once.",
+        "properties": {
+          "max_concurrent": {
+            "default": 0,
+            "description": "`0` means unlimited.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "response_status": {
+            "default": 503,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ConfigConflict": {
+        "description": "What a client gets back when its `If-Match` no longer matches the file:\nenough to show the three sides without a second request.",
+        "properties": {
+          "current_etag": {
+            "description": "What is actually on disk.",
+            "type": "string"
+          },
+          "current_toml": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "expected_etag": {
+            "description": "What the client believed it was editing.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "expected_etag",
+          "current_etag",
+          "current_toml"
+        ],
+        "type": "object"
+      },
+      "Diagnostic": {
+        "description": "One problem, addressed both by field path and by file position.\n\nPositions are 1-based, and columns count characters rather than bytes so a\nfile with Thai comments in it still marks the right column.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "column": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "end_column": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "end_line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hint": {
+            "nullable": true,
+            "type": "string"
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/IssueSeverity"
+          }
+        },
+        "required": [
+          "severity",
+          "code",
+          "path",
+          "message",
+          "line",
+          "column",
+          "end_line",
+          "end_column"
+        ],
+        "type": "object"
+      },
+      "EditAction": {
+        "description": "What to do to one key.",
+        "oneOf": [
+          {
+            "description": "Write `value` at `path`, creating the tables it needs.",
+            "enum": [
+              "set"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Delete the key, or the array-of-tables element, at `path`.",
+            "enum": [
+              "remove"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Push a new `[[path]]` element built from `value`.",
+            "enum": [
+              "append"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "EditOp": {
+        "properties": {
+          "action": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EditAction"
+              }
+            ],
+            "default": "set"
+          },
+          "path": {
+            "description": "Dotted path, with `[i]` for an array-of-tables element:\n`server.tls.acme.domains`, `service[0].upstream[1].weight`.",
+            "type": "string"
+          },
+          "value": {
+            "default": null,
+            "description": "The new value, as JSON. Ignored by `remove`."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "EditRequest": {
+        "description": "`POST /web/config/edit` (T308): the Settings forms change one field at a\ntime, and the answer is the same file with that field changed.",
+        "properties": {
+          "ops": {
+            "items": {
+              "$ref": "#/components/schemas/EditOp"
+            },
+            "type": "array"
+          },
+          "toml": {
+            "description": "The draft to edit — normally what the editor is showing, not the file on\ndisk, so form edits and hand edits pile up in the same draft.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "toml"
+        ],
+        "type": "object"
+      },
+      "EditResponse": {
+        "description": "The answer to `POST /web/config/validate`.",
+        "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "type": "array"
+          },
+          "toml": {
+            "type": "string"
+          },
+          "valid": {
+            "description": "True when nothing would stop this config from being applied. Warnings\ndo not make it false.",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "toml",
+          "valid",
+          "errors",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "EventLevel": {
+        "enum": [
+          "info",
+          "warn",
+          "error"
+        ],
+        "type": "string"
+      },
+      "HeaderRules": {
+        "description": "Header rules applied to a request or a response.\n\n`set` replaces any existing value, `add` appends another value, and\n`remove` drops the header. They are applied in that order, so a rule set\ncan normalize a header and then append to it.",
+        "properties": {
+          "add": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "type": "object"
+          },
+          "remove": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "set": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "HeadersConfig": {
+        "description": "Header rules that apply to every route, applied before the route's own.",
+        "properties": {
+          "request": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderRules"
+              }
+            ],
+            "default": {
+              "add": {},
+              "remove": [],
+              "set": {}
+            }
+          },
+          "response": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderRules"
+              }
+            ],
+            "default": {
+              "add": {},
+              "remove": [],
+              "set": {}
+            }
+          }
+        },
+        "type": "object"
+      },
+      "HealthCheckConfig": {
+        "description": "Background probing of a service's upstreams.\n\nPassive detection (the circuit breaker) only removes an upstream after real\nrequests have already failed, so users see the errors. An active probe finds\nthe same failure before a request does, and proves an upstream is healthy\nagain before sending traffic back to it.",
+        "properties": {
+          "enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "expected_status": {
+            "default": [
+              200
+            ],
+            "description": "Response codes that count as healthy for `kind = \"http\"`.",
+            "items": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "healthy_threshold": {
+            "default": 2,
+            "description": "Consecutive successes before a down upstream is used again.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "interval_ms": {
+            "default": 2000,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HealthCheckKind"
+              }
+            ],
+            "default": "tcp"
+          },
+          "path": {
+            "default": "/healthz",
+            "description": "Request path for `kind = \"http\"`.",
+            "type": "string"
+          },
+          "timeout_ms": {
+            "default": 1000,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unhealthy_threshold": {
+            "default": 3,
+            "description": "Consecutive failures before an upstream is taken out.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "HealthCheckKind": {
+        "oneOf": [
+          {
+            "description": "Open a TCP connection and close it again.",
+            "enum": [
+              "tcp"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Send a GET and check the status code.",
+            "enum": [
+              "http"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "IssueSeverity": {
+        "description": "How much a [`ConfigIssue`] matters: an error blocks the apply, a warning\ndoes not.",
+        "enum": [
+          "error",
+          "warning"
+        ],
+        "type": "string"
+      },
+      "LbStrategy": {
+        "oneOf": [
+          {
+            "enum": [
+              "round_robin",
+              "random",
+              "hash"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Send the request to whichever of two random upstreams has fewer\nrequests in flight. Power of two choices avoids scanning every\nupstream while getting most of the benefit of true least-connections.",
+            "enum": [
+              "least_conn"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Like `least_conn`, but weighted by a moving average of each upstream's\nlatency, so a slow-but-accepting upstream is avoided too.",
+            "enum": [
+              "p2c_ewma"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "ObservabilityConfig": {
+        "properties": {
+          "access_log": {
+            "default": true,
+            "type": "boolean"
+          },
+          "log_level": {
+            "default": "info",
+            "type": "string"
+          },
+          "prometheus_listen": {
+            "default": null,
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PluginConfig": {
+        "description": "One `[[plugin]]` block.\n\n`config` is left as a raw TOML value because what belongs in it is decided\nby `kind`: the registry checks it, not this struct. Keeping it opaque here\nis what stops every new plugin from having to add a field to the core\nconfig type.",
+        "properties": {
+          "config": {
+            "default": {}
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "PrxConfig": {
+        "properties": {
+          "admin": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminConfig"
+              }
+            ],
+            "default": {
+              "allow_origins": [],
+              "auth": "none",
+              "basic_file": null,
+              "listen": "127.0.0.1:9091",
+              "read_only": false,
+              "token_file": null
+            },
+            "description": "The control plane: where the admin API listens and how it is guarded."
+          },
+          "compression": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CompressionConfig"
+              }
+            ],
+            "default": {
+              "decompress_upstream": false,
+              "enabled": false,
+              "level": 4
+            }
+          },
+          "headers": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeadersConfig"
+              }
+            ],
+            "default": {
+              "request": {
+                "add": {},
+                "remove": [],
+                "set": {}
+              },
+              "response": {
+                "add": {},
+                "remove": [],
+                "set": {}
+              }
+            }
+          },
+          "observability": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObservabilityConfig"
+              }
+            ],
+            "default": {
+              "access_log": true,
+              "log_level": "info",
+              "prometheus_listen": null
+            }
+          },
+          "plugin": {
+            "default": [],
+            "description": "Plugins are declared once here and referenced by name from the routes\nthat want them, the same way a route references a service (T501).",
+            "items": {
+              "$ref": "#/components/schemas/PluginConfig"
+            },
+            "type": "array"
+          },
+          "route": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RouteConfig"
+            },
+            "type": "array"
+          },
+          "server": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServerConfig"
+              }
+            ],
+            "default": {
+              "config_reload_debounce_ms": 250,
+              "grace_period_seconds": null,
+              "graceful_shutdown_timeout_seconds": null,
+              "h2c": true,
+              "health_path": "/healthz",
+              "listen": [
+                "0.0.0.0:8080"
+              ],
+              "ready_path": "/readyz",
+              "threads": null,
+              "tls": null
+            }
+          },
+          "service": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ServiceConfig"
+            },
+            "type": "array"
+          },
+          "waf": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WafConfig"
+              }
+            ],
+            "description": "SecLang rules for the WAF. Empty unless `[waf] rules_file` is set."
+          }
+        },
+        "type": "object"
+      },
+      "RateLimitConfig": {
+        "description": "Per-route rate limiting.\n\nCheap enough to leave on: one hash and a short lock on a sharded bucket per\nrequest, with a hard cap on how many keys are tracked so a flood of unique\nkeys cannot grow memory without bound.",
+        "properties": {
+          "burst": {
+            "default": 0,
+            "description": "How many requests may arrive at once before the sustained rate applies.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "entry_ttl_ms": {
+            "default": 60000,
+            "description": "Keys idle for this long may be forgotten.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "key": {
+            "default": "client_ip",
+            "description": "What to count per: `client_ip`, `route`, or `header:<Name>`.",
+            "type": "string"
+          },
+          "max_entries": {
+            "default": 100000,
+            "description": "Upper bound on tracked keys.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requests_per_second": {
+            "default": 100,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "response_status": {
+            "default": 429,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_after": {
+            "default": true,
+            "description": "Send a `Retry-After` header with the rejection.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "RouteConfig": {
+        "properties": {
+          "cache": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CacheConfig"
+              }
+            ],
+            "default": {
+              "add_status_header": true,
+              "cache_status_codes": [
+                200,
+                203,
+                300,
+                301,
+                404
+              ],
+              "coalesce_wait_ms": 2000,
+              "enabled": false,
+              "key_query": true,
+              "max_body_bytes": 262144,
+              "max_bytes": 134217728,
+              "max_entries": 10000,
+              "ttl_ms": 2000,
+              "vary_headers": [
+                "accept-encoding"
+              ]
+            }
+          },
+          "concurrency_limit": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConcurrencyLimitConfig"
+              }
+            ],
+            "default": {
+              "max_concurrent": 0,
+              "response_status": 503
+            }
+          },
+          "enabled": {
+            "default": true,
+            "description": "A disabled route stays in the file but is left out of the route index,\nso it never matches — the way to park a route without losing how it was\nconfigured.",
+            "type": "boolean"
+          },
+          "host": {
+            "default": null,
+            "nullable": true,
+            "type": "string"
+          },
+          "is_default": {
+            "default": false,
+            "type": "boolean"
+          },
+          "methods": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "default": "default",
+            "type": "string"
+          },
+          "path_prefix": {
+            "default": "/",
+            "type": "string"
+          },
+          "plugins": {
+            "default": [],
+            "description": "Plugins to run for this route, in this order (T501). Names refer to\n`[[plugin]]` blocks.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rate_limit": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RateLimitConfig"
+              }
+            ],
+            "default": {
+              "burst": 0,
+              "enabled": false,
+              "entry_ttl_ms": 60000,
+              "key": "client_ip",
+              "max_entries": 100000,
+              "requests_per_second": 100,
+              "response_status": 429,
+              "retry_after": true
+            }
+          },
+          "request_headers": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderRules"
+              }
+            ],
+            "default": {
+              "add": {},
+              "remove": [],
+              "set": {}
+            }
+          },
+          "response_headers": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeaderRules"
+              }
+            ],
+            "default": {
+              "add": {},
+              "remove": [],
+              "set": {}
+            }
+          },
+          "service": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "service"
+        ],
+        "type": "object"
+      },
+      "RouteHealthPayload": {
+        "properties": {
+          "checked_at_epoch_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/RouteHealthRoutePayload"
+            },
+            "type": "array"
+          },
+          "timeout_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "checked_at_epoch_ms",
+          "timeout_ms",
+          "routes"
+        ],
+        "type": "object"
+      },
+      "RouteHealthRoutePayload": {
+        "properties": {
+          "healthy": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path_prefix": {
+            "type": "string"
+          },
+          "reachable_upstreams": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "route_index": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "service": {
+            "type": "string"
+          },
+          "total_upstreams": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "upstreams": {
+            "items": {
+              "$ref": "#/components/schemas/RouteHealthUpstreamPayload"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "route_index",
+          "name",
+          "service",
+          "host",
+          "path_prefix",
+          "healthy",
+          "reachable_upstreams",
+          "total_upstreams",
+          "upstreams"
+        ],
+        "type": "object"
+      },
+      "RouteHealthUpstreamPayload": {
+        "properties": {
+          "addr": {
+            "type": "string"
+          },
+          "error": {
+            "nullable": true,
+            "type": "string"
+          },
+          "healthy": {
+            "type": "boolean"
+          },
+          "last_probe_ms_ago": {
+            "description": "How long ago the prober last checked, when the verdict came from it.",
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "latency_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "source": {
+            "description": "Where this verdict came from: the background prober, or a TCP connect\nopened just to answer this request.",
+            "type": "string"
+          },
+          "timeout_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "addr",
+          "timeout_ms",
+          "healthy",
+          "source"
+        ],
+        "type": "object"
+      },
+      "RouteRequestPayload": {
+        "properties": {
+          "cache": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CacheConfig"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "default": null
+          },
+          "concurrency_limit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConcurrencyLimitConfig"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "default": null
+          },
+          "enabled": {
+            "default": null,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "host": {
+            "default": null,
+            "nullable": true,
+            "type": "string"
+          },
+          "is_default": {
+            "default": null,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "methods": {
+            "default": null,
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path_prefix": {
+            "default": null,
+            "nullable": true,
+            "type": "string"
+          },
+          "plugins": {
+            "default": null,
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "type": "array"
+          },
+          "rate_limit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RateLimitConfig"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "default": null
+          },
+          "request_headers": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HeaderRules"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "default": null
+          },
+          "response_headers": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HeaderRules"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "default": null
+          },
+          "service": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "service"
+        ],
+        "type": "object"
+      },
+      "RouteStats": {
+        "description": "A route's share of the last minute.",
+        "properties": {
+          "error_ratio": {
+            "format": "double",
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "p50_ms": {
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "p95_ms": {
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "p99_ms": {
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "requests": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requests_4xx": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requests_5xx": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rps": {
+            "format": "double",
+            "type": "number"
+          },
+          "window_seconds": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "requests",
+          "rps",
+          "error_ratio",
+          "requests_4xx",
+          "requests_5xx",
+          "window_seconds"
+        ],
+        "type": "object"
+      },
+      "RouteTestEcho": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "normalized_host": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "method",
+          "host",
+          "normalized_host",
+          "path"
+        ],
+        "type": "object"
+      },
+      "RouteTestRequest": {
+        "description": "\"If a request like this arrived, where would it go?\"",
+        "properties": {
+          "host": {
+            "default": "",
+            "type": "string"
+          },
+          "method": {
+            "default": "GET",
+            "type": "string"
+          },
+          "path": {
+            "default": "/",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RouteTestResponse": {
+        "properties": {
+          "outcome": {
+            "description": "`matched`, `method_not_allowed` or `not_found`.",
+            "type": "string"
+          },
+          "request": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RouteTestEcho"
+              }
+            ],
+            "description": "The request as the matcher saw it, after host normalization."
+          },
+          "route": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RouteTestRoutePayload"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ]
+          },
+          "service": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RouteTestServicePayload"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ]
+          }
+        },
+        "required": [
+          "outcome",
+          "request"
+        ],
+        "type": "object"
+      },
+      "RouteTestRoutePayload": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string"
+          },
+          "index": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "matched_by": {
+            "description": "Which tier of the matching rules this route won on: `exact_host`,\n`wildcard_host`, `any_host`, or `default_route` when it only caught the\nrequest as the fallback.",
+            "type": "string"
+          },
+          "methods": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path_prefix": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "name",
+          "host",
+          "path_prefix",
+          "methods",
+          "is_default",
+          "enabled",
+          "matched_by"
+        ],
+        "type": "object"
+      },
+      "RouteTestSelection": {
+        "properties": {
+          "deterministic": {
+            "description": "False for the strategies that draw at random: there is no single\nupstream to name, and pretending otherwise would be a guess.",
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string"
+          },
+          "would_pick": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "deterministic",
+          "note"
+        ],
+        "type": "object"
+      },
+      "RouteTestServicePayload": {
+        "properties": {
+          "lb": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/RouteTestSelection"
+          },
+          "upstreams": {
+            "items": {
+              "$ref": "#/components/schemas/RouteTestUpstream"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "lb",
+          "selection",
+          "upstreams"
+        ],
+        "type": "object"
+      },
+      "RouteTestUpstream": {
+        "properties": {
+          "addr": {
+            "type": "string"
+          },
+          "available": {
+            "description": "Whether this upstream is in the running for the next request.",
+            "type": "boolean"
+          },
+          "circuit_open": {
+            "type": "boolean"
+          },
+          "ewma_us": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "inflight": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "probe_healthy": {
+            "type": "boolean"
+          },
+          "weight": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "addr",
+          "weight",
+          "available",
+          "circuit_open",
+          "probe_healthy",
+          "inflight",
+          "ewma_us"
+        ],
+        "type": "object"
+      },
+      "Sample": {
+        "description": "One second of traffic, as rates rather than counters.",
+        "properties": {
+          "cache_hit_ratio": {
+            "description": "`None` when no route has caching turned on.",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "epoch_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error_ratio_4xx": {
+            "description": "Share of requests in this second that answered 4xx / 5xx, in 0..1.",
+            "format": "double",
+            "type": "number"
+          },
+          "error_ratio_5xx": {
+            "format": "double",
+            "type": "number"
+          },
+          "inflight": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "p50_ms": {
+            "description": "`None` while no request finished in the window: a percentile over zero\nrequests is not zero milliseconds.",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "p95_ms": {
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "p99_ms": {
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "rps": {
+            "format": "double",
+            "type": "number"
+          },
+          "rps_2xx": {
+            "format": "double",
+            "type": "number"
+          },
+          "rps_3xx": {
+            "format": "double",
+            "type": "number"
+          },
+          "rps_4xx": {
+            "format": "double",
+            "type": "number"
+          },
+          "rps_5xx": {
+            "format": "double",
+            "type": "number"
+          },
+          "upstreams_healthy": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "upstreams_total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window_seconds": {
+            "description": "Seconds this sample covers; a late tick widens it rather than lying.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "epoch_ms",
+          "window_seconds",
+          "rps",
+          "rps_2xx",
+          "rps_3xx",
+          "rps_4xx",
+          "rps_5xx",
+          "error_ratio_4xx",
+          "error_ratio_5xx",
+          "inflight",
+          "upstreams_healthy",
+          "upstreams_total"
+        ],
+        "type": "object"
+      },
+      "ServerConfig": {
+        "properties": {
+          "config_reload_debounce_ms": {
+            "default": 250,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "grace_period_seconds": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "graceful_shutdown_timeout_seconds": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "h2c": {
+            "default": true,
+            "description": "Accept HTTP/2 over cleartext on the plain listeners. prx peeks for the\nh2 preface and falls back to HTTP/1.1, so leaving this on is safe and\nis what gRPC clients that do not use TLS need.",
+            "type": "boolean"
+          },
+          "health_path": {
+            "default": "/healthz",
+            "type": "string"
+          },
+          "listen": {
+            "default": [
+              "0.0.0.0:8080"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ready_path": {
+            "default": "/readyz",
+            "type": "string"
+          },
+          "threads": {
+            "default": null,
+            "format": "uint",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "tls": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TlsConfig"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "ServiceConfig": {
+        "properties": {
+          "circuit_breaker": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CircuitBreakerConfig"
+              }
+            ],
+            "default": {
+              "consecutive_failures": 3,
+              "enabled": false,
+              "open_ms": 30000
+            }
+          },
+          "health_check": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HealthCheckConfig"
+              }
+            ],
+            "default": {
+              "enabled": false,
+              "expected_status": [
+                200
+              ],
+              "healthy_threshold": 2,
+              "interval_ms": 2000,
+              "kind": "tcp",
+              "path": "/healthz",
+              "timeout_ms": 1000,
+              "unhealthy_threshold": 3
+            },
+            "description": "Probe upstreams in the background instead of waiting for a real request\nto discover that one is down."
+          },
+          "lb": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LbStrategy"
+              }
+            ],
+            "default": "round_robin"
+          },
+          "max_retries": {
+            "default": 0,
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "default": "default",
+            "type": "string"
+          },
+          "request_timeout_ms": {
+            "default": 0,
+            "description": "Total time budget for a request including every retry. `0` disables it.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_backoff_ms": {
+            "default": 0,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_budget_min_per_window": {
+            "default": 10,
+            "description": "Requests below this count per window may always retry, so a service\nthat is idle or just started is not locked out by its own budget.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_budget_ratio": {
+            "default": 0.2,
+            "description": "Fraction of recent successful requests that may be spent on retries.\n`0.0` disables the budget (retries are then limited only by\n`max_retries`). Keeps a failing upstream from being hammered by the\nretries of every in-flight request at once.",
+            "format": "double",
+            "type": "number"
+          },
+          "retry_budget_window_ms": {
+            "default": 10000,
+            "description": "Window the retry budget is measured over.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_idempotent_only": {
+            "default": true,
+            "description": "Only retry requests whose method is idempotent once the request may\nalready have reached the upstream. Connect failures are always\nretriable: nothing was sent yet.",
+            "type": "boolean"
+          },
+          "sticky": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StickyConfig"
+              }
+            ],
+            "default": {
+              "enabled": false,
+              "mode": "cookie",
+              "name": "prx_upstream",
+              "ttl_s": 3600
+            },
+            "description": "Keep a client on the same upstream across requests."
+          },
+          "upstream": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/UpstreamConfig"
+            },
+            "type": "array"
+          },
+          "upstream_h2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpstreamH2"
+              }
+            ],
+            "default": "never",
+            "description": "Which HTTP version to speak to the upstreams of this service."
+          }
+        },
+        "type": "object"
+      },
+      "ServiceHealth": {
+        "properties": {
+          "healthy": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "upstreams": {
+            "items": {
+              "$ref": "#/components/schemas/UpstreamHealth"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "healthy",
+          "total",
+          "upstreams"
+        ],
+        "type": "object"
+      },
+      "ServiceRequestPayload": {
+        "properties": {
+          "circuit_breaker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CircuitBreakerRequestPayload"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ]
+          },
+          "health_check": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HealthCheckConfig"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "default": null
+          },
+          "lb": {
+            "default": null,
+            "nullable": true,
+            "type": "string"
+          },
+          "max_retries": {
+            "default": null,
+            "format": "uint",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "request_timeout_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "retry_backoff_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "retry_budget_min_per_window": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "retry_budget_ratio": {
+            "default": null,
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "retry_budget_window_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "retry_idempotent_only": {
+            "default": null,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "sticky": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StickyConfig"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "default": null
+          },
+          "upstream_h2": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UpstreamH2"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "default": null
+          },
+          "upstreams": {
+            "items": {
+              "$ref": "#/components/schemas/UpstreamRequestPayload"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ServiceStatusEntry": {
+        "properties": {
+          "circuit_breaker_enabled": {
+            "type": "boolean"
+          },
+          "health_check_enabled": {
+            "description": "Whether the background prober is running for this service at all.",
+            "type": "boolean"
+          },
+          "lb": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "upstreams": {
+            "items": {
+              "$ref": "#/components/schemas/UpstreamStatusEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "lb",
+          "health_check_enabled",
+          "circuit_breaker_enabled",
+          "upstreams"
+        ],
+        "type": "object"
+      },
+      "ServiceStatusPayload": {
+        "description": "Live state of every service, as the running proxy sees it right now.\n\nThe config says what was asked for; this says what is happening. The page\nthat shows circuit breakers and probe verdicts needs the second one, and it\nhas to come from the same snapshot traffic is being routed on.",
+        "properties": {
+          "checked_at_epoch_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceStatusEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "checked_at_epoch_ms",
+          "services"
+        ],
+        "type": "object"
+      },
+      "StatsEvent": {
+        "description": "Something worth a line in the dashboard's event strip.",
+        "properties": {
+          "epoch_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "description": "Monotonic, so a reconnecting client can tell what it already has.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "Machine-readable kind: `config_apply`, `config_reload`, `circuit_open`,\n`upstream_down`, `upstream_up`, `cert_expiry`.",
+            "type": "string"
+          },
+          "level": {
+            "$ref": "#/components/schemas/EventLevel"
+          },
+          "message": {
+            "type": "string"
+          },
+          "target": {
+            "description": "The route, service or domain the event is about, when there is one.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "epoch_ms",
+          "level",
+          "kind",
+          "message"
+        ],
+        "type": "object"
+      },
+      "StatsSnapshot": {
+        "description": "The first payload a dashboard reads, so the page has a chart before the\nstream has said anything.",
+        "properties": {
+          "epoch_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/StatsEvent"
+            },
+            "type": "array"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/Sample"
+            },
+            "type": "array"
+          },
+          "interval_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_stream_clients": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/RouteStats"
+            },
+            "type": "array"
+          },
+          "sample": {
+            "$ref": "#/components/schemas/Sample"
+          },
+          "seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceHealth"
+            },
+            "type": "array"
+          },
+          "stream_clients": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "uptime_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch_ms",
+          "interval_ms",
+          "seq",
+          "uptime_seconds",
+          "sample",
+          "history",
+          "routes",
+          "services",
+          "events",
+          "stream_clients",
+          "max_stream_clients"
+        ],
+        "type": "object"
+      },
+      "StickyConfig": {
+        "description": "Session affinity: keep a client on the upstream it used last.\n\n`cookie` is the only mode that survives a client changing IP, and it is the\nonly one that pins exactly; `client_ip` and `header` hash the key onto the\nupstream ring, so adding or removing an upstream reshuffles some clients.\nEvery mode falls back to normal load balancing when the chosen upstream is\nunavailable, so affinity never costs availability.",
+        "properties": {
+          "enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "mode": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StickyMode"
+              }
+            ],
+            "default": "cookie"
+          },
+          "name": {
+            "default": "prx_upstream",
+            "description": "Cookie or header name, depending on the mode.",
+            "type": "string"
+          },
+          "ttl_s": {
+            "default": 3600,
+            "description": "Lifetime of the cookie in `cookie` mode.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "StickyMode": {
+        "oneOf": [
+          {
+            "description": "prx sets a cookie naming the upstream and honors it on later requests.",
+            "enum": [
+              "cookie"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Hash the client address.",
+            "enum": [
+              "client_ip"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Hash the value of a request header.",
+            "enum": [
+              "header"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "TlsCertConfig": {
+        "description": "One certificate and the domains it answers for.",
+        "properties": {
+          "cert_path": {
+            "type": "string"
+          },
+          "domains": {
+            "default": [],
+            "description": "Domains this certificate serves. `*.example.com` also covers\n`example.com`. Left empty, the names are read from the certificate\nitself.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "is_default": {
+            "default": false,
+            "description": "Used for clients that send no SNI, or a name no certificate covers.",
+            "type": "boolean"
+          },
+          "key_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cert_path",
+          "key_path"
+        ],
+        "type": "object"
+      },
+      "TlsCertStatusPayload": {
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "expires_epoch_s": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "expires_in_days": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "domain",
+          "expires_epoch_s",
+          "expires_in_days"
+        ],
+        "type": "object"
+      },
+      "TlsConfig": {
+        "properties": {
+          "acme": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AcmeConfig"
+              }
+            ],
+            "default": {
+              "ca_root_path": null,
+              "directory_url": "https://acme-staging-v02.api.letsencrypt.org/directory",
+              "domains": [],
+              "email": [],
+              "enabled": false,
+              "renew_before_days": 30,
+              "storage_dir": "./acme"
+            },
+            "description": "Obtain and renew certificates automatically."
+          },
+          "cert": {
+            "default": [],
+            "description": "Certificates to choose from by SNI.",
+            "items": {
+              "$ref": "#/components/schemas/TlsCertConfig"
+            },
+            "type": "array"
+          },
+          "cert_path": {
+            "default": null,
+            "description": "Single-certificate form, kept so existing configs keep working. Prefer\n`[[server.tls.cert]]`, which supports more than one domain.",
+            "nullable": true,
+            "type": "string"
+          },
+          "enable_h2": {
+            "default": true,
+            "type": "boolean"
+          },
+          "key_path": {
+            "default": null,
+            "nullable": true,
+            "type": "string"
+          },
+          "listen": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "listen"
+        ],
+        "type": "object"
+      },
+      "TlsStatusPayload": {
+        "properties": {
+          "acme": {
+            "$ref": "#/components/schemas/AcmeStatus"
+          },
+          "certificates": {
+            "description": "Certificates the running listener would serve right now.",
+            "items": {
+              "$ref": "#/components/schemas/TlsCertStatusPayload"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "acme",
+          "certificates"
+        ],
+        "type": "object"
+      },
+      "UpstreamConfig": {
+        "properties": {
+          "addr": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "enabled": {
+            "default": true,
+            "description": "`false` drains the upstream: it stays in the config, keeps being probed,\nand is left out of the selection ring so it takes no traffic.\n\nThis cannot be expressed as `weight = 0` — the balancer clamps weights to\nat least 1, so a zero-weight upstream would quietly keep serving.",
+            "type": "boolean"
+          },
+          "idle_timeout_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "read_timeout_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "sni": {
+            "default": null,
+            "nullable": true,
+            "type": "string"
+          },
+          "tls": {
+            "default": false,
+            "type": "boolean"
+          },
+          "total_connect_timeout_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "verify_cert": {
+            "default": null,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "verify_hostname": {
+            "default": null,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "weight": {
+            "default": 1,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "write_timeout_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "addr"
+        ],
+        "type": "object"
+      },
+      "UpstreamH2": {
+        "description": "How prx talks to a service's upstreams.\n\ngRPC needs `always`: it requires end-to-end HTTP/2 because it carries its\nstatus in trailers, which HTTP/1.1 cannot express.",
+        "oneOf": [
+          {
+            "description": "HTTP/1.1 only.",
+            "enum": [
+              "never"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "HTTP/2 only. Over TLS this is negotiated with ALPN; over cleartext prx\ntrusts that the upstream speaks h2c.",
+            "enum": [
+              "always"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Prefer HTTP/2, fall back to HTTP/1.1. Over cleartext there is no ALPN to\nnegotiate with, so this behaves like `never`.",
+            "enum": [
+              "auto"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "UpstreamHealth": {
+        "properties": {
+          "addr": {
+            "type": "string"
+          },
+          "ewma_ms": {
+            "format": "double",
+            "type": "number"
+          },
+          "inflight": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/UpstreamState"
+          }
+        },
+        "required": [
+          "addr",
+          "state",
+          "inflight",
+          "ewma_ms"
+        ],
+        "type": "object"
+      },
+      "UpstreamRequestPayload": {
+        "properties": {
+          "addr": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "enabled": {
+            "default": null,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "idle_timeout_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "read_timeout_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "sni": {
+            "default": null,
+            "nullable": true,
+            "type": "string"
+          },
+          "tls": {
+            "default": null,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "total_connect_timeout_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "verify_cert": {
+            "default": null,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "verify_hostname": {
+            "default": null,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "weight": {
+            "default": null,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "write_timeout_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "addr"
+        ],
+        "type": "object"
+      },
+      "UpstreamState": {
+        "oneOf": [
+          {
+            "enum": [
+              "healthy",
+              "degraded",
+              "down"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Turned off in the config — not a failure, and not counted as one.",
+            "enum": [
+              "drained"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "UpstreamStatusEntry": {
+        "properties": {
+          "addr": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "circuit_open": {
+            "type": "boolean"
+          },
+          "circuit_reopens_in_ms": {
+            "description": "Milliseconds until the breaker closes again, when it is open.",
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "consecutive_failures": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "enabled": {
+            "description": "False when the upstream is drained: still configured, taking no traffic.",
+            "type": "boolean"
+          },
+          "ewma_us": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "inflight": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_probe_ms_ago": {
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "probe_healthy": {
+            "type": "boolean"
+          },
+          "share": {
+            "description": "Share of the selection ring, read from the ring itself.",
+            "format": "double",
+            "type": "number"
+          },
+          "weight": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "addr",
+          "enabled",
+          "weight",
+          "share",
+          "available",
+          "circuit_open",
+          "consecutive_failures",
+          "probe_healthy",
+          "inflight",
+          "ewma_us"
+        ],
+        "type": "object"
+      },
+      "UpstreamTestRequest": {
+        "description": "One upstream, probed on demand.",
+        "properties": {
+          "addr": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "addr"
+        ],
+        "type": "object"
+      },
+      "ValidateResponse": {
+        "description": "`POST /web/config/validate` (T203): every problem in one pass, each with the\nline it is on, and nothing written.",
+        "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminConfigPayload"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "The config as the API would report it, when it is valid — so the editor\ncan say what changed without parsing TOML in the browser."
+          },
+          "current_etag": {
+            "description": "The ETag of the file on disk at the moment of validation. A draft whose\nbase no longer matches this was overtaken by someone else.",
+            "nullable": true,
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "type": "array"
+          },
+          "valid": {
+            "description": "True when nothing would stop this config from being applied. Warnings\ndo not make it false.",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "valid",
+          "errors",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "ValidationReport": {
+        "description": "The answer to `POST /web/config/validate`.",
+        "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "type": "array"
+          },
+          "valid": {
+            "description": "True when nothing would stop this config from being applied. Warnings\ndo not make it false.",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "valid",
+          "errors",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "Version": {
+        "properties": {
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "id": {
+            "description": "`<unix ms>-<fingerprint>`; what rollback is asked for.",
+            "type": "string"
+          },
+          "ts_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "ts_ms",
+          "fingerprint",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      "WafConfig": {
+        "description": "The `[waf]` block. Absent means no rules, so the WAF does nothing.",
+        "properties": {
+          "inbound_anomaly_threshold": {
+            "description": "Summed anomaly score at which a request is blocked. Must be positive.\nUnset means 5.",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "paranoia_level": {
+            "description": "CRS paranoia level, 1 to 4. Only rules at or below this level count\ntoward blocking. Unset means 1. Kept as `i64` so that out-of-range\nvalues reach `check` as a `ConfigIssue` instead of a parse error.",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "rules_file": {
+            "description": "A SecLang rules file. A relative path resolves against the directory\nof the config file.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Generated by `cargo run --example gen_api`; do not edit.",
+    "title": "prx admin API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/admin/routes": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminRoutePayload"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "List routes"
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteRequestPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRoutePayload"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Create a route"
+      }
+    },
+    "/admin/routes/{name}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Delete a route"
+      },
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRoutePayload"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "One route"
+      },
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteRequestPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRoutePayload"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Update a route"
+      }
+    },
+    "/admin/services": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminServicePayload"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "List services"
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceRequestPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminServicePayload"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Create a service"
+      }
+    },
+    "/admin/services/{name}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Delete a service"
+      },
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminServicePayload"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "One service"
+      },
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceRequestPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminServicePayload"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Update a service"
+      }
+    },
+    "/web/audit": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Recent audit log entries"
+      }
+    },
+    "/web/cache": {
+      "delete": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Purge a route's cache"
+      },
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CacheRoutePayload"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Cache status per route"
+      }
+    },
+    "/web/config": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminConfigPayload"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "The running config (JSON, or TOML with ?format=toml)"
+      },
+      "put": {
+        "requestBody": {
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Replace the config with TOML text; If-Match guards against a lost update"
+      }
+    },
+    "/web/config/edit": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Apply targeted key edits, keeping comments and layout"
+      }
+    },
+    "/web/config/history": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Version"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Stored config versions, newest first"
+      }
+    },
+    "/web/config/history/{id}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "The TOML of one stored version"
+      }
+    },
+    "/web/config/rollback/{id}": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Re-apply a stored version after validating it"
+      }
+    },
+    "/web/config/validate": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Validate TOML text without applying it"
+      }
+    },
+    "/web/health/routes": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteHealthPayload"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Last route health result"
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteHealthPayload"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Probe every upstream now"
+      }
+    },
+    "/web/routes/test": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteTestResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Which route and upstream a request would take"
+      }
+    },
+    "/web/schema": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "JSON Schema of Prx.toml"
+      }
+    },
+    "/web/services/status": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceStatusPayload"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Live upstream state per service"
+      }
+    },
+    "/web/stats": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsSnapshot"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Current statistics snapshot"
+      }
+    },
+    "/web/stats/stream": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Statistics as a server-sent event stream"
+      }
+    },
+    "/web/tls/acme/renew": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Ask for an ACME order now"
+      }
+    },
+    "/web/tls/status": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TlsStatusPayload"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Certificates and ACME state"
+      }
+    },
+    "/web/upstreams/test": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpstreamTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or wrong credential"
+          },
+          "403": {
+            "description": "read_only, or a cross-origin write"
+          }
+        },
+        "summary": "Probe one upstream address"
+      }
+    }
+  },
+  "security": [
+    {
+      "bearer": []
+    }
+  ]
+}

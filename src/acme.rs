@@ -86,7 +86,7 @@ impl ChallengeStore {
 }
 
 /// What the admin API reports about certificate automation.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, schemars::JsonSchema)]
 pub struct AcmeStatus {
     pub enabled: bool,
     pub directory_url: String,

@@ -19,8 +19,8 @@ const toTomlBool = (value: boolean): string => (value ? 'true' : 'false');
 
 const formatArray = (items: string[]): string => `[${items.map((x) => `"${esc(x)}"`).join(', ')}]`;
 
-const pushOptionalNumber = (lines: string[], key: string, value: number | null) => {
-  if (value !== null && Number.isFinite(value)) {
+const pushOptionalNumber = (lines: string[], key: string, value: number | null | undefined) => {
+  if (value != null && Number.isFinite(value)) {
     lines.push(`${key} = ${Math.max(0, Math.floor(value))}`);
   }
 };
@@ -38,10 +38,10 @@ const renderUpstream = (upstream: UpstreamConfig, prefix: 'service' | 'route' = 
     lines.push(`sni = "${esc(upstream.sni)}"`);
   }
   lines.push(`weight = ${Math.min(256, Math.max(1, upstream.weight))}`);
-  if (upstream.verify_cert !== null) {
+  if (upstream.verify_cert != null) {
     lines.push(`verify_cert = ${toTomlBool(upstream.verify_cert)}`);
   }
-  if (upstream.verify_hostname !== null) {
+  if (upstream.verify_hostname != null) {
     lines.push(`verify_hostname = ${toTomlBool(upstream.verify_hostname)}`);
   }
   pushOptionalNumber(lines, 'connect_timeout_ms', upstream.connect_timeout_ms);
@@ -353,11 +353,11 @@ export const encodeToml = (config: PrxConfig): string => {
     lines.push(`listen = "${esc(tls.listen)}"`);
     // Written only when they are set: an empty cert_path next to a list of
     // [[server.tls.cert]] blocks is a config prx refuses to load.
-    if (tls.cert_path.trim()) {
-      lines.push(`cert_path = "${esc(tls.cert_path)}"`);
+    if (tls.cert_path?.trim()) {
+      lines.push(`cert_path = "${esc(tls.cert_path ?? '')}"`);
     }
-    if (tls.key_path.trim()) {
-      lines.push(`key_path = "${esc(tls.key_path)}"`);
+    if (tls.key_path?.trim()) {
+      lines.push(`key_path = "${esc(tls.key_path ?? '')}"`);
     }
     lines.push(`enable_h2 = ${toTomlBool(tls.enable_h2)}`);
 

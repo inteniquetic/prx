@@ -65,8 +65,11 @@ pub const ADMIN_CONFIG_HISTORY_PATH: &str = "/web/config/history";
 pub const ADMIN_CONFIG_HISTORY_ID_PATH: &str = "/web/config/history/{id}";
 pub const ADMIN_CONFIG_ROLLBACK_PATH: &str = "/web/config/rollback/{id}";
 pub const ADMIN_AUDIT_PATH: &str = "/web/audit";
+pub const ADMIN_SCHEMA_PATH: &str = "/web/schema";
 const WEBUI_INDEX_PATH: &str = "index.html";
 static WEBUI_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/webui/dist");
+
+pub mod doc;
 
 #[derive(Clone)]
 pub struct ConfigAdmin {
@@ -365,7 +368,7 @@ struct AdminState {
     acme_renew: Option<crate::acme::SharedRenew>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct ConfigQuery {
     format: Option<String>,
     /// `PUT ?dry_run=true` validates and answers with the report, and writes
@@ -388,12 +391,12 @@ fn query_flag(value: Option<&String>) -> bool {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct RouteHealthQuery {
     timeout_ms: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct AdminConfigPayload {
     server: AdminServerPayload,
     observability: AdminObservabilityPayload,
@@ -404,7 +407,7 @@ struct AdminConfigPayload {
     plugins: Vec<AdminPluginPayload>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct AdminPluginPayload {
     name: String,
     kind: String,
@@ -428,7 +431,7 @@ impl AdminPluginPayload {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct AdminServerPayload {
     listen: Vec<String>,
     health_path: String,
@@ -442,7 +445,7 @@ struct AdminServerPayload {
     tls: Option<AdminTlsPayload>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct AdminTlsPayload {
     listen: String,
     /// Present only for the single-certificate form.
@@ -456,7 +459,7 @@ struct AdminTlsPayload {
     acme: AdminAcmePayload,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct AdminAcmePayload {
     enabled: bool,
     email: Vec<String>,
@@ -467,7 +470,7 @@ struct AdminAcmePayload {
     ca_root_path: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct AdminTlsCertPayload {
     domains: Vec<String>,
     cert_path: String,
@@ -475,7 +478,7 @@ struct AdminTlsCertPayload {
     is_default: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct AdminObservabilityPayload {
     log_level: String,
     access_log: bool,
@@ -487,7 +490,7 @@ struct AdminObservabilityPayload {
 /// Same reasoning as `AdminRoutePayload`: the UI is the only editor most people
 /// will use, so a payload that leaves out health checks, session affinity or
 /// retry budgets turns "edit this service" into "lose them".
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct AdminServicePayload {
     name: String,
     lb: String,
@@ -540,7 +543,7 @@ impl AdminServicePayload {
 /// people will use: a payload that leaves out header rules, limits or cache
 /// settings turns "edit this route" into "lose whatever the file said about
 /// them".
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct AdminRoutePayload {
     name: String,
     service: String,
@@ -578,14 +581,14 @@ impl AdminRoutePayload {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct AdminCircuitBreakerPayload {
     enabled: bool,
     consecutive_failures: usize,
     open_ms: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct AdminUpstreamPayload {
     addr: String,
     enabled: bool,
@@ -621,7 +624,7 @@ impl AdminUpstreamPayload {
 }
 
 // Request payloads for Service CRUD
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ServiceRequestPayload {
     pub name: String,
     #[serde(default)]
@@ -654,7 +657,7 @@ struct ServiceRequestPayload {
     pub upstreams: Vec<UpstreamRequestPayload>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct CircuitBreakerRequestPayload {
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -664,7 +667,7 @@ struct CircuitBreakerRequestPayload {
     pub open_ms: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct UpstreamRequestPayload {
     pub addr: String,
     #[serde(default)]
@@ -692,7 +695,7 @@ struct UpstreamRequestPayload {
 }
 
 // Request payloads for Route CRUD
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct RouteRequestPayload {
     pub name: String,
     pub service: String,
@@ -728,13 +731,13 @@ struct RouteRequestPayload {
 /// The config says what was asked for; this says what is happening. The page
 /// that shows circuit breakers and probe verdicts needs the second one, and it
 /// has to come from the same snapshot traffic is being routed on.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ServiceStatusPayload {
     checked_at_epoch_ms: u64,
     services: Vec<ServiceStatusEntry>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ServiceStatusEntry {
     name: String,
     lb: String,
@@ -744,7 +747,7 @@ struct ServiceStatusEntry {
     upstreams: Vec<UpstreamStatusEntry>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct UpstreamStatusEntry {
     addr: String,
     /// False when the upstream is drained: still configured, taking no traffic.
@@ -764,7 +767,7 @@ struct UpstreamStatusEntry {
 }
 
 /// One upstream, probed on demand.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct UpstreamTestRequest {
     addr: String,
     #[serde(default)]
@@ -772,7 +775,7 @@ struct UpstreamTestRequest {
 }
 
 /// "If a request like this arrived, where would it go?"
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct RouteTestRequest {
     #[serde(default = "default_test_method")]
     method: String,
@@ -790,7 +793,7 @@ fn default_test_path() -> String {
     "/".to_string()
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct RouteTestResponse {
     /// `matched`, `method_not_allowed` or `not_found`.
     outcome: &'static str,
@@ -800,7 +803,7 @@ struct RouteTestResponse {
     service: Option<RouteTestServicePayload>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct RouteTestEcho {
     method: String,
     host: String,
@@ -808,7 +811,7 @@ struct RouteTestEcho {
     path: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct RouteTestRoutePayload {
     index: usize,
     name: String,
@@ -823,7 +826,7 @@ struct RouteTestRoutePayload {
     matched_by: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct RouteTestServicePayload {
     name: String,
     lb: String,
@@ -831,7 +834,7 @@ struct RouteTestServicePayload {
     upstreams: Vec<RouteTestUpstream>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct RouteTestSelection {
     /// False for the strategies that draw at random: there is no single
     /// upstream to name, and pretending otherwise would be a guess.
@@ -840,7 +843,7 @@ struct RouteTestSelection {
     note: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct RouteTestUpstream {
     addr: String,
     weight: u16,
@@ -852,14 +855,14 @@ struct RouteTestUpstream {
     ewma_us: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct RouteHealthPayload {
     checked_at_epoch_ms: u64,
     timeout_ms: u64,
     routes: Vec<RouteHealthRoutePayload>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct RouteHealthRoutePayload {
     route_index: usize,
     name: String,
@@ -872,7 +875,7 @@ struct RouteHealthRoutePayload {
     upstreams: Vec<RouteHealthUpstreamPayload>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct RouteHealthUpstreamPayload {
     addr: String,
     timeout_ms: u64,
@@ -1119,13 +1122,13 @@ async fn render_route_health_payload(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct CacheQuery {
     /// Limit the action to one route; omitted means every route.
     route: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct CacheRoutePayload {
     route: String,
     entries: usize,
@@ -1136,14 +1139,14 @@ struct CacheRoutePayload {
     evictions: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct TlsStatusPayload {
     acme: crate::acme::AcmeStatus,
     /// Certificates the running listener would serve right now.
     certificates: Vec<TlsCertStatusPayload>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct TlsCertStatusPayload {
     domain: String,
     expires_epoch_s: i64,
@@ -1824,7 +1827,7 @@ async fn read_config_body(body: Body) -> Result<String, BodyRejection> {
 
 /// `POST /web/config/validate` (T203): every problem in one pass, each with the
 /// line it is on, and nothing written.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ValidateResponse {
     #[serde(flatten)]
     report: ValidationReport,
@@ -1863,7 +1866,7 @@ async fn post_config_validate(State(state): State<AdminState>, body: Body) -> Re
 
 /// `POST /web/config/edit` (T308): the Settings forms change one field at a
 /// time, and the answer is the same file with that field changed.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct EditRequest {
     /// The draft to edit — normally what the editor is showing, not the file on
     /// disk, so form edits and hand edits pile up in the same draft.
@@ -1872,7 +1875,7 @@ struct EditRequest {
     ops: Vec<EditOp>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct EditResponse {
     toml: String,
     #[serde(flatten)]
@@ -1930,7 +1933,7 @@ async fn post_acme_renew(State(state): State<AdminState>) -> Response<Body> {
 
 /// What a client gets back when its `If-Match` no longer matches the file:
 /// enough to show the three sides without a second request.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ConfigConflict {
     error: &'static str,
     /// What the client believed it was editing.
@@ -3261,7 +3264,7 @@ async fn post_config_rollback(
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct AuditQuery {
     limit: Option<usize>,
 }
@@ -3272,6 +3275,11 @@ async fn get_audit(
 ) -> Response<Body> {
     let limit = query.limit.unwrap_or(100).clamp(1, 1000);
     json_response(StatusCode::OK, &state.config_admin.audit.tail(limit))
+}
+
+/// JSON Schema of `Prx.toml`, for an editor or a form to validate against.
+async fn get_schema() -> Response<Body> {
+    json_response(StatusCode::OK, &doc::config_schema())
 }
 
 fn build_router(state: AdminState) -> Router {
@@ -3296,6 +3304,7 @@ fn build_router(state: AdminState) -> Router {
             axum::routing::post(post_config_rollback),
         )
         .route(ADMIN_AUDIT_PATH, get(get_audit))
+        .route(ADMIN_SCHEMA_PATH, get(get_schema))
         .route(
             ADMIN_TLS_ACME_RENEW_PATH,
             axum::routing::post(post_acme_renew),

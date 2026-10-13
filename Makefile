@@ -5,7 +5,7 @@ PRX_CONFIG ?= ./Prx.toml
 
 .DEFAULT_GOAL := help
 
-.PHONY: help run run-release build build-release check fmt fmt-check clippy test audit gate ci clean \
+.PHONY: help run run-release build build-release check fmt fmt-check clippy schema schema-check test audit gate ci clean \
         bench bench-all bench-compare bench-micro profile
 
 help: ## Show available targets
@@ -37,6 +37,14 @@ clippy: ## Run clippy with warnings as errors
 
 test: ## Run all tests (benches excluded: criterion has its own harness)
 	$(CARGO) test --lib --bins --tests -- --test-threads=1
+
+schema: ## Regenerate docs/openapi.json, docs/prx.schema.json and webui/src/lib/types/api.d.ts
+	$(CARGO) run -q --example gen_api -- docs
+	cd webui && npm run gen:api
+
+schema-check: schema ## Fail when the generated API documents or TS types are stale
+	cd webui && npm run schema:check
+	git diff --exit-code -- docs/openapi.json docs/prx.schema.json webui/src/lib/types/api.d.ts
 
 audit: ## Run cargo audit (installs cargo-audit if missing)
 	@if ! command -v cargo-audit >/dev/null 2>&1; then \

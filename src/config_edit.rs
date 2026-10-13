@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use toml_edit::{Array, DocumentMut, Item, Table, Value, value};
 
 /// What to do to one key.
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EditAction {
     /// Write `value` at `path`, creating the tables it needs.
@@ -26,7 +26,7 @@ pub enum EditAction {
     Append,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct EditOp {
     /// Dotted path, with `[i]` for an array-of-tables element:
     /// `server.tls.acme.domains`, `service[0].upstream[1].weight`.

@@ -22,7 +22,7 @@ use crate::config::{ConfigIssue, IssueSeverity, PrxConfig};
 ///
 /// Positions are 1-based, and columns count characters rather than bytes so a
 /// file with Thai comments in it still marks the right column.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct Diagnostic {
     pub severity: IssueSeverity,
     pub code: String,
@@ -37,7 +37,7 @@ pub struct Diagnostic {
 }
 
 /// The answer to `POST /web/config/validate`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ValidationReport {
     /// True when nothing would stop this config from being applied. Warnings
     /// do not make it false.
