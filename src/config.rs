@@ -356,6 +356,30 @@ impl PrxConfig {
                         ),
                     ));
                 }
+
+                for (field, value) in [
+                    ("connect_timeout_ms", upstream.connect_timeout_ms),
+                    (
+                        "total_connect_timeout_ms",
+                        upstream.total_connect_timeout_ms,
+                    ),
+                    ("read_timeout_ms", upstream.read_timeout_ms),
+                    ("write_timeout_ms", upstream.write_timeout_ms),
+                    ("idle_timeout_ms", upstream.idle_timeout_ms),
+                ] {
+                    if let Some(ms) = value.filter(|ms| *ms > HIGH_TIMEOUT_MS) {
+                        out.push(timeout_warning(&name, upstream_at(field), field, ms));
+                    }
+                }
+            }
+
+            if service.request_timeout_ms > HIGH_TIMEOUT_MS {
+                out.push(timeout_warning(
+                    name,
+                    at("request_timeout_ms"),
+                    "request_timeout_ms",
+                    service.request_timeout_ms,
+                ));
             }
 
             if !service.upstreams.is_empty()
@@ -919,6 +943,21 @@ impl PrxConfig {
 pub enum IssueSeverity {
     Error,
     Warning,
+}
+
+/// Above five minutes a timeout stops being a safety net: a stuck upstream holds
+/// the connection, and the worker behind it, for longer than any client waits.
+const HIGH_TIMEOUT_MS: u64 = 300_000;
+
+fn timeout_warning(service: &str, path: String, field: &str, ms: u64) -> ConfigIssue {
+    ConfigIssue::warning(
+        "timeout_unusually_high",
+        path,
+        format!(
+            "service '{service}' {field} = {ms} is over {HIGH_TIMEOUT_MS} ms, so a stuck \
+             upstream holds its connection for minutes"
+        ),
+    )
 }
 
 /// One problem found in a config, addressed by field path so the editor can

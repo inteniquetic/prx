@@ -75,7 +75,7 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 |---|---|---|---|
 | [T201](T201-admin-auth-hardening.md) | Auth + bind loopback + CORS/CSRF ของ Admin API | M | — |
 | [T202](T202-config-history-rollback.md) | เก็บประวัติ config + diff + rollback | M | T201 | ✅ done (history + rollback + 0600 + rotate; diff เทียบเวอร์ชันทำฝั่ง client จาก `GET /web/config/history/{id}` + หน้า Audit ใน WebUI) |
-| [T203](T203-validate-dry-run-api.md) | `POST /web/config/validate` คืน error แบบมีพิกัด | M | — | 🟡 endpoint + error/warning ครบพร้อมพิกัด (ทำใน T307); เหลือ error code ของ TOML syntax แยกชนิด |
+| [T203](T203-validate-dry-run-api.md) | `POST /web/config/validate` คืน error แบบมีพิกัด | M | — | ✅ done (error code แยกชนิด + warning timeout สูง)
 | [T204](T204-atomic-apply-reload.md) | Apply แบบ atomic + auto-rollback ถ้า reload ไม่ผ่าน | M | T202, T203 | ✅ done (validate ก่อนแตะไฟล์; watcher ไม่ reload ซ้ำและ debounce แบบ trailing-edge ไม่ทิ้ง edit สุดท้าย; e2e ยิง load ระหว่าง apply 12 รอบ = 0 error)
 | [T205](T205-openapi-typed-client.md) | OpenAPI + JSON Schema + typed client ให้ WebUI | M | T203 | ✅ done (generate จาก Rust: schemars → openapi.json + prx.schema.json + api.d.ts; `make schema`/`schema-check`; ตรวจพบว่า type เขียนมือบอกว่า field เป็น non-null ทั้งที่ API ส่ง null)
 | [T206](T206-audit-log.md) | Audit log ใครแก้อะไรเมื่อไหร่ | S | T201 | ✅ done (ทุก write รวมที่ถูกปฏิเสธ; fingerprint ผูกกับ history) |

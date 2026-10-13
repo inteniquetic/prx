@@ -61,6 +61,21 @@ impl ValidationReport {
     }
 }
 
+/// The `toml` crate has no error kinds, only messages; its wording is stable
+/// enough to tell a wrong shape from a broken file.
+fn syntax_code(message: &str) -> &'static str {
+    const KINDS: [(&str, &str); 4] = [
+        ("missing field", "missing_field"),
+        ("duplicate key", "duplicate_key"),
+        ("invalid type", "invalid_type"),
+        ("invalid value", "invalid_value"),
+    ];
+    KINDS
+        .iter()
+        .find(|(prefix, _)| message.trim_start().starts_with(prefix))
+        .map_or("invalid_toml", |(_, code)| code)
+}
+
 /// Validates TOML text, returning the report and — when the config is usable —
 /// the parsed config, so a caller that wants both does not parse twice.
 pub fn validate_text(text: &str) -> (ValidationReport, Option<PrxConfig>) {
@@ -79,7 +94,7 @@ pub fn validate_text(text: &str) -> (ValidationReport, Option<PrxConfig>) {
                     valid: false,
                     errors: vec![Diagnostic {
                         severity: IssueSeverity::Error,
-                        code: "invalid_toml".to_string(),
+                        code: syntax_code(err.message()).to_string(),
                         path: String::new(),
                         message: err.message().trim().to_string(),
                         hint: None,
@@ -373,6 +388,47 @@ is_default = true
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].code, "invalid_toml");
         assert!(report.errors[0].line >= 2, "{:?}", report.errors[0]);
+    }
+
+    #[test]
+    fn a_wrong_shape_gets_its_own_code() {
+        for (text, code) in [
+            (
+                "[[service]]\nname = \"a\"\n[[service.upstream]]\n",
+                "missing_field",
+            ),
+            ("[server]\nlisten = 5\n", "invalid_type"),
+            ("a = 1\na = 2\n", "duplicate_key"),
+        ] {
+            let (report, _) = validate_text(text);
+            assert_eq!(
+                report.errors[0].code, code,
+                "{text:?}: {:?}",
+                report.errors[0]
+            );
+        }
+    }
+
+    #[test]
+    fn a_five_minute_plus_timeout_is_a_warning_not_an_error() {
+        let text = "[[service]]\nname = \"a\"\nrequest_timeout_ms = 900000\n\n\
+                    [[service.upstream]]\naddr = \"127.0.0.1:1\"\nread_timeout_ms = 600000\n\n\
+                    [[route]]\nname = \"r\"\nservice = \"a\"\npath_prefix = \"/\"\n";
+        let (report, config) = validate_text(text);
+        assert!(config.is_some(), "{report:?}");
+        let paths: Vec<_> = report
+            .warnings
+            .iter()
+            .filter(|w| w.code == "timeout_unusually_high")
+            .map(|w| w.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "service[0].upstream[0].read_timeout_ms",
+                "service[0].request_timeout_ms"
+            ]
+        );
     }
 
     #[test]

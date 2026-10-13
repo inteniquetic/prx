@@ -1,7 +1,7 @@
 # T203 — Validate / dry-run API ที่คืน error แบบมีพิกัด
 
 **Phase:** 2 · Control plane
-**Status:** 🟡 partly done (ทำไปกับ [T307](T307-toml-editor-diff-apply.md))
+**Status:** ✅ done
 **Size:** M (~1d)
 **Depends on:** —
 **Files:** `src/config.rs`, `src/admin.rs`
@@ -53,9 +53,9 @@ Editor ของ T307 ใช้ endpoint นี้ทุก keystroke จึง�
   route ที่ปิดอยู่, service ที่ upstream ถูก drain หมด, health check timeout ≥ interval,
   upstream TLS ที่ปิด verify
 
-เหลือของ task นี้: แยกชนิดของ TOML syntax error ให้มี `code` ละเอียดกว่า `invalid_toml`
-(ตอนนี้ syntax error รายงานตัวเดียวเพราะทุกอย่างหลังจุดที่พังคือการเดา)
-และ warning เรื่องค่า timeout ที่สูงผิดปกติ
+ส่วนที่เหลือทำแล้ว: error ของ parser แยก `code` เป็น `missing_field` / `invalid_type` /
+`invalid_value` / `duplicate_key` (ที่เหลือคือ `invalid_toml`) และ warning
+`timeout_unusually_high` เมื่อ timeout เกิน 300 000 ms
 
 ## Acceptance criteria
 
