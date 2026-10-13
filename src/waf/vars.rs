@@ -29,6 +29,27 @@ pub struct Transaction<'a> {
     /// What each distinct target selected. Request-derived collections only:
     /// TX and the response change under the rules.
     values_cache: RefCell<HashMap<String, std::rc::Rc<Vec<Extracted<'a>>>>>,
+    /// Client address and port, for `REMOTE_ADDR` / `REMOTE_PORT`.
+    pub remote: Option<(String, u16)>,
+    /// Listener address and port, for `SERVER_ADDR` / `SERVER_PORT`.
+    pub server: Option<(String, u16)>,
+    /// Set by `ctl:requestBodyProcessor`; otherwise taken from Content-Type.
+    pub body_processor: RefCell<Option<String>>,
+    /// What the last matching link matched, as (name, value), for the
+    /// `MATCHED_VAR*` collections. Rewritten on every match.
+    pub matched: RefCell<Vec<(String, Vec<u8>)>>,
+    parsed_body: RefCell<Option<std::rc::Rc<ParsedBody>>>,
+}
+
+/// A request body split the way its processor splits it.
+#[derive(Default, Debug)]
+pub struct ParsedBody {
+    /// `ARGS_POST`: name and value, already decoded.
+    pub args: Vec<(String, Vec<u8>)>,
+    /// `FILES` / `FILES_NAMES` / `FILES_SIZES`: field, file name, size.
+    pub files: Vec<(String, String, usize)>,
+    /// `MULTIPART_PART_HEADERS`, one `name: value` line per header.
+    pub part_headers: Vec<Vec<u8>>,
 }
 
 impl<'a> Transaction<'a> {
@@ -42,7 +63,70 @@ impl<'a> Transaction<'a> {
             anomaly_scores: RefCell::new([0; 5]),
             tx: RefCell::new(HashMap::new()),
             values_cache: RefCell::new(HashMap::new()),
+            remote: None,
+            server: None,
+            body_processor: RefCell::new(None),
+            matched: RefCell::new(Vec::new()),
+            parsed_body: RefCell::new(None),
         }
+    }
+
+    /// The body processor in effect: a `ctl` override, else what Content-Type
+    /// says, else none (also none for an empty body, as ModSecurity does).
+    pub fn processor(&self) -> Option<String> {
+        if let Some(set) = self.body_processor.borrow().clone() {
+            return Some(set);
+        }
+        if self.body.is_empty() {
+            return None;
+        }
+        let ct = self
+            .head
+            .headers
+            .get("content-type")?
+            .to_str()
+            .ok()?
+            .to_ascii_lowercase();
+        if ct.starts_with("application/x-www-form-urlencoded") {
+            Some("URLENCODED".into())
+        } else if ct.starts_with("multipart/form-data") {
+            Some("MULTIPART".into())
+        } else if ct.starts_with("application/json") || ct.contains("+json") {
+            Some("JSON".into())
+        } else if ct.contains("xml") {
+            Some("XML".into())
+        } else {
+            None
+        }
+    }
+
+    /// Switches the body processor and forgets everything derived from it.
+    pub fn set_processor(&self, name: &str) {
+        *self.body_processor.borrow_mut() = Some(name.to_ascii_uppercase());
+        *self.parsed_body.borrow_mut() = None;
+        self.values_cache.borrow_mut().clear();
+    }
+
+    fn parsed(&self) -> std::rc::Rc<ParsedBody> {
+        if let Some(hit) = self.parsed_body.borrow().as_ref() {
+            return std::rc::Rc::clone(hit);
+        }
+        let parsed = std::rc::Rc::new(match self.processor().as_deref() {
+            Some("URLENCODED") => ParsedBody {
+                args: std::str::from_utf8(self.body)
+                    .map(form_pairs)
+                    .unwrap_or_default(),
+                ..Default::default()
+            },
+            Some("JSON") => ParsedBody {
+                args: json_args(self.body),
+                ..Default::default()
+            },
+            Some("MULTIPART") => multipart(self.head, self.body),
+            _ => ParsedBody::default(),
+        });
+        *self.parsed_body.borrow_mut() = Some(std::rc::Rc::clone(&parsed));
+        parsed
     }
 
     pub fn update_score(&self, phase: usize, score: u32) {
@@ -244,20 +328,7 @@ pub fn values<'a>(trx: &'a Transaction<'a>, collection: &str, key: &Key) -> Vec<
     let head = trx.head;
     let scalar = |value: Vec<u8>| vec![(String::new(), Cow::Owned(value))];
     let name = collection.to_ascii_uppercase();
-    let post_pairs = || -> Vec<(String, Vec<u8>)> {
-        let form = head
-            .headers
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| {
-                v.to_ascii_lowercase()
-                    .starts_with("application/x-www-form-urlencoded")
-            });
-        match (form, std::str::from_utf8(trx.body)) {
-            (true, Ok(text)) => form_pairs(text),
-            _ => Vec::new(),
-        }
-    };
+    let post_pairs = || -> Vec<(String, Vec<u8>)> { trx.parsed().args.clone() };
     let get_pairs = || form_pairs(head.uri.query().unwrap_or(""));
     match name.as_str() {
         "ARGS" | "ARGS_NAMES" => {
@@ -308,6 +379,127 @@ pub fn values<'a>(trx: &'a Transaction<'a>, collection: &str, key: &Key) -> Vec<
                 .collect();
             owned(pairs, key, false)
         }
+        "REMOTE_ADDR" => trx
+            .remote
+            .as_ref()
+            .map(|(ip, _)| scalar(ip.clone().into_bytes()))
+            .unwrap_or_default(),
+        "REMOTE_PORT" => trx
+            .remote
+            .as_ref()
+            .map(|(_, port)| scalar(port.to_string().into_bytes()))
+            .unwrap_or_default(),
+        "SERVER_ADDR" => trx
+            .server
+            .as_ref()
+            .map(|(ip, _)| scalar(ip.clone().into_bytes()))
+            .unwrap_or_default(),
+        "SERVER_PORT" => trx
+            .server
+            .as_ref()
+            .map(|(_, port)| scalar(port.to_string().into_bytes()))
+            .unwrap_or_default(),
+        "SERVER_NAME" => head
+            .headers
+            .get("host")
+            .and_then(|h| h.to_str().ok())
+            .map(|h| {
+                scalar(
+                    h.rsplit_once(':')
+                        .filter(|(_, p)| p.parse::<u16>().is_ok())
+                        .map_or(h, |(n, _)| n)
+                        .as_bytes()
+                        .to_vec(),
+                )
+            })
+            .unwrap_or_default(),
+        "REQBODY_PROCESSOR" => trx
+            .processor()
+            .map(|p| scalar(p.into_bytes()))
+            .unwrap_or_default(),
+        "FILES" => owned(
+            trx.parsed()
+                .files
+                .iter()
+                .map(|(field, file, _)| (field.clone(), file.clone().into_bytes()))
+                .collect(),
+            key,
+            false,
+        ),
+        "FILES_NAMES" => owned(
+            trx.parsed()
+                .files
+                .iter()
+                .map(|(field, _, _)| (field.clone(), Vec::new()))
+                .collect(),
+            key,
+            true,
+        ),
+        "FILES_SIZES" => owned(
+            trx.parsed()
+                .files
+                .iter()
+                .map(|(field, _, size)| (field.clone(), size.to_string().into_bytes()))
+                .collect(),
+            key,
+            false,
+        ),
+        "FILES_COMBINED_SIZE" => {
+            let parsed = trx.parsed();
+            if parsed.files.is_empty() {
+                Vec::new()
+            } else {
+                scalar(
+                    parsed
+                        .files
+                        .iter()
+                        .map(|(_, _, size)| size)
+                        .sum::<usize>()
+                        .to_string()
+                        .into_bytes(),
+                )
+            }
+        }
+        "MULTIPART_PART_HEADERS" => trx
+            .parsed()
+            .part_headers
+            .iter()
+            .map(|line| {
+                let name = line
+                    .iter()
+                    .position(|&b| b == b':')
+                    .map(|i| String::from_utf8_lossy(&line[..i]).to_ascii_lowercase())
+                    .unwrap_or_default();
+                (name, Cow::Owned(line.clone()))
+            })
+            .filter(|(name, _)| selected(name, key))
+            .collect(),
+        "MATCHED_VAR" => trx
+            .matched
+            .borrow()
+            .last()
+            .map(|(_, v)| scalar(v.clone()))
+            .unwrap_or_default(),
+        "MATCHED_VAR_NAME" => trx
+            .matched
+            .borrow()
+            .last()
+            .map(|(n, _)| scalar(n.clone().into_bytes()))
+            .unwrap_or_default(),
+        "MATCHED_VARS" => trx
+            .matched
+            .borrow()
+            .iter()
+            .map(|(n, v)| (n.clone(), Cow::Owned(v.clone())))
+            .filter(|(n, _)| selected(n, key))
+            .collect(),
+        "MATCHED_VARS_NAMES" => trx
+            .matched
+            .borrow()
+            .iter()
+            .map(|(n, _)| (n.clone(), Cow::Owned(n.clone().into_bytes())))
+            .filter(|(n, _)| selected(n, key))
+            .collect(),
         "REQUEST_METHOD" => scalar(head.method.as_str().as_bytes().to_vec()),
         "REQUEST_PROTOCOL" => scalar(format!("{:?}", head.version).into_bytes()),
         "REQUEST_URI" | "REQUEST_URI_RAW" => scalar(
@@ -366,6 +558,10 @@ pub fn values_cached<'a>(
     let volatile = target.collection.eq_ignore_ascii_case("TX")
         || target
             .collection
+            .to_ascii_uppercase()
+            .starts_with("MATCHED_VAR")
+        || target
+            .collection
             .get(..8)
             .is_some_and(|c| c.eq_ignore_ascii_case("RESPONSE"));
     if volatile {
@@ -405,4 +601,110 @@ pub fn values_cached<'a>(
         .borrow_mut()
         .insert(target.select_id.clone(), Rc::clone(&found));
     found
+}
+
+/// `json.a.b` / `json.list.0` names, the way ModSecurity's JSON processor
+/// flattens a document into ARGS. Bounded so a deep or huge body is not a
+/// way to make the WAF spend unbounded time.
+fn json_args(body: &[u8]) -> Vec<(String, Vec<u8>)> {
+    fn walk(
+        prefix: &str,
+        value: &serde_json::Value,
+        depth: usize,
+        out: &mut Vec<(String, Vec<u8>)>,
+    ) {
+        const MAX_DEPTH: usize = 64;
+        const MAX_ARGS: usize = 10_000;
+        if depth > MAX_DEPTH || out.len() >= MAX_ARGS {
+            return;
+        }
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, inner) in map {
+                    walk(&format!("{prefix}.{key}"), inner, depth + 1, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (i, inner) in items.iter().enumerate() {
+                    walk(&format!("{prefix}.{i}"), inner, depth + 1, out);
+                }
+            }
+            serde_json::Value::String(text) => {
+                out.push((prefix.to_string(), text.clone().into_bytes()))
+            }
+            serde_json::Value::Null => out.push((prefix.to_string(), Vec::new())),
+            other => out.push((prefix.to_string(), other.to_string().into_bytes())),
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(doc) = serde_json::from_slice::<serde_json::Value>(body) {
+        walk("json", &doc, 0, &mut out);
+    }
+    out
+}
+
+fn multipart(head: &RequestHeader, body: &[u8]) -> ParsedBody {
+    let mut parsed = ParsedBody::default();
+    let boundary = head
+        .headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|ct| {
+            ct.split(';')
+                .map(str::trim)
+                .find_map(|p| p.strip_prefix("boundary="))
+        })
+        .map(|b| b.trim_matches('"').as_bytes().to_vec());
+    let Some(boundary) = boundary.filter(|b| !b.is_empty()) else {
+        return parsed;
+    };
+    let delimiter = [b"--".as_slice(), &boundary].concat();
+    let find = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).position(|w| w == needle);
+    let mut rest = body;
+    // Skip the preamble, then take each part up to the next delimiter.
+    let Some(start) = find(rest, &delimiter) else {
+        return parsed;
+    };
+    rest = &rest[start + delimiter.len()..];
+    while !rest.starts_with(b"--") && !rest.is_empty() {
+        let part_end = find(rest, &delimiter).unwrap_or(rest.len());
+        let part = rest[..part_end]
+            .strip_prefix(b"\r\n")
+            .unwrap_or(&rest[..part_end]);
+        if let Some(split) = find(part, b"\r\n\r\n") {
+            let (raw_headers, data) = (&part[..split], &part[split + 4..]);
+            let data = data.strip_suffix(b"\r\n").unwrap_or(data);
+            let mut field = String::new();
+            let mut file = None;
+            for line in raw_headers.split(|&b| b == b'\n') {
+                let line = line.strip_suffix(b"\r").unwrap_or(line);
+                if line.is_empty() {
+                    continue;
+                }
+                parsed.part_headers.push(line.to_vec());
+                let text = String::from_utf8_lossy(line);
+                if text
+                    .to_ascii_lowercase()
+                    .starts_with("content-disposition:")
+                {
+                    for piece in text.split(';').map(str::trim) {
+                        if let Some(v) = piece.strip_prefix("name=") {
+                            field = v.trim_matches('"').to_string();
+                        } else if let Some(v) = piece.strip_prefix("filename=") {
+                            file = Some(v.trim_matches('"').to_string());
+                        }
+                    }
+                }
+            }
+            match file {
+                Some(name) => parsed.files.push((field, name, data.len())),
+                None => parsed.args.push((field, data.to_vec())),
+            }
+        }
+        if part_end >= rest.len() {
+            break;
+        }
+        rest = &rest[part_end + delimiter.len()..];
+    }
+    parsed
 }

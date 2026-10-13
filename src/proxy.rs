@@ -512,6 +512,9 @@ pub struct RequestCtx {
 /// anomaly scores accumulated per phase.
 #[derive(Default)]
 pub struct WafRequestState {
+    /// Client and listener addresses, for REMOTE_ADDR and SERVER_ADDR.
+    remote: Option<(String, u16)>,
+    server: Option<(String, u16)>,
     tx: std::collections::HashMap<String, String>,
     anomaly_scores: [u32; 5],
     seeded: bool,
@@ -536,6 +539,8 @@ impl WafRequestState {
         let mut trx = crate::waf::vars::Transaction::new(head, body);
         trx.response_head = response_head;
         trx.response_body = response_body;
+        trx.remote = self.remote.clone();
+        trx.server = self.server.clone();
         *trx.tx.borrow_mut() = std::mem::take(&mut self.tx);
         *trx.anomaly_scores.borrow_mut() = self.anomaly_scores;
         if !self.seeded {
@@ -752,6 +757,11 @@ impl ProxyHttp for PrxProxy {
                     // Moving phase 1 here is required for early enforcement; T512 owns
                     // scheduling the remaining phases and carrying TX between hooks.
                     if !snapshot.ruleset.phases[0].is_empty() {
+                        let peer = session.client_addr().and_then(|a| a.as_inet().cloned());
+                        let local = session.server_addr().and_then(|a| a.as_inet().cloned());
+                        let state = ctx.waf.get_or_insert_with(Default::default);
+                        state.remote = peer.map(|a| (a.ip().to_string(), a.port()));
+                        state.server = local.map(|a| (a.ip().to_string(), a.port()));
                         let decision = ctx.waf.get_or_insert_with(Default::default).run_phase(
                             &snapshot.ruleset,
                             session.req_header(),

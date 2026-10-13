@@ -94,9 +94,14 @@ impl Evaluator {
         WafDecision::Allow
     }
 
-    fn process_actions(&self, rule: &Rule, trx: &Transaction) {
+    fn process_actions<'a>(&self, rule: &Rule, trx: &'a Transaction<'a>) {
         // Actions are on the first link
         for action in &rule.links[0].actions {
+            if let crate::waf::rule::Action::Ctl(option, value) = action
+                && option.eq_ignore_ascii_case("requestBodyProcessor")
+            {
+                trx.set_processor(value);
+            }
             if let crate::waf::rule::Action::SetVar(set_var) = action
                 && set_var.target.to_ascii_uppercase().starts_with("TX.")
             {
@@ -179,7 +184,7 @@ impl Evaluator {
                 }
                 continue;
             }
-            for (_, value) in kept() {
+            for (name, value) in kept() {
                 let transformed = crate::waf::transform::apply_chain(
                     &self.ruleset.transform_chains[link.transforms],
                     Cow::Borrowed(value.as_ref()),
@@ -187,10 +192,19 @@ impl Evaluator {
                 if self.evaluate_operator(
                     &link.operator,
                     link.rx.as_ref(),
-                    transformed,
+                    transformed.clone(),
                     trx,
                     capture,
                 ) {
+                    let collection = target.collection.to_ascii_uppercase();
+                    let label = if name.is_empty() {
+                        collection
+                    } else {
+                        format!("{collection}:{name}")
+                    };
+                    // First match only: the loop stops here, so MATCHED_VARS
+                    // holds one entry where ModSecurity would collect them all.
+                    *trx.matched.borrow_mut() = vec![(label, transformed.into_owned())];
                     return true;
                 }
             }
@@ -198,20 +212,29 @@ impl Evaluator {
         false
     }
 
-    fn resolve_macro(trx: &Transaction, key: &str) -> Option<String> {
-        let (collection, name) = key.split_once('.')?;
-        collection
-            .eq_ignore_ascii_case("tx")
-            .then(|| trx.get_var(name))
-            .flatten()
+    /// `%{TX.x}`, `%{MATCHED_VAR_NAME}`, `%{REMOTE_ADDR}`, `%{REQUEST_HEADERS.host}`:
+    /// the first value the named variable has, or nothing.
+    fn resolve_macro<'a>(trx: &'a Transaction<'a>, key: &str) -> Option<String> {
+        use crate::waf::rule::Key;
+        let (collection, name) = match key.split_once('.') {
+            Some((collection, name)) => (collection, Some(name)),
+            None => (key, None),
+        };
+        if collection.eq_ignore_ascii_case("tx") {
+            return trx.get_var(name?);
+        }
+        let selector = name.map_or(Key::All, |n| Key::Name(n.to_string()));
+        let found = crate::waf::vars::values(trx, collection, &selector);
+        let (_, value) = found.first()?;
+        Some(String::from_utf8_lossy(value).into_owned())
     }
 
-    fn evaluate_operator(
+    fn evaluate_operator<'a>(
         &self,
         operator: &Operator,
         rx: Option<&Rx>,
         value: Cow<'_, [u8]>,
-        trx: &Transaction,
+        trx: &'a Transaction<'a>,
         capture: bool,
     ) -> bool {
         let mut captures: [Option<String>; 10] = Default::default();
@@ -324,5 +347,109 @@ SecRule ARGS:q "@contains a" "id:3,phase:1,pass,chain,setvar:tx.hit=1"
         assert_eq!(trx.get_var("lower").as_deref(), Some("two"));
         assert_eq!(trx.get_var("mixed").as_deref(), Some("three"));
         assert_eq!(trx.tx.borrow().len(), 3);
+    }
+
+    fn run_body(
+        conf: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+        remote: Option<(&str, u16)>,
+    ) -> (WafDecision, std::collections::HashMap<String, String>) {
+        let loaded = crate::waf::load_text(&[("t", conf)]);
+        assert_eq!(loaded.summary.skipped, 0, "{loaded}");
+        let evaluator = Evaluator::new(Arc::new(loaded.ruleset));
+        let mut head = RequestHeader::build("POST", b"/up", None).unwrap();
+        head.insert_header("Host", "shop.example:8443").unwrap();
+        for (name, value) in headers {
+            head.insert_header(name.to_string(), *value).unwrap();
+        }
+        let mut trx = Transaction::new(&head, body);
+        trx.remote = remote.map(|(ip, port)| (ip.to_string(), port));
+        let decision = evaluator.evaluate_phase(0, &trx);
+        let tx = trx.tx.borrow().clone();
+        (decision, tx)
+    }
+
+    #[test]
+    fn remote_server_and_matched_var_collections() {
+        let conf = r#"
+SecRule REMOTE_ADDR "@ipMatch 10.0.0.0/8" "id:1,phase:1,pass,setvar:tx.internal=1"
+SecRule SERVER_NAME "@streq shop.example" "id:2,phase:1,pass,setvar:tx.host=1"
+SecRule REQUEST_HEADERS:User-Agent "@contains curl" "id:3,phase:1,pass,setvar:tx.seen=%{MATCHED_VAR_NAME}"
+"#;
+        let (_, tx) = run_body(
+            conf,
+            &[("User-Agent", "curl/8")],
+            b"",
+            Some(("10.1.2.3", 5555)),
+        );
+        assert_eq!(tx.get("INTERNAL").map(String::as_str), Some("1"));
+        assert_eq!(tx.get("HOST").map(String::as_str), Some("1"));
+        assert_eq!(
+            tx.get("SEEN").map(String::as_str),
+            Some("REQUEST_HEADERS:user-agent")
+        );
+        let (decision, _) = run_body(
+            r#"
+SecRule ARGS_NAMES "@rx ." "id:1,phase:1,pass,setvar:tx.n=1"
+SecRule REQUEST_HEADERS:X-Evil "@contains bad" "id:2,phase:1,pass,chain"
+  SecRule MATCHED_VAR_NAME "@streq REQUEST_HEADERS:x-evil" "chain"
+  SecRule MATCHED_VAR "@streq bad-thing" ""
+SecRule REMOTE_ADDR "@streq 10.1.2.3" "id:3,phase:1,deny,status:451"
+"#,
+            &[("X-Evil", "bad-thing")],
+            b"",
+            Some(("10.1.2.3", 1)),
+        );
+        assert_eq!(decision, WafDecision::Deny(451));
+    }
+
+    #[test]
+    fn json_and_multipart_bodies_become_args_and_files() {
+        let json_rules = r#"
+SecRule REQBODY_PROCESSOR "@streq JSON" "id:1,phase:1,pass,setvar:tx.proc=json"
+SecRule ARGS_POST:json.user.name "@streq ann" "id:2,phase:1,pass,setvar:tx.name=1"
+SecRule ARGS:json.tags.1 "@streq b" "id:3,phase:1,pass,setvar:tx.arr=1"
+SecRule &ARGS_POST "@eq 3" "id:4,phase:1,pass,setvar:tx.count=1"
+"#;
+        let (_, tx) = run_body(
+            json_rules,
+            &[("Content-Type", "application/json")],
+            br#"{"user":{"name":"ann"},"tags":["a","b"]}"#,
+            None,
+        );
+        for key in ["PROC", "NAME", "ARR", "COUNT"] {
+            assert!(tx.contains_key(key), "{key}: {tx:?}");
+        }
+        let body = b"--XX\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nhello\r\n--XX\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"a.php\"\r\nContent-Type: text/plain\r\n\r\n12345\r\n--XX--\r\n";
+        let (decision, tx) = run_body(
+            r#"
+SecRule ARGS_POST:note "@streq hello" "id:1,phase:1,pass,setvar:tx.note=1"
+SecRule FILES "@endsWith .php" "id:2,phase:1,pass,setvar:tx.php=1"
+SecRule FILES_COMBINED_SIZE "@eq 5" "id:3,phase:1,pass,setvar:tx.size=1"
+SecRule FILES_NAMES "@streq doc" "id:4,phase:1,deny,status:415"
+"#,
+            &[("Content-Type", "multipart/form-data; boundary=XX")],
+            body,
+            None,
+        );
+        assert_eq!(decision, WafDecision::Deny(415));
+        for key in ["NOTE", "PHP", "SIZE"] {
+            assert!(tx.contains_key(key), "{key}: {tx:?}");
+        }
+    }
+
+    #[test]
+    fn ctl_switches_the_body_processor() {
+        let (_, tx) = run_body(
+            r#"
+SecRule REQUEST_HEADERS:Content-Type "@rx ^text/plain" "id:1,phase:1,pass,ctl:requestBodyProcessor=JSON"
+SecRule ARGS_POST:json.a "@streq 1" "id:2,phase:1,pass,setvar:tx.ok=1"
+"#,
+            &[("Content-Type", "text/plain")],
+            br#"{"a":1}"#,
+            None,
+        );
+        assert!(tx.contains_key("OK"), "{tx:?}");
     }
 }
