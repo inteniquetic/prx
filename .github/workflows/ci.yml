@@ -50,3 +50,34 @@ jobs:
 
       - name: Security Audit
         run: cargo audit
+
+  schema:
+    # docs/openapi.json, docs/prx.schema.json and the WebUI's api.d.ts are all
+    # generated from the Rust types. A change to a config or admin payload type
+    # that was not followed by `make schema` fails here.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Install WebUI dependencies
+        run: npm ci
+        working-directory: webui
+
+      - name: Generated documents and types are current
+        run: make schema-check
