@@ -6,6 +6,7 @@
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::collapsible_if)]
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
 use std::net::IpAddr;
@@ -38,9 +39,12 @@ pub fn evaluate_operator(
     if op.negated { !matched } else { matched }
 }
 
-pub(super) fn expand_macros(text: &str, resolver: &impl Fn(&str) -> Option<String>) -> String {
+pub(super) fn expand_macros<'t>(
+    text: &'t str,
+    resolver: &impl Fn(&str) -> Option<String>,
+) -> Cow<'t, str> {
     if !text.contains("%{") {
-        return text.to_string();
+        return Cow::Borrowed(text);
     }
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -59,7 +63,7 @@ pub(super) fn expand_macros(text: &str, resolver: &impl Fn(&str) -> Option<Strin
         }
     }
     out.push_str(rest);
-    out
+    Cow::Owned(out)
 }
 
 fn eval_core(
@@ -128,17 +132,30 @@ fn eval_core(
             find_subslice(arg.as_bytes(), input)
         }
         "pm" => {
-            let words: Vec<&str> = op.argument.split_whitespace().collect();
-            eval_pm(&words, input)
+            // The automaton is built once per distinct word list, not per call.
+            let key = format!("pm\0{}", op.argument);
+            let cached = PM_CACHE.read().ok().and_then(|c| c.get(&key).cloned());
+            let ac = cached.or_else(|| {
+                let words: Vec<&str> = op.argument.split_whitespace().collect();
+                let ac = build_pm(&words)?;
+                PM_CACHE.write().ok()?.insert(key, ac.clone());
+                Some(ac)
+            });
+            ac.is_some_and(|ac| ac.is_match(input))
         }
         "pmFromFile" => {
             let path_str = expand_macros(&op.argument, resolver);
-            let path = resolve_data_path(&path_str, data_dir);
-            if let Some(ac) = get_or_load_pm_file(&path) {
-                ac.is_match(input)
-            } else {
-                false
-            }
+            // Keyed by what the rule wrote, so a hit skips the `exists()` probes
+            // that resolving the path would make on every request.
+            let key = format!("file\0{path_str}\0{data_dir:?}");
+            let cached = PM_CACHE.read().ok().and_then(|c| c.get(&key).cloned());
+            let ac = cached.or_else(|| {
+                let path = resolve_data_path(&path_str, data_dir);
+                let ac = get_or_load_pm_file(&path)?;
+                PM_CACHE.write().ok()?.insert(key, ac.clone());
+                Some(ac)
+            });
+            ac.is_some_and(|ac| ac.is_match(input))
         }
         // The three validate* operators match on a violation, as in ModSecurity:
         // a rule such as 920270 fires on a byte outside the range.
@@ -166,19 +183,14 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-fn eval_pm(words: &[&str], input: &[u8]) -> bool {
+fn build_pm(words: &[&str]) -> Option<AhoCorasick> {
     if words.is_empty() {
-        return false;
+        return None;
     }
-    // Aho-Corasick case-insensitive
-    if let Ok(ac) = AhoCorasickBuilder::new()
+    AhoCorasickBuilder::new()
         .ascii_case_insensitive(true)
         .build(words)
-    {
-        ac.is_match(input)
-    } else {
-        false
-    }
+        .ok()
 }
 
 fn resolve_data_path(name: &str, data_dir: Option<&Path>) -> PathBuf {

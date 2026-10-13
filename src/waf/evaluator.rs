@@ -104,7 +104,8 @@ impl Evaluator {
                 use crate::waf::rule::SetVarOp;
                 let value = crate::waf::operator::expand_macros(&set_var.value, &|key| {
                     Self::resolve_macro(trx, key)
-                });
+                })
+                .into_owned();
                 match set_var.op {
                     SetVarOp::Set => trx.set_var(name, value),
                     SetVarOp::Add | SetVarOp::Sub => {
@@ -164,20 +165,24 @@ impl Evaluator {
             })
         };
         for target in link.targets.iter().filter(|t| !t.exclude) {
-            let mut found = crate::waf::vars::values(trx, &target.collection, &target.key);
-            found.retain(|(name, _)| !excluded(&target.collection, name));
+            let found = crate::waf::vars::values_cached(trx, target);
+            let kept = || {
+                found
+                    .iter()
+                    .filter(|(name, _)| !excluded(&target.collection, name))
+            };
             if target.count {
                 // `&ARGS` is how many there are, and is evaluated even at zero.
-                let count = Cow::Owned(found.len().to_string().into_bytes());
+                let count = Cow::Owned(kept().count().to_string().into_bytes());
                 if self.evaluate_operator(&link.operator, link.rx.as_ref(), count, trx, capture) {
                     return true;
                 }
                 continue;
             }
-            for (_, value) in found {
+            for (_, value) in kept() {
                 let transformed = crate::waf::transform::apply_chain(
                     &self.ruleset.transform_chains[link.transforms],
-                    value,
+                    Cow::Borrowed(value.as_ref()),
                 );
                 if self.evaluate_operator(
                     &link.operator,

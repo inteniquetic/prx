@@ -11,7 +11,16 @@ use std::borrow::Cow;
 
 /// Applies a single named transformation to input bytes.
 pub fn transform<'a>(name: &str, input: Cow<'a, [u8]>) -> Cow<'a, [u8]> {
-    match name.to_ascii_lowercase().as_str() {
+    // Chains are lower-cased when the ruleset loads; only a caller that was not
+    // pays for the copy.
+    let lowered;
+    let name = if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        lowered = name.to_ascii_lowercase();
+        lowered.as_str()
+    } else {
+        name
+    };
+    match name {
         "none" => input,
         "lowercase" => transform_lowercase(input),
         "urldecode" => transform_url_decode(input, false),

@@ -26,6 +26,9 @@ pub struct Transaction<'a> {
     pub anomaly_scores: RefCell<[u32; 5]>,
     /// TX collection variables
     pub tx: RefCell<HashMap<String, String>>,
+    /// What each distinct target selected. Request-derived collections only:
+    /// TX and the response change under the rules.
+    values_cache: RefCell<HashMap<String, std::rc::Rc<Vec<Extracted<'a>>>>>,
 }
 
 impl<'a> Transaction<'a> {
@@ -38,6 +41,7 @@ impl<'a> Transaction<'a> {
             transform_cache: RefCell::new(HashMap::new()),
             anomaly_scores: RefCell::new([0; 5]),
             tx: RefCell::new(HashMap::new()),
+            values_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -347,4 +351,58 @@ pub fn values<'a>(trx: &'a Transaction<'a>, collection: &str, key: &Key) -> Vec<
         }
         _ => Vec::new(),
     }
+}
+
+/// [`values`] for a rule target, remembered for the rest of the transaction so
+/// that `ARGS` is parsed and decoded once, not by every rule that names it.
+/// Keyed by what is selected, not by which rule asked: hundreds of CRS rules
+/// carry their own `ARGS` target.
+pub fn values_cached<'a>(
+    trx: &'a Transaction<'a>,
+    target: &crate::waf::rule::Target,
+) -> std::rc::Rc<Vec<Extracted<'a>>> {
+    use std::rc::Rc;
+    // TX changes under the rules and the response is not there yet in phase 1.
+    let volatile = target.collection.eq_ignore_ascii_case("TX")
+        || target
+            .collection
+            .get(..8)
+            .is_some_and(|c| c.eq_ignore_ascii_case("RESPONSE"));
+    if volatile {
+        return Rc::new(values(trx, &target.collection, &target.key));
+    }
+    if let Some(hit) = trx.values_cache.borrow().get(target.select_id.as_str()) {
+        return Rc::clone(hit);
+    }
+    let all = {
+        let cached = trx
+            .values_cache
+            .borrow()
+            .get(target.collection_id.as_str())
+            .cloned();
+        match cached {
+            Some(all) => all,
+            None => {
+                let all = Rc::new(values(trx, &target.collection, &Key::All));
+                trx.values_cache
+                    .borrow_mut()
+                    .insert(target.collection_id.clone(), Rc::clone(&all));
+                all
+            }
+        }
+    };
+    let found = match &target.key {
+        Key::All => all,
+        // Scalars ignore the selector; everything else filters the full set.
+        key => Rc::new(
+            all.iter()
+                .filter(|(n, _)| n.is_empty() || selected(n, key))
+                .cloned()
+                .collect(),
+        ),
+    };
+    trx.values_cache
+        .borrow_mut()
+        .insert(target.select_id.clone(), Rc::clone(&found));
+    found
 }

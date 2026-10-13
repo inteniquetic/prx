@@ -579,11 +579,20 @@ fn target(variable: Variable) -> Result<Target, String> {
                 .map_err(|reason| format!("selector /{pattern}/ does not compile: {reason}"))?,
         ),
     };
+    let upper = variable.collection.to_ascii_uppercase();
+    let collection_id = format!("{upper}\0*");
+    let select_id = match &key {
+        Key::All => collection_id.clone(),
+        Key::Name(name) => format!("{upper}\0n{}", name.to_ascii_lowercase()),
+        Key::Regex(rx) => format!("{upper}\0r{}", rx.regex.as_str()),
+    };
     Ok(Target {
         collection: variable.collection,
         key,
         exclude: variable.exclude,
         count: variable.count,
+        select_id,
+        collection_id,
     })
 }
 

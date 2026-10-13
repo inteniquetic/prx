@@ -600,6 +600,11 @@ pub struct Target {
     pub key: Key,
     pub exclude: bool,
     pub count: bool,
+    /// What this target selects, as one string, so a per-request cache can be
+    /// looked up without building a key. Equal targets share it.
+    pub select_id: String,
+    /// The same for the whole collection, which the selection is filtered from.
+    pub collection_id: String,
 }
 
 #[derive(Debug, Clone)]
