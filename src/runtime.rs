@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
-    net::SocketAddr,
+    net::{SocketAddr, ToSocketAddrs},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -10,6 +10,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use arc_swap::ArcSwapOption;
 use rand::Rng;
 
 use crate::{
@@ -756,6 +757,14 @@ struct UpstreamState {
     /// Moving average of observed latency, in microseconds. 0 means no sample
     /// has been recorded yet.
     ewma_us: AtomicU64,
+    /// Where `addr` last resolved to, so a request never has to ask. Handing
+    /// pingora a hostname makes it call getaddrinfo: ~20 syscalls and a blocked
+    /// worker per request, which cost more than the proxying itself.
+    resolved: ArcSwapOption<SocketAddr>,
+    /// Epoch milliseconds of the last lookup attempt; `u64::MAX` for an IP
+    /// literal, which never needs another.
+    resolved_at_ms: AtomicU64,
+    resolving: AtomicBool,
 }
 
 impl Default for UpstreamState {
@@ -772,9 +781,16 @@ impl Default for UpstreamState {
             last_probe_ms: AtomicU64::new(0),
             inflight: AtomicUsize::new(0),
             ewma_us: AtomicU64::new(0),
+            resolved: ArcSwapOption::empty(),
+            resolved_at_ms: AtomicU64::new(0),
+            resolving: AtomicBool::new(false),
         }
     }
 }
+
+// ponytail: fixed interval, not the record's TTL (getaddrinfo does not expose
+// one). Make it a config key if an upstream ever needs a different freshness.
+const DNS_REFRESH_MS: u64 = 5_000;
 
 impl UpstreamRuntime {
     fn from_config(config: crate::config::UpstreamConfig) -> Self {
@@ -782,6 +798,13 @@ impl UpstreamRuntime {
             .sni
             .or_else(|| sni_from_addr(&config.addr))
             .unwrap_or_else(|| "localhost".to_string());
+        let state = UpstreamState::default();
+        // Hostnames are left for the first request: loading or validating a
+        // config must not wait on DNS.
+        if let Ok(literal) = config.addr.parse::<SocketAddr>() {
+            state.resolved.store(Some(Arc::new(literal)));
+            state.resolved_at_ms.store(u64::MAX, Ordering::Relaxed);
+        }
         Self {
             addr: config.addr,
             enabled: config.enabled,
@@ -795,8 +818,33 @@ impl UpstreamRuntime {
             read_timeout_ms: config.read_timeout_ms,
             write_timeout_ms: config.write_timeout_ms,
             idle_timeout_ms: config.idle_timeout_ms,
-            state: Arc::new(UpstreamState::default()),
+            state: Arc::new(state),
         }
+    }
+
+    /// The address to connect to, without a lookup on the request path. A stale
+    /// answer is refreshed on a blocking thread while requests keep using it,
+    /// and a failed lookup keeps the last good one. `None` until the first
+    /// lookup lands; the caller resolves inline until then.
+    pub fn socket_addr(&self) -> Option<SocketAddr> {
+        let state = &self.state;
+        let age = now_epoch_ms().saturating_sub(state.resolved_at_ms.load(Ordering::Relaxed));
+        if age >= DNS_REFRESH_MS
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+            && !state.resolving.swap(true, Ordering::AcqRel)
+        {
+            let (addr, state) = (self.addr.clone(), Arc::clone(state));
+            runtime.spawn_blocking(move || {
+                if let Some(found) = addr.to_socket_addrs().ok().and_then(|mut all| all.next()) {
+                    state.resolved.store(Some(Arc::new(found)));
+                }
+                state
+                    .resolved_at_ms
+                    .store(now_epoch_ms(), Ordering::Relaxed);
+                state.resolving.store(false, Ordering::Release);
+            });
+        }
+        state.resolved.load().as_deref().copied()
     }
 
     /// Stable identifier for this upstream, used by sticky cookies so that a
@@ -1068,6 +1116,25 @@ mod tests {
         CircuitBreakerConfig, ObservabilityConfig, RouteConfig, ServerConfig, ServiceConfig,
         UpstreamConfig,
     };
+
+    #[tokio::test]
+    async fn an_upstream_address_is_resolved_off_the_request_path() {
+        let literal = UpstreamRuntime::from_config(upstream("127.0.0.1:8000"));
+        assert_eq!(literal.socket_addr(), "127.0.0.1:8000".parse().ok());
+
+        // The first ask only starts the lookup; it must not wait for it.
+        let named = UpstreamRuntime::from_config(upstream("localhost:8000"));
+        assert_eq!(named.socket_addr(), None);
+        for _ in 0..200 {
+            if named.socket_addr().is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let resolved = named.socket_addr().expect("localhost resolves");
+        assert!(resolved.ip().is_loopback());
+        assert_eq!(resolved.port(), 8000);
+    }
 
     fn upstream(addr: &str) -> UpstreamConfig {
         UpstreamConfig {
