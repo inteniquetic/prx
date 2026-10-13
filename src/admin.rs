@@ -61,6 +61,10 @@ pub const ADMIN_SERVICE_STATUS_PATH: &str = "/web/services/status";
 pub const ADMIN_UPSTREAM_TEST_PATH: &str = "/web/upstreams/test";
 pub const ADMIN_STATS_PATH: &str = "/web/stats";
 pub const ADMIN_STATS_STREAM_PATH: &str = "/web/stats/stream";
+pub const ADMIN_CONFIG_HISTORY_PATH: &str = "/web/config/history";
+pub const ADMIN_CONFIG_HISTORY_ID_PATH: &str = "/web/config/history/{id}";
+pub const ADMIN_CONFIG_ROLLBACK_PATH: &str = "/web/config/rollback/{id}";
+pub const ADMIN_AUDIT_PATH: &str = "/web/audit";
 const WEBUI_INDEX_PATH: &str = "index.html";
 static WEBUI_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/webui/dist");
 
@@ -68,14 +72,58 @@ static WEBUI_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/webui/dist");
 pub struct ConfigAdmin {
     config_path: PathBuf,
     write_lock: Arc<Mutex<()>>,
+    history: crate::history::History,
+    audit: crate::history::AuditLog,
 }
 
 impl ConfigAdmin {
     pub fn new(config_path: PathBuf) -> Self {
         Self {
+            history: crate::history::History::beside(&config_path),
+            audit: crate::history::AuditLog::beside(&config_path),
             config_path,
             write_lock: Arc::new(Mutex::new(())),
         }
+    }
+
+    /// Keeps the bytes now on disk as a version. A history that cannot be
+    /// written must not undo a config change that already took effect.
+    fn remember(&self, previous: &[u8]) {
+        let result = fs::read(&self.config_path)
+            .map_err(anyhow::Error::from)
+            .and_then(|now| self.history.record(Some(previous), &now));
+        if let Err(err) = result {
+            tracing::warn!("config history was not updated: {err:#}");
+        }
+    }
+
+    /// The version list, newest first.
+    pub fn history(&self) -> Vec<crate::history::Version> {
+        self.history.list()
+    }
+
+    pub fn history_text(&self, id: &str) -> anyhow::Result<String> {
+        self.history.read(id)
+    }
+
+    /// Fingerprint of the file now on disk, for audit entries.
+    fn current_fingerprint(&self) -> String {
+        fs::read(&self.config_path)
+            .map(|bytes| crate::history::fingerprint(&bytes))
+            .unwrap_or_else(|_| "unreadable".into())
+    }
+
+    /// Re-applies a stored version. It is validated before the file is
+    /// touched, so a version this binary no longer accepts is refused with
+    /// the reason and the live config stays as it is.
+    pub fn rollback(
+        &self,
+        id: &str,
+        active_config: &Arc<ArcSwap<RuntimeConfig>>,
+    ) -> anyhow::Result<()> {
+        let text = self.history.read(id)?;
+        PrxConfig::from_toml_str(&text).context("that version no longer validates")?;
+        self.apply_config_text(&text, active_config)
     }
 
     pub fn read_config_text(&self) -> anyhow::Result<String> {
@@ -118,6 +166,7 @@ impl ConfigAdmin {
         match PrxConfig::from_file(&self.config_path) {
             Ok(verified) => {
                 active_config.store(Arc::new(RuntimeConfig::from_config(verified)));
+                self.remember(&previous_bytes);
                 Ok(())
             }
             Err(err) => {
@@ -186,6 +235,7 @@ impl ConfigAdmin {
 
         // Prefer a targeted edit, so comments and layout survive. Re-rendering
         // the whole model is the fallback for a change no edit can express.
+        let previous_for_history = previous_bytes.clone();
         let previous_text =
             String::from_utf8(previous_bytes).context("config file is not valid UTF-8")?;
         let toml_text = match targeted_render(&previous_text, &before, &config) {
@@ -208,6 +258,7 @@ impl ConfigAdmin {
 
         // Update the active config
         active_config.store(Arc::new(RuntimeConfig::from_config(config)));
+        self.remember(&previous_for_history);
 
         Ok(())
     }
@@ -2972,7 +3023,38 @@ async fn guard(State(state): State<AdminState>, request: Request, next: Next) ->
             .and_then(|host| host.to_str().ok())
             .is_some_and(|host| origin == format!("http://{host}"))
     });
+    // T206: every write attempt is recorded, refused ones included. The
+    // config is named by fingerprint; no body and no credential is logged.
+    let audited = is_write_method(request.method());
+    let audit_method = request.method().to_string();
+    let audit_path = request.uri().path().to_string();
+    let audit_before = audited.then(|| state.config_admin.current_fingerprint());
     let finish = |mut response: Response<Body>| {
+        if let Some(before) = &audit_before {
+            let status = response.status();
+            let actor = match (&state.auth, status) {
+                (_, StatusCode::UNAUTHORIZED) => "anonymous".to_string(),
+                (AdminAuthState::None, _) => "none".to_string(),
+                (AdminAuthState::Token(_), _) => "token".to_string(),
+                (AdminAuthState::Basic { user, .. }, _) => format!("basic:{user}"),
+            };
+            let after = state.config_admin.current_fingerprint();
+            let entry = crate::history::AuditEntry {
+                ts_ms: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+                actor: &actor,
+                method: &audit_method,
+                path: &audit_path,
+                status: status.as_u16(),
+                before,
+                after: &after,
+            };
+            if let Err(err) = state.config_admin.audit.append(&entry) {
+                tracing::warn!("audit log was not written: {err:#}");
+            }
+        }
         apply_cors(
             &mut response,
             origin.as_deref(),
@@ -3122,6 +3204,57 @@ fn read_secret(path: Option<&str>, env_var: &str, what: &str) -> anyhow::Result<
     }
 }
 
+async fn get_config_history(State(state): State<AdminState>) -> Response<Body> {
+    json_response(StatusCode::OK, &state.config_admin.history())
+}
+
+async fn get_config_history_version(
+    State(state): State<AdminState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response<Body> {
+    match state.config_admin.history_text(&id) {
+        Ok(text) => text_response(StatusCode::OK, text),
+        Err(_) => text_response(StatusCode::NOT_FOUND, "no_such_version\n"),
+    }
+}
+
+async fn post_config_rollback(
+    State(state): State<AdminState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response<Body> {
+    let admin = state.config_admin.clone();
+    let active = Arc::clone(&state.active_config);
+    let result = tokio::task::spawn_blocking(move || admin.rollback(&id, &active)).await;
+    match result {
+        Ok(Ok(())) => {
+            stats::record_event(
+                EventLevel::Info,
+                "config_rollback",
+                "Config rolled back to an earlier version",
+            );
+            json_response(
+                StatusCode::OK,
+                &serde_json::json!({ "status": "rolled_back" }),
+            )
+        }
+        Ok(Err(err)) => text_response(StatusCode::UNPROCESSABLE_ENTITY, format!("{err:#}\n")),
+        Err(_) => text_response(StatusCode::INTERNAL_SERVER_ERROR, "rollback_task_failed\n"),
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AuditQuery {
+    limit: Option<usize>,
+}
+
+async fn get_audit(
+    State(state): State<AdminState>,
+    Query(query): Query<AuditQuery>,
+) -> Response<Body> {
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    json_response(StatusCode::OK, &state.config_admin.audit.tail(limit))
+}
+
 fn build_router(state: AdminState) -> Router {
     Router::new()
         // Config endpoints
@@ -3134,6 +3267,16 @@ fn build_router(state: AdminState) -> Router {
             ADMIN_CONFIG_EDIT_PATH,
             axum::routing::post(post_config_edit),
         )
+        .route(ADMIN_CONFIG_HISTORY_PATH, get(get_config_history))
+        .route(
+            ADMIN_CONFIG_HISTORY_ID_PATH,
+            get(get_config_history_version),
+        )
+        .route(
+            ADMIN_CONFIG_ROLLBACK_PATH,
+            axum::routing::post(post_config_rollback),
+        )
+        .route(ADMIN_AUDIT_PATH, get(get_audit))
         .route(
             ADMIN_TLS_ACME_RENEW_PATH,
             axum::routing::post(post_acme_renew),
@@ -3782,6 +3925,7 @@ is_default = true
         ("POST", "/web/config/validate"),
         ("POST", "/web/config/edit"),
         ("POST", "/web/tls/acme/renew"),
+        ("POST", "/web/config/rollback/example"),
         ("POST", "/web/health/routes"),
         ("POST", "/web/routes/test"),
         ("POST", "/web/upstreams/test"),
@@ -4351,6 +4495,129 @@ log_level = "info"
         let body = response_text(response).await;
         assert!(body.starts_with("invalid_config: line "), "{body}");
         assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
+    }
+    async fn authed(
+        state: &AdminState,
+        method: &str,
+        path: &str,
+        token: &str,
+        body: Option<String>,
+    ) -> Response<Body> {
+        use tower::ServiceExt;
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", "127.0.0.1:9091")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(body.unwrap_or_default()))
+            .unwrap();
+        build_router(state.clone()).oneshot(request).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn history_records_each_apply_and_rollback_restores_the_first() {
+        let (_dir, path) = seeded(&sample_config("127.0.0.1:8080"));
+        let mut state = admin_state(&path);
+        let token = ephemeral_credential();
+        state.auth = AdminAuthState::Token(token.clone());
+        let original = fs::read_to_string(&path).unwrap();
+        for port in [8081, 8082, 8083] {
+            let text = sample_config(&format!("127.0.0.1:{port}"));
+            let response = authed(&state, "PUT", "/web/config", &token, Some(text)).await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let listed = authed(&state, "GET", "/web/config/history", &token, None).await;
+        let versions: Vec<serde_json::Value> =
+            serde_json::from_str(&response_text(listed).await).unwrap();
+        // The three applies and the file as it was before the first.
+        assert_eq!(versions.len(), 4, "{versions:?}");
+        let oldest = versions[3]["id"].as_str().unwrap().to_string();
+        let back = authed(
+            &state,
+            "POST",
+            &format!("/web/config/rollback/{oldest}"),
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(back.status(), StatusCode::OK);
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        // The rollback is itself a version, so it can be undone too.
+        let listed = authed(&state, "GET", "/web/config/history", &token, None).await;
+        let after: Vec<serde_json::Value> =
+            serde_json::from_str(&response_text(listed).await).unwrap();
+        assert_eq!(after.len(), 5, "{after:?}");
+    }
+
+    #[tokio::test]
+    async fn rollback_refuses_a_version_that_does_not_validate_and_keeps_the_file() {
+        let (dir, path) = seeded(&sample_config("127.0.0.1:8080"));
+        let mut state = admin_state(&path);
+        let token = ephemeral_credential();
+        state.auth = AdminAuthState::Token(token.clone());
+        let bad = dir.path().join(".prx-history");
+        fs::create_dir_all(&bad).unwrap();
+        fs::write(bad.join("0000000000001-bad.toml"), "this is = = not toml").unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        let response = authed(
+            &state,
+            "POST",
+            "/web/config/rollback/0000000000001-bad",
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            response_text(response)
+                .await
+                .contains("no longer validates")
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        let missing = authed(&state, "POST", "/web/config/rollback/nope", &token, None).await;
+        assert_eq!(missing.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn every_write_attempt_is_audited_without_a_secret() {
+        let (dir, path) = seeded(&sample_config("127.0.0.1:8080"));
+        let mut state = admin_state(&path);
+        let token = ephemeral_credential();
+        state.auth = AdminAuthState::Token(token.clone());
+        let mut attempts = 0;
+        for &(method, endpoint) in WRITE_ENDPOINTS {
+            let _ = authed(
+                &state,
+                method,
+                endpoint,
+                &token,
+                Some("secret-body-marker".into()),
+            )
+            .await;
+            attempts += 1;
+            // And the refused one: no credential at all.
+            let _ = guarded_request(state.clone(), method, endpoint, &[]).await;
+            attempts += 1;
+        }
+        let log = fs::read_to_string(dir.path().join(".prx-audit.log")).unwrap();
+        assert_eq!(log.lines().count(), attempts);
+        assert!(
+            !log.contains(&token),
+            "the credential leaked into the audit log"
+        );
+        assert!(!log.contains("secret-body-marker"), "a request body leaked");
+        let anonymous = log
+            .lines()
+            .filter(|l| l.contains("\"actor\":\"anonymous\""))
+            .count();
+        assert_eq!(anonymous, attempts / 2);
+        let entry: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
+        assert!(entry["before"].is_string() && entry["after"].is_string());
+        // Reads are not audited.
+        let before = log.lines().count();
+        let _ = authed(&state, "GET", "/web/audit", &token, None).await;
+        let again = fs::read_to_string(dir.path().join(".prx-audit.log")).unwrap();
+        assert_eq!(again.lines().count(), before);
     }
 }
 

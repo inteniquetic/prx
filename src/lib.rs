@@ -11,6 +11,7 @@ pub mod config;
 pub mod config_edit;
 pub mod headers;
 pub mod health;
+pub mod history;
 pub mod limiter;
 pub mod metrics;
 pub mod plugin;

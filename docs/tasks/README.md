@@ -74,11 +74,11 @@ Cloudflare ไม่ได้บอกว่า Pingora "เร็วกว่�
 | ID | Task | Size | Depends |
 |---|---|---|---|
 | [T201](T201-admin-auth-hardening.md) | Auth + bind loopback + CORS/CSRF ของ Admin API | M | — |
-| [T202](T202-config-history-rollback.md) | เก็บประวัติ config + diff + rollback | M | T201 |
+| [T202](T202-config-history-rollback.md) | เก็บประวัติ config + diff + rollback | M | T201 | 🟡 history + rollback + 0600 + rotate ทำแล้ว; เหลือ diff ระหว่างเวอร์ชัน |
 | [T203](T203-validate-dry-run-api.md) | `POST /web/config/validate` คืน error แบบมีพิกัด | M | — | 🟡 endpoint + error/warning ครบพร้อมพิกัด (ทำใน T307); เหลือ error code ของ TOML syntax แยกชนิด |
 | [T204](T204-atomic-apply-reload.md) | Apply แบบ atomic + auto-rollback ถ้า reload ไม่ผ่าน | M | T202, T203 | 🟡 atomic write + `If-Match` 409 แล้ว (T307); เหลือ reload ซ้ำจาก watcher และรายละเอียดใน response |
 | [T205](T205-openapi-typed-client.md) | OpenAPI + JSON Schema + typed client ให้ WebUI | M | T203 |
-| [T206](T206-audit-log.md) | Audit log ใครแก้อะไรเมื่อไหร่ | S | T201 |
+| [T206](T206-audit-log.md) | Audit log ใครแก้อะไรเมื่อไหร่ | S | T201 | ✅ done (ทุก write รวมที่ถูกปฏิเสธ; fingerprint ผูกกับ history) |
 | [T207](T207-live-stats-stream.md) | SSE stream สถิติสดให้ dashboard | M | T401 | ✅ done (ทำพร้อม T306; แก้ bucket ของ histogram ที่จบที่ 10 ms) |
 
 ### Phase 3 — Web UI (Svelte 5 + shadcn-svelte)

@@ -762,6 +762,25 @@ expected to sit idle; applying them would drop healthy websockets.
 - On connect/proxy failure, failures are counted to trigger the route circuit breaker policy.
 - If new config parsing/validation fails during reload, the previous config is kept.
 
+### Config history and audit log (admin API)
+
+Every successful config write (`PUT /web/config`, the CRUD endpoints, a rollback) keeps the file as a
+version in `.prx-history/` beside `Prx.toml` (mode 0600, directory 0700). The first write also keeps
+the file as it was before, so the very first change can be undone. The newest 50 versions are kept
+(`PRX_CONFIG_HISTORY_MAX` changes that); identical consecutive content is stored once.
+
+| Endpoint | What it does |
+|---|---|
+| `GET /web/config/history` | versions, newest first (`id`, `ts_ms`, `fingerprint`, `bytes`) |
+| `GET /web/config/history/{id}` | the TOML of one version |
+| `POST /web/config/rollback/{id}` | re-apply a version. It must still validate, otherwise it is refused with the reason (422) and the live file is untouched. A rollback is itself a new version |
+| `GET /web/audit?limit=100` | last entries of the audit log, oldest first |
+
+Every write attempt, refused ones included, appends one JSON line to `.prx-audit.log`
+(`ts_ms`, `actor`, `method`, `path`, `status`, `before`, `after`). `before`/`after` are config
+fingerprints and match a version's `fingerprint`. Request bodies and credentials are never logged.
+The log rotates at 5 MiB and keeps 3 files.
+
 ## 5) Common Validation Errors
 
 - `config must include at least one [[route]] block`

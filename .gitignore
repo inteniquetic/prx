@@ -6,3 +6,7 @@ bench/results/*.json
 bench/waf/crs/
 bench/waf/corpus/
 bench/results/*.tsv
+
+# written beside Prx.toml by the admin API (T202, T206)
+.prx-history/
+.prx-audit.log*
