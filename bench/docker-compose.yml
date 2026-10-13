@@ -44,6 +44,9 @@ services:
       # BENCH_PRX_CONFIG (absolute path) swaps the config for an A/B run
       # without editing the tracked one.
       - ${BENCH_PRX_CONFIG:-./configs/prx.toml}:/etc/prx/Prx.toml:ro
+      # BENCH_PRX_RULES (absolute path) is the SecLang file a `[waf] rules_file =
+      # "rules.conf"` config loads; unset, it mounts the prx config as a placeholder.
+      - ${BENCH_PRX_RULES:-./configs/prx.toml}:/etc/prx/rules.conf:ro
     ports:
       - "18080:8080"
       - "19090:9090"

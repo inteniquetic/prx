@@ -78,7 +78,15 @@ def latest(directory: Path) -> Optional[dict]:
     files = sorted(directory.glob(f"{scenario}-prx-*.json"), key=lambda p: p.stat().st_mtime)
     return json.load(files[-1].open()) if files else None
 
-base, cur = latest(base_dir), latest(cur_dir)
+# The current result must be for the commit being gated. Taking the newest file
+# by mtime compared a run of some other commit and called it HEAD's.
+head = os.environ.get("PERF_SHA") or os.popen("git rev-parse --short HEAD").read().strip()
+current_file = cur_dir / f"{scenario}-prx-{head}.json"
+base = latest(base_dir)
+cur = json.load(current_file.open()) if current_file.exists() else None
+if cur is None:
+    print(f"no result for HEAD ({head}): expected {current_file}; run scripts/bench.sh prx {scenario} first")
+    sys.exit(1)
 if base is None:
     print(f"no baseline for scenario={scenario} in {base_dir}; run the harness on a known-good commit first")
     sys.exit(1)
