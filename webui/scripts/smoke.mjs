@@ -43,7 +43,7 @@ const navLink = (path) => page.locator(`nav a[href="${path}"]`).first();
 const path = () => new URL(page.url()).pathname;
 
 try {
-  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.goto(base, { waitUntil: 'load' });
 
   // The shell navigates with real URLs now, so every page is checked for both
   // what it renders and what it leaves in the address bar.
@@ -70,7 +70,7 @@ try {
   if (!path().startsWith('/routes/')) {
     problems.push(`opening a route left the URL at "${path()}"`);
   } else {
-    await page.goto(deepLink, { waitUntil: 'networkidle' });
+    await page.goto(deepLink, { waitUntil: 'load' });
     await page.waitForTimeout(400);
     if (page.url() !== deepLink) problems.push(`reloading ${deepLink} redirected to ${page.url()}`);
     if (!(await page.locator('[data-slot="sheet-content"]').isVisible())) {
@@ -121,7 +121,7 @@ try {
   }
 
   const stored = await page.evaluate(() => localStorage.getItem('prx-theme'));
-  await page.reload({ waitUntil: 'networkidle' });
+  await page.reload({ waitUntil: 'load' });
   const afterReload = await page.evaluate(() => ({
     choice: localStorage.getItem('prx-theme'),
     dark: document.documentElement.classList.contains('dark')
