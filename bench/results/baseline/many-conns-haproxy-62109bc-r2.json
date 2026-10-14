@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "timestamp": "2026-10-14T03:17:34Z",
+  "git_sha": "62109bc",
+  "target": "haproxy",
+  "scenario": "many-conns",
+  "tool": "oha",
+  "url": "http://127.0.0.1:18080/1k",
+  "connections": 2000,
+  "duration_s": 20,
+  "rate": null,
+  "throughput": {
+    "requests_per_second": 71165.43,
+    "requests_total": 1424099,
+    "success_rate": 1.0
+  },
+  "latency_ms": {
+    "p50": 16.494,
+    "p90": 59.832,
+    "p99": 240.75,
+    "p999": 654.116
+  },
+  "resources": {
+    "peak_rss_kb": 72430,
+    "cpu_seconds": 39.38,
+    "cpu_us_per_request": 27.653,
+    "cpu_utilisation": 0.985
+  },
+  "status_codes": {
+    "200": 1424099
+  }
+}

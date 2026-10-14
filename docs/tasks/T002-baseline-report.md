@@ -1,7 +1,7 @@
 # T002 — Baseline report + docs/BENCHMARKS.md
 
 **Phase:** 0 · Measurement
-**Status:** partial
+**Status:** partial — วัดแล้วที่ `62109bc`: h1-keepalive, large-body, many-conns@2000 (3 รอบ), h1-close (1 รอบ, in-network); ยังขาด: h2 (gap — ไม่มี `h2load`), prx many-conns@10000 (unstable ที่ success gate 0.99), WAF ยังไม่ได้วัด (T505–T507)
 **Size:** S (~0.5d)
 **Depends on:** T001
 **Files:** `docs/BENCHMARKS.md`, `bench/results/baseline/`

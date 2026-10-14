@@ -3,14 +3,14 @@
 เอกสารนี้คือแหล่งอ้างอิงเดียวของคำเคลมเรื่องประสิทธิภาพทั้งหมดของ prx
 ถ้าตัวเลขไหนไม่มีในนี้ = ยังไม่ได้วัด ห้ามเอาไปเคลม
 
-สถานะ: [T002](tasks/T002-baseline-report.md) — **micro-benchmark วัดแล้ว / proxy-vs-proxy วัดแล้วเฉพาะ h1-keepalive**
+สถานะ: [T002](tasks/T002-baseline-report.md) — **micro-benchmark วัดแล้ว / proxy-vs-proxy วัดแล้ว: h1-keepalive, large-body, many-conns@2000, h1-close (ที่ `62109bc`); ยังไม่มี h2 และ prx many-conns@10000**
 อัปเดตล่าสุด: หลัง [T101](tasks/T101-zero-alloc-request-path.md) + [T102](tasks/T102-route-matcher-index.md)
 
 ## สรุปสั้น
 
 | สิ่งที่อยากรู้ | สถานะ |
 |---|---|
-| prx เร็วกว่า nginx/haproxy ไหม | **ยังไม่ — ช้ากว่าที่ h1-keepalive** (38k vs 69k / 62k rps) วัดแค่ scenario เดียว ดู [§3](#3-proxy-vs-nginx-vs-haproxy-วัดแล้วเฉพาะ-h1-keepalive) |
+| prx เร็วกว่า nginx/haproxy ไหม | **ยังไม่ — RPS แพ้ทุก scenario ที่วัด** (h1-keepalive 39k vs nginx 66k / haproxy 65k rps) แต่ p99 ดีกว่าใน 3 scenario ที่วัดจาก host (ที่ RPS ต่ำกว่า ไม่ใช่เทียบ rate เดียวกัน) ดู [§3](#3-proxy-vs-nginx-vs-haproxy-p0-baseline) และ [§3.5](#35-ที่ที่-prx-แพ้-วัดได้ที่-62109bc) |
 | prx + WAF เร็วกว่า nginx + ModSecurity / Coraza ไหม | **ยังไม่รู้** — harness และคู่แข่งพร้อมแล้ว ([§7](#7-waf-prx--waf-vs-nginx--modsecurity-vs-caddy--coraza-ยังไม่ได้วัด)) รอ WAF ของ prx (T505–T507) และเครื่องอ้างอิง |
 | route matching แพงแค่ไหน | วัดแล้ว: 55–84 ns ต่อ request ไม่ว่าจะมี 10 หรือ 1000 routes |
 | ปัญหา wildcard ที่เจอตอนแรก | แก้แล้ว — 59.3 µs → 81.9 ns (724×) |
@@ -95,10 +95,10 @@ host เข้า hash map (FxHash) แล้ว path เดินบน radix t
 ถ้าอยากให้ UI ตอบสนองเร็วขึ้นตอนกด Save ที่ config ใหญ่มาก ต้องไปดูตรง TOML parse
 (เกี่ยวกับ [T204](tasks/T204-atomic-apply-reload.md) และ [T307](tasks/T307-toml-editor-diff-apply.md))
 
-## 3. Proxy vs nginx vs haproxy (วัดแล้วเฉพาะ h1-keepalive)
+## 3. Proxy vs nginx vs haproxy (P0 baseline)
 
-วัดที่ commit `2dc517a`, 64 connections, **20 วินาที** (warmup 5 วินาที, สั้นกว่าค่ามาตรฐาน 60 วินาที), รันครั้งเดียวต่อ target จึงยังไม่รู้ความแปรปรวนระหว่างรอบ
-scenario อื่น (h1-close, h2, many-conns, large-body) **ยังไม่ได้วัด** — `bench.sh prx h1-close` ค้างเกิน 30 นาทีและยังไม่ได้หาสาเหตุ
+วัดที่ commit `62109bc` — proxy code เหมือน `2dc517a` ทุกบรรทัด (`git diff 2dc517a..HEAD -- src Cargo.* vendor` ว่าง; ต่างกันแค่ bench/docs)
+ทุก scenario: **20 วินาที** ต่อรอบ, ทุกไฟล์ `success_rate` = 1.0 ยกเว้นที่ระบุ, RSS = `resources.peak_rss_kb` (เป็น RSS ไม่ใช่ PSS, MB = kB/1000)
 
 ### Reference machine
 
@@ -112,33 +112,93 @@ scenario อื่น (h1-close, h2, many-conns, large-body) **ยังไม�
 | OrbStack VM cores | 12 | `docker info \| grep -E 'CPUs\|Total Memory'` |
 | OrbStack VM RAM | 11.73 GiB | `docker info \| grep -E 'CPUs\|Total Memory'` |
 | oha version | 1.16.0 | `oha --version` |
-| git sha | 2dc517a | fixed per task spec |
+| git sha | 62109bc (proxy code = 2dc517a) | `git rev-parse --short HEAD` |
 
 วิธีเติมตารางนี้:
 
 ```bash
-scripts/bench.sh --all h1-keepalive
+scripts/bench.sh --all h1-keepalive   # รัน 3 รอบ -> -r1..-r3
+scripts/bench.sh --all large-body
 scripts/bench.sh --all many-conns
-scripts/bench.sh --all h2
-cp bench/results/*-<sha>.json bench/results/baseline/
+cp bench/results/*-<sha>*.json bench/results/baseline/
 ```
 
-| Scenario | Metric | prx | nginx | haproxy |
-|---|---|---|---|---|
-| h1-keepalive | RPS | 38,250 | 69,133 | 61,962 |
-| h1-keepalive | p50 / p99 / p999 (ms) | 1.60 / 3.30 / 5.27 | 0.48 / 7.44 / 10.71 | 0.49 / 5.77 / 14.90 |
-| h1-keepalive | peak RSS | 31.0 MB | 38.2 MB | 20.5 MB |
-| h1-keepalive | CPU µs/req | 51.1 | 26.7 | 27.7 |
-| many-conns (10k) | peak RSS | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่วัด_ |
-| h2 | RPS | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่วัด_ |
-| large-body (64KB) | RPS | _ยังไม่วัด_ | _ยังไม่วัด_ | _ยังไม่วัด_ |
+### 3.1 P0 baseline: median ของ 3 รอบ (host-measured, oha บน macOS host)
 
-**อ่านผล h1-keepalive:** prx ช้ากว่า nginx 45% และ haproxy 38% ในแง่ RPS และใช้ CPU ต่อ request มากกว่า ~1.9× — เป้า "RPS ต่อ core เท่าหรือดีกว่า" **ยังไม่ถึง**
-ข้อดีที่เห็น: p99/p999 ของ prx ต่ำสุด (3.30 ms เทียบ 7.44 / 5.77) แต่ p50 สูงกว่า 3 เท่า — สอดคล้องกับ CPU ที่ถูกใช้เต็ม (97.8% เทียบ 82–88%) คืออยู่ที่ขอบ saturation
-ยังไม่ได้ระบุสาเหตุ ต้องทำ profile ก่อน ([PROFILING.md](PROFILING.md))
+ค่าในตาราง = median ของ `-r1..-r3`; ช่วง RPS = min–max ของ 3 รอบ
+
+| Scenario | Target | RPS median (min–max) | p50 / p99 (ms) | CPU µs/req | peak RSS | Source |
+|---|---|---|---|---|---|---|
+| h1-keepalive (64 conns, 1 KB) | prx | 39,071 (38,277–39,288) | 1.552 / 3.209 | 50.0 | 32.7 MB | `bench/results/baseline/h1-keepalive-prx-62109bc-r?.json` |
+| h1-keepalive (64 conns, 1 KB) | nginx | 66,126 (64,551–66,462) | 0.497 / 6.668 | 27.6 | 34.1 MB | `bench/results/baseline/h1-keepalive-nginx-62109bc-r?.json` |
+| h1-keepalive (64 conns, 1 KB) | haproxy | 65,240 (65,236–65,456) | 0.508 / 5.449 | 26.5 | 20.5 MB | `bench/results/baseline/h1-keepalive-haproxy-62109bc-r?.json` |
+| large-body (64 conns, 64 KB) | prx | 25,528 (24,966–25,740) | 2.401 / 4.987 | 76.6 | 33.1 MB | `bench/results/baseline/large-body-prx-62109bc-r?.json` |
+| large-body (64 conns, 64 KB) | nginx | 35,835 (35,752–35,859) | 0.806 / 7.692 | 55.4 | 34.3 MB | `bench/results/baseline/large-body-nginx-62109bc-r?.json` |
+| large-body (64 conns, 64 KB) | haproxy | 32,519 (32,124–33,245) | 0.966 / 8.528 | 56.8 | 22.2 MB | `bench/results/baseline/large-body-haproxy-62109bc-r?.json` |
+| many-conns (2000 conns, 1 KB) | prx | 28,402 (28,106–28,467) | 76.834 / 175.881 | 68.5 | 237.6 MB | `bench/results/baseline/many-conns-prx-62109bc-r?.json` |
+| many-conns (2000 conns, 1 KB) | nginx | 78,333 (77,814–79,809) | 7.742 / 254.864 | 24.8 | 46.5 MB | `bench/results/baseline/many-conns-nginx-62109bc-r?.json` |
+| many-conns (2000 conns, 1 KB) | haproxy | 70,578 (70,044–71,165) | 16.787 / 224.425 | 27.9 | 72.9 MB | `bench/results/baseline/many-conns-haproxy-62109bc-r?.json` |
+
+ตัวเลข h1-keepalive รอบเก่าที่ `2dc517a` (รันครั้งเดียว: prx 38,250 / nginx 69,133 / haproxy 61,962 RPS) **ถูกแทนที่ด้วย median ข้างบนแล้ว** — ไฟล์เดิมยังอยู่: `bench/results/baseline/h1-keepalive-{nginx,haproxy}-2dc517a.json` (ไม่มีไฟล์ของ prx ที่ sha นี้)
+
+### 3.2 h1-close (รันครั้งเดียวต่อ target, 64 conns, 20 วินาที, `--disable-keepalive`)
+
+load generator ของ scenario นี้รัน **ใน docker network** (image `bench-oha`, `bench/oha/Dockerfile`) เพราะ macOS host ใช้ ephemeral port หมด — วินิจฉัยแล้ว (B7: os error 49, ทั้งสาม target ล้ม) (16384 ports × TIME_WAIT 30 วินาที)
+จึงเทียบกันได้ระหว่าง target แต่ **เทียบกับ scenario ที่วัดจาก host (3.1) ไม่ได้**
+
+| Target | RPS | p50 / p99 (ms) | CPU µs/req | peak RSS | Source |
+|---|---|---|---|---|---|
+| prx | 13,125 | 1.691 / 21.607 | 48.4 | 40.9 MB | `bench/results/baseline/h1-close-prx-62109bc.json` |
+| nginx | 21,480 | 0.938 / 20.153 | 29.2 | 34.1 MB | `bench/results/baseline/h1-close-nginx-62109bc.json` |
+| haproxy | 39,168 | 0.557 / 16.412 | 26.2 | 20.6 MB | `bench/results/baseline/h1-close-haproxy-62109bc.json` |
+
+### 3.3 many-conns @10000 (รันครั้งเดียว, 20 วินาที)
+
+| Target | RPS | p50 / p99 (ms) | CPU µs/req | peak RSS | success_rate | Source |
+|---|---|---|---|---|---|---|
+| prx | _ยังไม่วัด_ — unstable at the gate: ถูก success gate 0.99 ปฏิเสธ (0.988, 0.9868; 0.861 บน host ที่ไม่สะอาด) และได้ 0.9920 ใน manual run หนึ่งครั้งนอก harness | — | — | — | — | ไม่มีไฟล์ |
+| nginx | 63,359 | 35.845 / 1729.991 | 30.7 | 101.0 MB | 0.99655 | `bench/results/baseline/many-conns-nginx-62109bc-c10000.json` |
+| haproxy | 34,542 | 257.076 / 686.530 | 57.1 | 298.1 MB | 0.995015 | `bench/results/baseline/many-conns-haproxy-62109bc-c10000.json` |
+
+### 3.4 h2
+
+| Target | RPS | Source |
+|---|---|---|
+| prx / nginx / haproxy | _ยังไม่วัด_ — gap: ไม่ได้ติดตั้ง `h2load` (ตั้งใจไม่ติดตั้ง) | ไม่มีไฟล์ |
 
 **เป้าหมายที่ตั้งไว้** (จาก `docs/tasks/README.md`): RPS ต่อ core เท่าหรือดีกว่า,
 p99 ดีกว่า ≥ 20% ตอน connection reuse สูง, peak RSS ที่ 10k conns ต่ำกว่า ≥ 30%
+
+### 3.5 ที่ที่ prx แพ้ (วัดได้ที่ 62109bc)
+
+ทุกตัวเลขคำนวณจาก median ใน §3.1 / ค่ารันเดียวใน §3.2 — % = (prx / คู่แข่ง − 1), × = prx / คู่แข่ง
+สาเหตุ: **ไม่ทราบสาเหตุ — ดู `.team/PLAN-PERF.md` (P1–P4 ยังไม่เสร็จ)** ทุกข้อ ยังไม่มี source line ไหนที่ยืนยันได้ จึงไม่ระบุผู้ต้องสงสัย
+
+| Scenario | Metric | prx | vs haproxy | vs nginx | Task ที่รับผิดชอบ |
+|---|---|---|---|---|---|
+| h1-keepalive | RPS | 39,071 | −40.1% (65,240) | −40.9% (66,126) | [T104](tasks/T104-socket-worker-tuning.md), [T003](tasks/T003-profiling-and-microbench.md); [T101](tasks/T101-zero-alloc-request-path.md) (applied แล้ว — ช่องว่างยังอยู่) |
+| h1-keepalive | CPU µs/req | 50.0 | 1.89× (26.5) | 1.81× (27.6) | [T003](tasks/T003-profiling-and-microbench.md), [T104](tasks/T104-socket-worker-tuning.md); [T101](tasks/T101-zero-alloc-request-path.md) (applied แล้ว — ช่องว่างยังอยู่) |
+| large-body | RPS | 25,528 | −21.5% (32,519) | −28.8% (35,835) | [T104](tasks/T104-socket-worker-tuning.md), [T105](tasks/T105-upstream-pool-keepalive.md) |
+| large-body | CPU µs/req | 76.6 | 1.35× (56.8) | 1.38× (55.4) | [T003](tasks/T003-profiling-and-microbench.md) |
+| many-conns@2000 | RPS | 28,402 | −59.8% (70,578) | −63.7% (78,333) | [T104](tasks/T104-socket-worker-tuning.md), [T105](tasks/T105-upstream-pool-keepalive.md) |
+| many-conns@2000 | CPU µs/req | 68.5 | 2.46× (27.9) | 2.76× (24.8) | [T003](tasks/T003-profiling-and-microbench.md) |
+| many-conns@2000 | peak RSS | 237.6 MB | 3.3× (72.9) | 5.1× (46.5) | [T105](tasks/T105-upstream-pool-keepalive.md) |
+| h1-close (in-network) | RPS | 13,125 | −66.5% (39,168) | −38.9% (21,480) | [T104](tasks/T104-socket-worker-tuning.md) |
+| h1-close (in-network) | CPU µs/req | 48.4 | 1.85× (26.2) | 1.66× (29.2) | [T003](tasks/T003-profiling-and-microbench.md) |
+| many-conns@10000 | success_rate | unstable at the gate (0.988, 0.9868; 0.861 บน host ที่ไม่สะอาด; manual 0.9920 นอก harness) | — | — | [T104](tasks/T104-socket-worker-tuning.md) |
+
+p50 ของ prx แย่กว่าทั้งสองตัวในทุก scenario ของ §3.1 และ §3.2 ด้วย
+
+**ที่ที่ prx ชนะ (เฉพาะที่ §3 มีตัวเลข):**
+
+| Scenario | Metric | prx | vs haproxy | vs nginx |
+|---|---|---|---|---|
+| h1-keepalive | p99 | 3.209 ms | −41.1% (5.449) | −51.9% (6.668) |
+| large-body | p99 | 4.987 ms | −41.5% (8.528) | −35.2% (7.692) |
+| many-conns@2000 | p99 | 175.881 ms | −21.6% (224.425) | −31.0% (254.864) |
+
+h1-close p99 ของ prx (21.607 ms) **แย่กว่า** haproxy (16.412) และ nginx (20.153) — ไม่นับเป็นชัยชนะ
+p99 ที่ต่ำกว่าเกิดพร้อม RPS ที่ต่ำกว่า (oha วัดแบบ saturation) จึงยังไม่ใช่การเทียบ p99 ที่ rate เดียวกัน
 
 ## 4. ข้อจำกัดของวิธีวัดนี้
 
@@ -148,6 +208,13 @@ p99 ดีกว่า ≥ 20% ตอน connection reuse สูง, peak RSS �
 - ไม่ได้วัด TLS handshake (ต้องรอ [T111](tasks/T111-tls-perf-multicert.md))
 - ปิด access log ทั้งหมดเพื่อความเป็นธรรม — เปิดแล้วทุกตัวจะช้าลงคนละแบบ (ดู [T403](tasks/T403-access-log-async-json.md))
 - ยังไม่มีตัวเลขจากเครื่อง bare-metal
+- เครื่องเดียว: Mac 12 core (Apple M4 Pro) ผ่าน OrbStack — proxy ทุกตัวถูก pin ไว้ที่ 2 CPU (`cpuset: "0,1"` ใน `bench/docker-compose.yml`), backend อีก 2 CPU
+- รอบละ 20 วินาที ไม่ใช่ 60 วินาทีตามมาตรฐาน และมีแค่ 3 รอบต่อ scenario (h1-close และ many-conns@10000 รันครั้งเดียว)
+- load generator ต่างที่กัน: §3.1 รัน oha บน macOS host แต่ h1-close (§3.2) รันใน docker network — เทียบข้ามกันไม่ได้
+- ไม่มี h2 (ไม่ได้ติดตั้ง `h2load`)
+- ไม่ได้วัด WAF (ดู §7)
+- success gate = 0.99 (`scripts/bench.sh`) — รันที่ต่ำกว่านี้ถูกทิ้ง ไม่บันทึกผล
+- jemalloc-sys ต้องมี C toolchain และ make ตอน build (ใช้ได้บน macOS Xcode CLT และ ubuntu CI, ช้ากว่าบน musl); Windows MSVC จะใช้ system allocator แทน
 
 ## 5. สิ่งที่เจอระหว่างทำ Phase 0 (ไม่ใช่เรื่อง performance แต่ต้องรู้)
 

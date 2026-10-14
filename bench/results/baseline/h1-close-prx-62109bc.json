@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "timestamp": "2026-10-14T02:57:49Z",
+  "git_sha": "62109bc",
+  "target": "prx",
+  "scenario": "h1-close",
+  "tool": "oha",
+  "url": "http://127.0.0.1:18080/1k",
+  "connections": 64,
+  "duration_s": 20,
+  "rate": null,
+  "throughput": {
+    "requests_per_second": 13125.04,
+    "requests_total": 262547,
+    "success_rate": 1.0
+  },
+  "latency_ms": {
+    "p50": 1.691,
+    "p90": 13.516,
+    "p99": 21.607,
+    "p999": 28.417
+  },
+  "resources": {
+    "peak_rss_kb": 40895,
+    "cpu_seconds": 12.72,
+    "cpu_us_per_request": 48.448,
+    "cpu_utilisation": 0.303
+  },
+  "status_codes": {
+    "200": 262547
+  }
+}
