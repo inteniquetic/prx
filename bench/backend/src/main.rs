@@ -16,7 +16,18 @@
 //!   LISTEN       default 0.0.0.0:8000
 //!   WORKERS      default: number of cores
 
-use std::{env, io, sync::Arc, time::Duration};
+use std::{
+    env, io,
+    sync::{
+        atomic::{AtomicU64, Ordering::Relaxed},
+        Arc,
+    },
+    time::Duration,
+};
+
+// Log-only counters for the upstream reuse ratio (PLAN-PERF P3).
+static ACCEPTS: AtomicU64 = AtomicU64::new(0);
+static REQUESTS: AtomicU64 = AtomicU64::new(0);
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -56,9 +67,22 @@ fn main() -> io::Result<()> {
         });
         let listener = TcpListener::bind(&listen).await?;
         eprintln!("prx-bench-backend listening on {listen} with {workers} workers");
+        // Cumulative since start; printed only when it changed, so the last line is the run total.
+        tokio::spawn(async {
+            let mut last = (0, 0);
+            loop {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                let now = (ACCEPTS.load(Relaxed), REQUESTS.load(Relaxed));
+                if now != last {
+                    eprintln!("accepts={} requests={}", now.0, now.1);
+                    last = now;
+                }
+            }
+        });
 
         loop {
             let (stream, _) = listener.accept().await?;
+            ACCEPTS.fetch_add(1, Relaxed);
             let bodies = bodies.clone();
             tokio::spawn(async move {
                 let _ = serve(stream, bodies).await;
@@ -127,6 +151,7 @@ async fn serve(mut stream: TcpStream, bodies: Arc<Bodies>) -> io::Result<()> {
         }
 
         stream.write_all(&body).await?;
+        REQUESTS.fetch_add(1, Relaxed);
     }
 }
 
