@@ -1326,6 +1326,7 @@
               "graceful_shutdown_timeout_seconds": null,
               "h2c": true,
               "health_path": "/healthz",
+              "l4_read_buffer_kib": null,
               "listen": [
                 "0.0.0.0:8080"
               ],
@@ -2174,6 +2175,17 @@
           "health_path": {
             "default": "/healthz",
             "type": "string"
+          },
+          "l4_read_buffer_kib": {
+            "default": null,
+            "description": "Per-connection L4 read buffer for downstream listeners, in KiB.\nUnset keeps Pingora's default (64 KiB).",
+            "format": "uint",
+            "maximum": 16384,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "listen": {
             "default": [

@@ -202,6 +202,18 @@ impl PrxConfig {
             ));
         }
 
+        if let Some(kib) = self.server.l4_read_buffer_kib
+            && !(1..=MAX_L4_READ_BUFFER_KIB).contains(&kib)
+        {
+            out.push(ConfigIssue::error(
+                    "l4_read_buffer_out_of_range",
+                    "server.l4_read_buffer_kib",
+                    format!(
+                        "server.l4_read_buffer_kib must be between 1 and {MAX_L4_READ_BUFFER_KIB}, got {kib}"
+                    ),
+                ));
+        }
+
         if let Some(tls) = &self.server.tls {
             let certs = tls.all_certs();
             if certs.is_empty() && !tls.acme.enabled {
@@ -1143,6 +1155,9 @@ impl Default for AdminConfig {
     }
 }
 
+/// 16 MiB: far past any useful per-connection read buffer.
+const MAX_L4_READ_BUFFER_KIB: usize = 16 * 1024;
+
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct ServerConfig {
     #[serde(default = "default_listen")]
@@ -1153,6 +1168,11 @@ pub struct ServerConfig {
     pub ready_path: String,
     #[serde(default)]
     pub threads: Option<usize>,
+    /// Per-connection L4 read buffer for downstream listeners, in KiB.
+    /// Unset keeps Pingora's default (64 KiB).
+    #[serde(default)]
+    #[schemars(range(min = 1, max = 16384))]
+    pub l4_read_buffer_kib: Option<usize>,
     #[serde(default)]
     pub grace_period_seconds: Option<u64>,
     #[serde(default)]
@@ -1175,6 +1195,7 @@ impl Default for ServerConfig {
             health_path: default_health_path(),
             ready_path: default_ready_path(),
             threads: None,
+            l4_read_buffer_kib: None,
             grace_period_seconds: None,
             graceful_shutdown_timeout_seconds: None,
             config_reload_debounce_ms: default_reload_debounce_ms(),
@@ -2279,6 +2300,18 @@ plugins = ["mark"]
 
         let err = cfg.validate().expect_err("invalid health_path should fail");
         assert!(err.to_string().contains("server.health_path"));
+    }
+
+    #[test]
+    fn validate_checks_l4_read_buffer_kib_range() {
+        let mut cfg = valid_config();
+        cfg.server.l4_read_buffer_kib = Some(16);
+        cfg.validate().expect("16 KiB is valid");
+        for bad in [0, MAX_L4_READ_BUFFER_KIB + 1] {
+            cfg.server.l4_read_buffer_kib = Some(bad);
+            let err = cfg.validate().expect_err("out-of-range buffer should fail");
+            assert!(err.to_string().contains("server.l4_read_buffer_kib"));
+        }
     }
 
     #[test]

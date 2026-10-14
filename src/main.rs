@@ -2,7 +2,11 @@ use std::{env, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use arc_swap::ArcSwap;
-use pingora::{apps::HttpServerOptions, listeners::tls::TlsSettings, prelude::*};
+use pingora::{
+    apps::HttpServerOptions,
+    listeners::{L4BufferSettings, ListenerConfig, tls::TlsSettings},
+    prelude::*,
+};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -79,8 +83,9 @@ fn run() -> anyhow::Result<()> {
         }
     }
 
+    let l4_buffer = l4_buffer_settings(&app_config);
     for addr in &app_config.server.listen {
-        proxy_service.add_tcp(addr);
+        proxy_service.add_listener(ListenerConfig::tcp(addr.as_str()).l4_buffer(l4_buffer));
     }
 
     let mut tls_resolver: Option<Arc<CertResolver>> = None;
@@ -157,7 +162,11 @@ fn run() -> anyhow::Result<()> {
                     acme_challenges.clone(),
                 ),
             );
-            service.add_tls_with_settings(&tls.listen, None, tls_settings);
+            service.add_listener(
+                ListenerConfig::tcp(tls.listen.as_str())
+                    .tls(tls_settings)
+                    .l4_buffer(l4_buffer),
+            );
             info!(
                 listen = tls.listen.as_str(),
                 certificates = cert_count,
@@ -256,6 +265,15 @@ fn init_tracing(level: &str) {
         .with_target(true)
         .compact()
         .init();
+}
+
+/// Upstream streams are already unbuffered in pingora (`From<TcpStream>` uses
+/// capacity 0), so only the downstream listeners have a read buffer to size.
+fn l4_buffer_settings(app_config: &PrxConfig) -> L4BufferSettings {
+    L4BufferSettings {
+        read: app_config.server.l4_read_buffer_kib.map(|kib| kib * 1024),
+        ..Default::default()
+    }
 }
 
 fn tune_pingora_server(server: &mut Server, app_config: &PrxConfig) {

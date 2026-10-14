@@ -10,6 +10,7 @@ listen = ["0.0.0.0:8080"]
 health_path = "/healthz"
 ready_path = "/readyz"
 threads = 4
+l4_read_buffer_kib = 16
 grace_period_seconds = 1
 graceful_shutdown_timeout_seconds = 5
 

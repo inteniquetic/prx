@@ -1024,6 +1024,7 @@ export interface components {
              *       "graceful_shutdown_timeout_seconds": null,
              *       "h2c": true,
              *       "health_path": "/healthz",
+             *       "l4_read_buffer_kib": null,
              *       "listen": [
              *         "0.0.0.0:8080"
              *       ],
@@ -1400,6 +1401,13 @@ export interface components {
             h2c: boolean;
             /** @default /healthz */
             health_path: string;
+            /**
+             * Format: uint
+             * @description Per-connection L4 read buffer for downstream listeners, in KiB.
+             *     Unset keeps Pingora's default (64 KiB).
+             * @default null
+             */
+            l4_read_buffer_kib: number | null;
             /**
              * @default [
              *       "0.0.0.0:8080"

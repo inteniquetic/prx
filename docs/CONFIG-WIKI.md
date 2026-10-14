@@ -40,6 +40,7 @@ Minimum requirements:
 | `health_path` | `string` | `"/healthz"` | No | Health endpoint path |
 | `ready_path` | `string` | `"/readyz"` | No | Readiness endpoint path |
 | `threads` | `number` | `null` | No | Number of Pingora worker threads |
+| `l4_read_buffer_kib` | `number` | `null` (Pingora default, 64 KiB) | No | Per-connection read buffer on the HTTP/HTTPS listeners, in KiB (1-16384). Lower values cut memory per idle connection; upstream connections are unbuffered and unaffected. Measured (3 runs, single machine): at 2000 conns RSS 237.6 -> 142.2 MB (-40%) with `16`, large-body throughput -2.7%; a smaller buffer costs large-body throughput. HTTPS with a small buffer is not tested end to end |
 | `grace_period_seconds` | `number` | `null` | No | Grace period before shutdown |
 | `graceful_shutdown_timeout_seconds` | `number` | `null` | No | Timeout for graceful shutdown |
 | `h2c` | `bool` | `true` | No | Accept HTTP/2 over cleartext (needed for gRPC without TLS) |
