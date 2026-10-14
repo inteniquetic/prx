@@ -47,6 +47,9 @@ libinjectionrs = "0.1.1"
 aho-corasick = "1.1.5"
 schemars = "1"
 
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "=0.7.0"
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 bytes = "1"

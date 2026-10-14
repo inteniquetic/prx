@@ -21,6 +21,11 @@ use prx::{
     tls::{CertResolver, ResolverHandle},
 };
 
+// glibc malloc arena-lock contention caused ~40% of extra ctx switches (P6).
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("{err:#}");
