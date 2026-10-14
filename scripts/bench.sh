@@ -58,6 +58,10 @@ WAF_HEADERS=(--host bench.local
   -H 'Cookie: sid=9f8a7c6b5d4e3f2a; theme=dark; lang=en')
 
 die() { echo "error: $*" >&2; exit 1; }
+# cap <seconds> cmd...: macOS has no timeout(1). SIGALRM kills cmd: exit 142.
+cap() { local s="$1"; shift; perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "${s}" "$@"; }
+CAP_RC=142
+EXEC_CAP=20
 
 compose() { docker compose -f "${COMPOSE_DIR}/docker-compose.yml" "$@"; }
 
@@ -66,6 +70,7 @@ require_tools() {
   docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
   case "$1" in
     h2) command -v h2load >/dev/null || die "h2load (nghttp2-client) is required for the h2 scenario" ;;
+    h1-close) docker image inspect bench-oha >/dev/null 2>&1 || docker build -q -t bench-oha "${COMPOSE_DIR}/oha" >/dev/null || die "failed to build bench-oha" ;;
     *)  command -v oha >/dev/null || die "oha is required (cargo install oha)" ;;
   esac
 }
@@ -129,8 +134,11 @@ container_for() {
 # utime+stime of every process, in ticks. comm (field 2) may contain spaces, so
 # fields are counted from the closing parenthesis, not from the start.
 cpu_ticks() {
-  docker exec -u 0 "$1" sh -c 'cat /proc/[0-9]*/stat 2>/dev/null' 2>/dev/null \
-    | awk '{n=split(substr($0, index($0, ") ") + 2), f, " "); s += f[12] + f[13]} END {print s + 0}'
+  # Returns 1 only on a cap hit; cat's own nonzero (a process exited mid-scan) is normal.
+  local raw rc=0
+  raw="$(cap "${EXEC_CAP}" docker exec -u 0 "$1" sh -c 'cat /proc/[0-9]*/stat 2>/dev/null' 2>/dev/null)" || rc=$?
+  [ "${rc}" -ne "${CAP_RC}" ] || return 1
+  printf '%s\n' "${raw}" | awk '{n=split(substr($0, index($0, ") ") + 2), f, " "); s += f[12] + f[13]} END {print s + 0}'
 }
 
 # Peak PSS until the stop file appears. PSS, not RSS: workers share pages, and
@@ -142,10 +150,12 @@ cpu_ticks() {
 # samples=0 as an invalid run. (The exit status of cat is not used: it fails
 # whenever a process exits mid-scan, which is normal.)
 sample_peak_pss() {
-  local container="$1" out="$2" stop="$3" peak=0 taken=0 n s
+  local container="$1" out="$2" stop="$3" peak=0 taken=0 n s raw rc
   while [ ! -e "${stop}" ]; do
-    read -r n s <<< "$(docker exec -u 0 "${container}" sh -c 'cat /proc/[0-9]*/smaps_rollup 2>/dev/null' 2>/dev/null \
-      | awk '/^Pss:/{n++; s+=$2} END{print n+0, s+0}')" || true
+    rc=0
+    raw="$(cap "${EXEC_CAP}" docker exec -u 0 "${container}" sh -c 'cat /proc/[0-9]*/smaps_rollup 2>/dev/null' 2>/dev/null)" || rc=$?
+    if [ "${rc}" -eq "${CAP_RC}" ]; then echo "TIMEOUT" > "${out}"; return; fi
+    read -r n s <<< "$(printf '%s\n' "${raw}" | awk '/^Pss:/{n++; s+=$2} END{print n+0, s+0}')" || true
     if [ "${n:-0}" -gt 0 ]; then
       taken=$(( taken + 1 ))
       [ "${s:-0}" -gt "${peak}" ] && peak="${s}"
@@ -161,7 +171,7 @@ waf_load() {
   local rate=()
   [ -n "${RATE}" ] && rate=(-q "${RATE}" --latency-correction)
   # ${rate[@]+...}: bash 3.2 (macOS) treats an empty array as unbound under set -u.
-  oha --no-tui --output-format json -z "${seconds}s" -c "${conns}" \
+  cap "$(( DURATION + WARMUP + 30 ))" oha --no-tui --output-format json -z "${seconds}s" -c "${conns}" \
     ${rate[@]+"${rate[@]}"} "${WAF_HEADERS[@]}" "$@" > "${out}"
 }
 
@@ -178,13 +188,14 @@ run_load() {
     waf-json-16k)    waf_load "${conns}" "${seconds}" "${out}" -m POST -T application/json -D "${CORPUS}/json-16k.json" "${url}" ;;
     waf-json-128k)   waf_load "${conns}" "${seconds}" "${out}" -m POST -T application/json -D "${CORPUS}/json-128k.json" "${url}" ;;
     h2)
-      h2load -n 0 -c "${conns}" -m 32 -D "${seconds}" "${url}" > "${out}" 2>&1
+      cap "$(( DURATION + WARMUP + 30 ))" h2load -n 0 -c "${conns}" -m 32 -D "${seconds}" "${url}" > "${out}" 2>&1
       ;;
     h1-close)
-      oha --no-tui --output-format json -z "${seconds}s" -c "${conns}" --disable-keepalive "${url}" > "${out}"
+      # Load runs in-network: the macOS host's 16k ephemeral ports x 30s TIME_WAIT cap new-conn rates (os error 49).
+      cap "$(( DURATION + WARMUP + 30 ))" docker run --rm --name "bench-oha-$$" --network bench_bench bench-oha --no-tui --output-format json -z "${seconds}s" -c "${conns}" --disable-keepalive "http://$(container_for "${target}"):8080/${url#http://*/}" > "${out}"
       ;;
     *)
-      oha --no-tui --output-format json -z "${seconds}s" -c "${conns}" "${url}" > "${out}"
+      cap "$(( DURATION + WARMUP + 30 ))" oha --no-tui --output-format json -z "${seconds}s" -c "${conns}" "${url}" > "${out}"
       ;;
   esac
 }
@@ -224,13 +235,18 @@ run_one() {
 
   mkdir -p "${RESULT_DIR}"
   local tmp; tmp="$(mktemp -d)"
-  trap 'rm -rf "${tmp}"; trap - RETURN' RETURN
+  trap 'rm -rf "${tmp}"; docker rm -f "bench-oha-$$" >/dev/null 2>&1 || true; trap - RETURN' RETURN
 
   echo "==> ${target} / ${scenario}  (${conns} conns, warmup ${WARMUP}s, measure ${DURATION}s)"
   start_target "${target}"
 
+  # A capped command means something hung: stop everything, write nothing.
+  abort() { touch "${tmp}/stop"; docker rm -f "bench-oha-$$" >/dev/null 2>&1 || true; stop_target "${target}"; die "${target}/${scenario}: $*. No result written."; }
+
   echo "    warmup..."
-  run_load "${scenario}" "${url}" "${conns}" "${WARMUP}" "${tmp}/warmup.out" || true
+  local warm_rc=0
+  run_load "${scenario}" "${url}" "${conns}" "${WARMUP}" "${tmp}/warmup.out" || warm_rc=$?
+  [ "${warm_rc}" -ne "${CAP_RC}" ] || abort "warmup load tool hung (killed after cap)"
 
   echo "    measuring..."
   # CPU is read right before and right after the load, in this shell, so the
@@ -239,19 +255,21 @@ run_one() {
   container="$(container_for "${target}")"
   sample_peak_pss "${container}" "${tmp}/pss" "${tmp}/stop" &
   pss_pid=$!
-  cpu_start="$(cpu_ticks "${container}")"; t_start="$(date +%s)"
+  cpu_start="$(cpu_ticks "${container}")" || abort "docker exec (cpu) hung"; t_start="$(date +%s)"
   # `|| load_rc=$?`: under set -e a nonzero load exit (oha reports aborted-at-
   # deadline requests this way) would kill the script here, before the sampler
   # is stopped and before the output is parsed. The parser still rejects a load
   # whose output is not valid JSON, so a broken run cannot become a result.
   local load_rc=0
   run_load "${scenario}" "${url}" "${conns}" "${DURATION}" "${tmp}/load.out" || load_rc=$?
+  [ "${load_rc}" -ne "${CAP_RC}" ] || abort "load tool hung (killed after $(( DURATION + WARMUP + 30 ))s)"
   [ "${load_rc}" -eq 0 ] || echo "    warning: load tool exited ${load_rc}; checking its output" >&2
-  cpu_end="$(cpu_ticks "${container}")"; t_end="$(date +%s)"
+  cpu_end="$(cpu_ticks "${container}")" || abort "docker exec (cpu) hung"; t_end="$(date +%s)"
   touch "${tmp}/stop"; wait "${pss_pid}" 2>/dev/null || true
   # A worker that died mid-run takes its ticks with it; never report negative CPU.
   cpu_delta=$(( cpu_end - cpu_start )); [ "${cpu_delta}" -ge 0 ] || cpu_delta=0
   local pss_samples=0 peak_pss=0
+  ! grep -q TIMEOUT "${tmp}/pss" 2>/dev/null || abort "docker exec (pss) hung"
   read -r pss_samples peak_pss < "${tmp}/pss" 2>/dev/null || true
   if [ "${pss_samples:-0}" -eq 0 ]; then
     stop_target "${target}"
@@ -275,8 +293,14 @@ run_one() {
     --load-output "${tmp}/load.out" \
     --stats "${tmp}/stats.json" \
     ${RATE:+--rate "${RATE}"} \
-    > "${out}"
-  check_status_mix "${scenario}" "${target}" "${out}"
+    > "${tmp}/result.json"
+  # Connect failures make the surviving requests look fast; such a run is not a result.
+  local success
+  success="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["throughput"]["success_rate"])' "${tmp}/result.json")" || abort "no success_rate in result"
+  python3 -c 'import sys; sys.exit(float(sys.argv[1]) < 0.99)' "${success}" \
+    || abort "success_rate ${success} < 0.99"
+  check_status_mix "${scenario}" "${target}" "${tmp}/result.json"
+  mv "${tmp}/result.json" "${out}"
 
   stop_target "${target}"
   echo "    wrote ${out}"
