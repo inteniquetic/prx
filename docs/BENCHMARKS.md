@@ -3,14 +3,14 @@
 เอกสารนี้คือแหล่งอ้างอิงเดียวของคำเคลมเรื่องประสิทธิภาพทั้งหมดของ prx
 ถ้าตัวเลขไหนไม่มีในนี้ = ยังไม่ได้วัด ห้ามเอาไปเคลม
 
-สถานะ: [T002](tasks/T002-baseline-report.md) — **micro-benchmark วัดแล้ว / proxy-vs-proxy วัดแล้ว: h1-keepalive, large-body, many-conns@2000, h1-close (ที่ `62109bc`); ยังไม่มี h2 และ prx many-conns@10000**
+สถานะ: [T002](tasks/T002-baseline-report.md) — **micro-benchmark วัดแล้ว / proxy-vs-proxy วัดแล้ว: h1-keepalive, large-body, many-conns@2000, h1-close (ที่ `62109bc`) และ re-bench ทั้งหมดรวม many-conns@10000 ที่ `11ebe66` ([§3.6](#36-final-re-bench-after-o2--o7-sha-11ebe66)); ยังไม่มี h2**
 อัปเดตล่าสุด: หลัง [T101](tasks/T101-zero-alloc-request-path.md) + [T102](tasks/T102-route-matcher-index.md)
 
 ## สรุปสั้น
 
 | สิ่งที่อยากรู้ | สถานะ |
 |---|---|
-| prx เร็วกว่า nginx/haproxy ไหม | **ยังไม่ — RPS แพ้ทุก scenario ที่วัด** (h1-keepalive 39k vs nginx 66k / haproxy 65k rps) แต่ p99 ดีกว่าใน 3 scenario ที่วัดจาก host (ที่ RPS ต่ำกว่า ไม่ใช่เทียบ rate เดียวกัน) ดู [§3](#3-proxy-vs-nginx-vs-haproxy-p0-baseline) และ [§3.5](#35-ที่ที่-prx-แพ้-วัดได้ที่-62109bc) |
+| prx เร็วกว่า nginx/haproxy ไหม | **ยังไม่ — RPS แพ้ทุก scenario ที่วัด** ที่ `11ebe66` (F1): prx/haproxy h1-keepalive 0.80×, large-body 0.98×, many-conns@2000 0.54×, many-conns@10000 0.96× (prx/nginx 0.79× / 0.86× / 0.49× / 0.86×); ดีขึ้นจาก `62109bc` +22–33% RPS ดู [§3.6](#36-final-re-bench-after-o2--o7-sha-11ebe66) (baseline เดิม: [§3](#3-proxy-vs-nginx-vs-haproxy-p0-baseline), [§3.5](#35-ที่ที่-prx-แพ้-วัดได้ที่-62109bc)) |
 | prx + WAF เร็วกว่า nginx + ModSecurity / Coraza ไหม | **ยังไม่รู้** — harness และคู่แข่งพร้อมแล้ว ([§7](#7-waf-prx--waf-vs-nginx--modsecurity-vs-caddy--coraza-ยังไม่ได้วัด)) รอ WAF ของ prx (T505–T507) และเครื่องอ้างอิง |
 | route matching แพงแค่ไหน | วัดแล้ว: 55–84 ns ต่อ request ไม่ว่าจะมี 10 หรือ 1000 routes |
 | ปัญหา wildcard ที่เจอตอนแรก | แก้แล้ว — 59.3 µs → 81.9 ns (724×) |
@@ -112,7 +112,7 @@ host เข้า hash map (FxHash) แล้ว path เดินบน radix t
 | OrbStack VM cores | 12 | `docker info \| grep -E 'CPUs\|Total Memory'` |
 | OrbStack VM RAM | 11.73 GiB | `docker info \| grep -E 'CPUs\|Total Memory'` |
 | oha version | 1.16.0 | `oha --version` |
-| git sha | 62109bc (proxy code = 2dc517a) | `git rev-parse --short HEAD` |
+| git sha | 62109bc baseline; 11ebe66 F1 (62109bc proxy code = 2dc517a) | `git rev-parse --short HEAD` |
 
 วิธีเติมตารางนี้:
 
@@ -199,6 +199,62 @@ p50 ของ prx แย่กว่าทั้งสองตัวในท�
 
 h1-close p99 ของ prx (21.607 ms) **แย่กว่า** haproxy (16.412) และ nginx (20.153) — ไม่นับเป็นชัยชนะ
 p99 ที่ต่ำกว่าเกิดพร้อม RPS ที่ต่ำกว่า (oha วัดแบบ saturation) จึงยังไม่ใช่การเทียบ p99 ที่ rate เดียวกัน
+
+### 3.6 Final re-bench after O2 + O7 (sha 11ebe66)
+
+วัดที่ commit `11ebe66` (branch `perf/allocator`: O2 `l4_read_buffer_kib` = 16 ใน bench config + O7 jemalloc), harness เดิม, 20 วินาทีต่อรอบ, 3 รอบต่อ cell
+ค่า = median ของรอบที่ผ่าน gate; ช่วง RPS = min–max; RSS = `resources.peak_rss_kb` (MB = kB/1000); คำนวณด้วย python (`statistics.median`) จากไฟล์ในคอลัมน์ Source
+
+| Scenario | Target | RPS median (min–max) | p50 / p99 (ms) | CPU µs/req | peak RSS | min success_rate | Source |
+|---|---|---|---|---|---|---|---|
+| h1-keepalive (64 conns, 1 KB) | prx | 51,808 (51,461–52,838) | 1.100 / 2.995 | 37.3 | 33.5 MB | 1.0 | `bench/results/h1-keepalive-prx-11ebe66-f1-c64-r?.json` |
+| h1-keepalive (64 conns, 1 KB) | nginx | 65,826 (65,158–66,172) | 0.493 / 6.824 | 27.5 | 34.1 MB | 1.0 | `bench/results/h1-keepalive-nginx-11ebe66-f1-c64-r?.json` |
+| h1-keepalive (64 conns, 1 KB) | haproxy | 64,696 (64,495–65,182) | 0.504 / 5.640 | 26.6 | 20.6 MB | 1.0 | `bench/results/h1-keepalive-haproxy-11ebe66-f1-c64-r?.json` |
+| large-body (64 conns, 64 KB) | prx | 31,122 (31,058–31,299) | 1.951 / 4.771 | 63.5 | 34.9 MB | 1.0 | `bench/results/large-body-prx-11ebe66-f1-c64-r?.json` |
+| large-body (64 conns, 64 KB) | nginx | 36,097 (35,317–36,155) | 0.805 / 7.742 | 55.1 | 34.2 MB | 1.0 | `bench/results/large-body-nginx-11ebe66-f1-c64-r?.json` |
+| large-body (64 conns, 64 KB) | haproxy | 31,829 (31,519–32,215) | 0.933 / 9.032 | 58.0 | 22.1 MB | 1.0 | `bench/results/large-body-haproxy-11ebe66-f1-c64-r?.json` |
+| many-conns (2000 conns, 1 KB) | prx | 37,718 (37,289–38,036) | 35.660 / 156.334 | 52.8 | 144.2 MB | 0.999996 | `bench/results/many-conns-prx-11ebe66-f1-c2000-r?.json` |
+| many-conns (2000 conns, 1 KB) | nginx | 76,611 (76,468–76,891) | 12.883 / 236.777 | 25.7 | 48.3 MB | 1.0 | `bench/results/many-conns-nginx-11ebe66-f1-c2000-r?.json` |
+| many-conns (2000 conns, 1 KB) | haproxy | 69,872 (69,831–70,825) | 17.361 / 220.579 | 28.3 | 72.7 MB | 1.0 | `bench/results/many-conns-haproxy-11ebe66-f1-c2000-r?.json` |
+| many-conns (10000 conns, 1 KB) | prx (2 รอบ) | 36,530 (34,787–38,273) | 54.703 / 947.128 | 54.2 | 546.7 MB | 0.990567 | `bench/results/many-conns-prx-11ebe66-f1-c10000-r?.json` (r1, r3) |
+| many-conns (10000 conns, 1 KB) | nginx | 42,705 (39,444–48,171) | 64.844 / 1768.856 | 34.4 | 97.9 MB | 0.991482 | `bench/results/many-conns-nginx-11ebe66-f1-c10000-r?.json` |
+| many-conns (10000 conns, 1 KB) | haproxy | 38,137 (38,042–39,389) | 226.519 / 684.921 | 51.2 | 296.7 MB | 0.992735 | `bench/results/many-conns-haproxy-11ebe66-f1-c10000-r?.json` |
+
+many-conns@10000: prx many-conns@10000 had 2 passing runs (0.990567, 0.996839) and 1 run rejected by the 0.99 gate (`success_rate 0.989606 < 0.99`); nginx 0.9929/0.9960/0.9915; haproxy 0.9927/0.9931/0.9944 — so every target sits near the gate at 10000 conns (load generator on the macOS host). median ของ prx ที่ 10000 จึงเป็นค่ากลางของ 2 รอบ
+
+อัตราส่วน RPS (median prx / median คู่แข่ง):
+
+| Scenario | prx / haproxy | prx / nginx | Source |
+|---|---|---|---|
+| h1-keepalive | 0.801 | 0.787 | `bench/results/h1-keepalive-*-11ebe66-f1-c64-r?.json` |
+| large-body | 0.978 | 0.862 | `bench/results/large-body-*-11ebe66-f1-c64-r?.json` |
+| many-conns@2000 | 0.540 | 0.492 | `bench/results/many-conns-*-11ebe66-f1-c2000-r?.json` |
+| many-conns@10000 | 0.958 | 0.855 | `bench/results/many-conns-*-11ebe66-f1-c10000-r?.json` |
+
+#### Before / after (prx เท่านั้น): P0 baseline `62109bc` vs F1 `11ebe66`
+
+| Scenario | RPS 62109bc → 11ebe66 | CPU µs/req | peak RSS | Source |
+|---|---|---|---|---|
+| h1-keepalive | 39,071 → 51,808 (+32.6%) | 50.0 → 37.3 (−25.5%) | 32.7 → 33.5 MB (+2.2%) | `bench/results/baseline/h1-keepalive-prx-62109bc-r?.json`, `bench/results/h1-keepalive-prx-11ebe66-f1-c64-r?.json` |
+| large-body | 25,528 → 31,122 (+21.9%) | 76.6 → 63.5 (−17.0%) | 33.1 → 34.9 MB (+5.7%) | `bench/results/baseline/large-body-prx-62109bc-r?.json`, `bench/results/large-body-prx-11ebe66-f1-c64-r?.json` |
+| many-conns@2000 | 28,402 → 37,718 (+32.8%) | 68.5 → 52.8 (−22.9%) | 237.6 → 144.2 MB (−39.3%) | `bench/results/baseline/many-conns-prx-62109bc-r?.json`, `bench/results/many-conns-prx-11ebe66-f1-c2000-r?.json` |
+
+#### h1-close (รันครั้งเดียวต่อ target, in-network เหมือน §3.2)
+
+| Target | RPS | p50 / p99 (ms) | CPU µs/req | peak RSS | Source |
+|---|---|---|---|---|---|
+| prx | 18,060 | 1.441 / 19.032 | 43.0 | 48.1 MB | `bench/results/h1-close-prx-11ebe66-f1.json` |
+| nginx | 21,357 | 0.958 / 19.928 | 29.6 | 34.1 MB | `bench/results/h1-close-nginx-11ebe66-f1.json` |
+| haproxy | 50,543 | 0.543 / 13.598 | 25.4 | 26.1 MB | `bench/results/h1-close-haproxy-11ebe66-f1.json` |
+
+รอบเดียวที่ `62109bc` (§3.2) ได้ prx 13,125 / nginx 21,480 / haproxy 39,168 — haproxy moved 39k -> 50.5k between two single runs ดังนั้นตัวเลข h1-close เป็น **indicative only** ไม่ใช้เป็นข้อสรุป (prx/haproxy 0.36, prx/nginx 0.85 ในรอบนี้)
+
+#### Verdict
+
+เป้าหมาย "prx เร็วกว่า haproxy/nginx" **ไม่สำเร็จในทุก scenario** — RPS ของ prx เทียบ haproxy: h1-keepalive 0.80×, large-body 0.98×, many-conns@2000 0.54×, many-conns@10000 0.96× (เทียบ nginx: 0.79× / 0.86× / 0.49× / 0.86×)
+สิ่งที่ดีขึ้นจริงเทียบ `62109bc`: RPS +21.9% (large-body) ถึง +32.8% (many-conns@2000) ในทั้งสาม scenario, CPU µs/req ลดลง 17–26%, RSS@2000 ลดจาก 237.6 → 144.2 MB แต่ยังเป็น 2.0× ของ haproxy (72.7 MB) และ 3.0× ของ nginx (48.3 MB) — เป้า O2 (≤ 71.8 MB) ไม่สำเร็จ, context switch ต่อ request ลดจาก 0.19 → ~0.05 (จาก P6/O7 ใน `.team/PLAN-PERF.md`, ไม่ได้วัดใหม่ใน F1); เป้า CPU ของ O7 (h1-keepalive ≤ 35 µs/req) ไม่สำเร็จ (37.3)
+สิ่งที่เหลือและสาเหตุ (measured, one heap dump per conn count, sampled estimates — P7/P5 ใน `.team/PLAN-PERF.md`): ราว 27 KiB/conn เป็น allocation ต่อ connection ภายใน pingora ที่ไม่มี public knob — `pingora-proxy lib.rs:1560` (process_new_http future, 12.0 KiB/conn), `pingora-core apps/mod.rs:265` (process_new future, 4.1), `pingora-core protocols/http/v1/server.rs:303` (INIT_HEADER_BUF_SIZE, 4.0), `pingora-core protocols/http/v1/client.rs:385` (upstream resp header reserve, 2.5); และ `getpeername` ทุกครั้งที่ reuse upstream connection จาก pool ที่ `pingora-core connectors/mod.rs:264` (check_fd_match) — ทั้งหมดต้องแก้ที่ upstream Pingora ไม่ใช่ใน prx
+ตัวเลขเปอร์เซ็นต์ที่ Cloudflare เผยแพร่เกี่ยวกับ Pingora **ไม่ได้ถูกยืนยันหรือหักล้าง** โดยเอกสารนี้ — harness นี้ (cpuset 2 CPU, VM บน macOS, body 1 KB / 64 KB) ทดสอบสิ่งนั้นไม่ได้
 
 ## 4. ข้อจำกัดของวิธีวัดนี้
 
